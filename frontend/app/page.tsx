@@ -366,6 +366,8 @@ async function backtestPortfolioByScore(options: ScorePortfolioOptions): Promise
         mode: "score",
         score: trimmedScore,
         start,
+        start_date: start,
+        from: start,
     });
 
     if (normalizedLimit !== undefined) {
@@ -373,7 +375,6 @@ async function backtestPortfolioByScore(options: ScorePortfolioOptions): Promise
         payload.limit = normalizedLimit;
         payload.count = normalizedLimit;
         payload.size = normalizedLimit;
-        payload.positions = normalizedLimit;
         qs.set("top_n", String(normalizedLimit));
         qs.set("limit", String(normalizedLimit));
         qs.set("count", String(normalizedLimit));
@@ -383,8 +384,6 @@ async function backtestPortfolioByScore(options: ScorePortfolioOptions): Promise
         payload.weighting = normalizedWeighting;
         payload.weighting_method = normalizedWeighting;
         payload.weight_method = normalizedWeighting;
-        payload.weights = normalizedWeighting;
-        payload.allocation = normalizedWeighting;
         qs.set("weighting", normalizedWeighting);
         qs.set("weight_method", normalizedWeighting);
     }
@@ -434,6 +433,8 @@ async function backtestPortfolioByScore(options: ScorePortfolioOptions): Promise
         payload.end = end;
         payload.to = end;
         qs.set("end", end);
+        qs.set("end_date", end);
+        qs.set("to", end);
     }
 
     if (rebalance && rebalance !== "none") {
@@ -441,6 +442,7 @@ async function backtestPortfolioByScore(options: ScorePortfolioOptions): Promise
         payload.rebalance_frequency = rebalance;
         payload.frequency = rebalance;
         qs.set("rebalance", rebalance);
+        qs.set("rebalance_frequency", rebalance);
     }
 
     if (typeof thresholdPct === "number" && thresholdPct > 0) {
@@ -457,6 +459,8 @@ async function backtestPortfolioByScore(options: ScorePortfolioOptions): Promise
         payload.initial_capital = initialCapital;
         payload.initial_cash = initialCapital;
         qs.set("initial", String(initialCapital));
+        qs.set("initial_value", String(initialCapital));
+        qs.set("initial_capital", String(initialCapital));
     }
 
     if (typeof feePct === "number" && feePct > 0) {
@@ -467,6 +471,7 @@ async function backtestPortfolioByScore(options: ScorePortfolioOptions): Promise
         payload.commission = feePct;
         qs.set("fee", String(feePct));
         qs.set("fee_ratio", String(feePct / 100));
+        qs.set("transaction_cost", String(feePct));
     }
 
     if (benchmark) {
@@ -476,6 +481,7 @@ async function backtestPortfolioByScore(options: ScorePortfolioOptions): Promise
         payload.benchmark_enabled = true;
         qs.set("benchmark", benchmark);
         qs.set("benchmark_enabled", "1");
+        qs.set("include_benchmark", "1");
     }
 
     const url = `/api/backtest/portfolio`;
