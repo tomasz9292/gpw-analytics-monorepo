@@ -187,14 +187,19 @@ function Watchlist({
     return (
         <div className="flex flex-wrap gap-2">
             {items.map((s) => (
-                <div key={s} className="flex items-center gap-1">
+                <div key={s} className="group flex items-center gap-1">
                     <Chip active={s === current} onClick={() => onPick(s)}>
                         {s}
                     </Chip>
                     <button
                         type="button"
                         onClick={() => onRemove(s)}
-                        className="text-xs text-gray-400 hover:text-rose-600"
+                        className={[
+                            "opacity-0 transition-opacity",
+                            "group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100",
+                            "text-xl leading-none text-gray-400 hover:text-rose-600 focus-visible:text-rose-600",
+                            "px-1",
+                        ].join(" ")}
                         aria-label={`Usuń ${s} z listy`}
                     >
                         ×
