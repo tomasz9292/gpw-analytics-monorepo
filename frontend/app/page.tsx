@@ -11,6 +11,7 @@ import {
     CartesianGrid,
     Area,
     AreaChart,
+    Legend,
 } from "recharts";
 
 /** =========================
@@ -36,6 +37,16 @@ type RowSMA = Row & { sma?: number | null };
 type RowRSI = Row & { rsi: number | null };
 
 type Rebalance = "none" | "monthly" | "quarterly" | "yearly";
+
+type BacktestOptions = {
+    start: string;
+    end?: string;
+    rebalance: Rebalance;
+    initialCapital?: number;
+    feePct?: number;
+    thresholdPct?: number;
+    benchmark?: string | null;
+};
 
 type PortfolioPoint = { date: string; value: number };
 type PortfolioStats = {
@@ -82,6 +93,7 @@ type PortfolioResp = {
     stats: PortfolioStats;
     allocations?: PortfolioAllocation[];
     rebalances?: PortfolioRebalanceEvent[];
+    benchmark?: PortfolioPoint[];
 };
 
 /** =========================
@@ -106,17 +118,62 @@ async function fetchQuotes(symbol: string, start = "2015-01-01"): Promise<Row[]>
 async function backtestPortfolio(
     symbols: string[],
     weightsPct: number[],
-    start: string,
-    rebalance: Rebalance
+    options: BacktestOptions
 ): Promise<PortfolioResp> {
-    const payload = {
+    const { start, end, rebalance, initialCapital, feePct, thresholdPct, benchmark } = options;
+
+    const positions = symbols.map((symbol, idx) => ({
+        symbol,
+        weight: weightsPct[idx],
+    }));
+
+    const payload: Record<string, unknown> = {
         start_date: start,
         rebalance,
-        positions: symbols.map((symbol, idx) => ({
-            symbol,
-            weight: weightsPct[idx],
-        })),
+        rebalance_frequency: rebalance,
+        positions,
     };
+
+    if (end) {
+        payload.end_date = end;
+        payload.end = end;
+    }
+
+    if (typeof initialCapital === "number" && !Number.isNaN(initialCapital)) {
+        payload.initial_value = initialCapital;
+        payload.initial_capital = initialCapital;
+        payload.initial_cash = initialCapital;
+    }
+
+    const rebalanceSettings: Record<string, unknown> = {};
+    if (rebalance && rebalance !== "none") {
+        rebalanceSettings.frequency = rebalance;
+    }
+    if (typeof thresholdPct === "number" && thresholdPct > 0) {
+        rebalanceSettings.threshold = thresholdPct;
+        payload.rebalance_threshold = thresholdPct;
+        payload.threshold = thresholdPct;
+        payload.rebalance_threshold_ratio = thresholdPct / 100;
+    }
+    if (Object.keys(rebalanceSettings).length) {
+        payload.rebalance_settings = rebalanceSettings;
+    }
+
+    if (typeof feePct === "number" && feePct > 0) {
+        payload.transaction_cost = feePct;
+        payload.fee = feePct;
+        payload.fees = { transaction: feePct, trading: feePct };
+        payload.commission = feePct;
+        payload.transaction_cost_ratio = feePct / 100;
+        payload.fee_ratio = feePct / 100;
+    }
+
+    if (benchmark) {
+        payload.benchmark = benchmark;
+        payload.benchmark_symbol = benchmark;
+        payload.include_benchmark = true;
+        payload.benchmark_enabled = true;
+    }
 
     const url = `/api/backtest/portfolio`;
     const primary = await fetch(url, {
@@ -136,6 +193,25 @@ async function backtestPortfolio(
         start,
         rebalance,
     });
+
+    if (end) qs.set("end", end);
+    if (typeof initialCapital === "number" && !Number.isNaN(initialCapital)) {
+        qs.set("initial", String(initialCapital));
+        qs.set("initial_value", String(initialCapital));
+    }
+    if (typeof feePct === "number" && feePct > 0) {
+        qs.set("fee", String(feePct));
+        qs.set("transaction_cost", String(feePct));
+        qs.set("fee_ratio", String(feePct / 100));
+    }
+    if (typeof thresholdPct === "number" && thresholdPct > 0) {
+        qs.set("threshold", String(thresholdPct));
+        qs.set("threshold_ratio", String(thresholdPct / 100));
+    }
+    if (benchmark) {
+        qs.set("benchmark", benchmark);
+        qs.set("benchmark_enabled", "1");
+    }
 
     const fallback = await fetch(`${url}?${qs.toString()}`);
     if (!fallback.ok) {
@@ -245,6 +321,15 @@ function normalizePortfolioResponse(raw: unknown): PortfolioResp {
         final_value: pickNumber(statsSources, ["final_value", "ending_value", "last_value"]),
         initial_value: pickNumber(statsSources, ["initial_value", "starting_value", "start_value"]),
     };
+
+    const benchmarkSource =
+        getProp(raw, "benchmark") ??
+        getProp(raw, "benchmark_equity") ??
+        getProp(raw, "benchmark_history") ??
+        getProp(raw, "benchmark_curve") ??
+        getProp(raw, "benchmark_values");
+
+    const benchmark = normalizeEquity(benchmarkSource);
 
     const allocationSource =
         getProp(raw, "allocations") ??
@@ -382,6 +467,7 @@ function normalizePortfolioResponse(raw: unknown): PortfolioResp {
         stats,
         allocations,
         rebalances,
+        benchmark: benchmark.length ? benchmark : undefined,
     };
 }
 
@@ -487,6 +573,7 @@ function PortfolioStatsGrid({ stats }: { stats: PortfolioStats }) {
         { key: "trades", label: "Transakcje", format: (v) => v.toFixed(0) },
         { key: "best_year", label: "Najlepszy rok" },
         { key: "worst_year", label: "Najgorszy rok" },
+        { key: "initial_value", label: "Wartość startowa", format: (v) => v.toFixed(2) },
         { key: "last_value", label: "Końcowa wartość", format: (v) => v.toFixed(2) },
         { key: "final_value", label: "Wartość końcowa", format: (v) => v.toFixed(2) },
     ];
@@ -926,9 +1013,16 @@ export default function Page() {
         { symbol: "PKO.WA", weight: 30 },
     ]);
     const [pfStart, setPfStart] = useState("2015-01-01");
+    const [pfEnd, setPfEnd] = useState(() => new Date().toISOString().slice(0, 10));
+    const [pfInitial, setPfInitial] = useState(10000);
+    const [pfFee, setPfFee] = useState(0);
+    const [pfThreshold, setPfThreshold] = useState(0);
+    const [pfBenchmark, setPfBenchmark] = useState<string | null>(null);
+    const [pfLastBenchmark, setPfLastBenchmark] = useState<string | null>(null);
     const [pfFreq, setPfFreq] = useState<Rebalance>("monthly");
     const [pfRes, setPfRes] = useState<PortfolioResp | null>(null);
     const pfTotal = pfRows.reduce((a, b) => a + (Number(b.weight) || 0), 0);
+    const pfRangeInvalid = pfStart > pfEnd;
     const [pfLoading, setPfLoading] = useState(false);
     const [pfErr, setPfErr] = useState("");
 
@@ -980,6 +1074,31 @@ export default function Page() {
     const withRsi: RowRSI[] = useMemo(() => rsi(rows, 14), [rows]);
 
     const symbolLabel = symbol ?? "—";
+
+    const pfChartData = useMemo(() => {
+        if (!pfRes) return [];
+
+        const merged = new Map<
+            string,
+            { date: string; portfolio?: number; benchmark?: number }
+        >();
+
+        for (const point of pfRes.equity) {
+            merged.set(point.date, { date: point.date, portfolio: point.value });
+        }
+
+        const benchmarkSeries = pfRes.benchmark ?? [];
+        for (const point of benchmarkSeries) {
+            const existing = merged.get(point.date);
+            if (existing) {
+                existing.benchmark = point.value;
+            } else {
+                merged.set(point.date, { date: point.date, benchmark: point.value });
+            }
+        }
+
+        return Array.from(merged.values()).sort((a, b) => a.date.localeCompare(b.date));
+    }, [pfRes]);
 
     const removeFromWatch = (sym: string) => {
         setWatch((prev) => {
@@ -1170,25 +1289,34 @@ export default function Page() {
                                     </div>
 
                                     {/* Ustawienia symulacji */}
-                                    <div className="space-y-4">
-                                        <div className="grid gap-3 text-sm sm:grid-cols-2">
-                                            <label className="flex flex-col gap-1">
+                                    <div className="space-y-5">
+                                        <div className="grid gap-4 text-sm sm:grid-cols-2 xl:grid-cols-3">
+                                            <label className="flex flex-col gap-2 rounded-2xl border border-gray-200 bg-white/80 px-4 py-3 shadow-sm">
                                                 <span className="text-gray-600">Data startu</span>
                                                 <input
                                                     type="date"
                                                     value={pfStart}
                                                     onChange={(e) => setPfStart(e.target.value)}
-                                                    className="px-3 py-2 rounded-xl border"
+                                                    className="rounded-xl border px-3 py-2"
                                                 />
                                             </label>
-                                            <label className="flex flex-col gap-1">
+                                            <label className="flex flex-col gap-2 rounded-2xl border border-gray-200 bg-white/80 px-4 py-3 shadow-sm">
+                                                <span className="text-gray-600">Data końca</span>
+                                                <input
+                                                    type="date"
+                                                    value={pfEnd}
+                                                    onChange={(e) => setPfEnd(e.target.value)}
+                                                    className="rounded-xl border px-3 py-2"
+                                                />
+                                            </label>
+                                            <label className="flex flex-col gap-2 rounded-2xl border border-gray-200 bg-white/80 px-4 py-3 shadow-sm">
                                                 <span className="text-gray-600">Rebalansing</span>
                                                 <select
                                                     value={pfFreq}
                                                     onChange={(e) =>
                                                         setPfFreq(e.target.value as Rebalance)
                                                     }
-                                                    className="px-3 py-2 rounded-xl border"
+                                                    className="rounded-xl border px-3 py-2"
                                                 >
                                                     <option value="none">Brak</option>
                                                     <option value="monthly">Miesięczny</option>
@@ -1196,10 +1324,80 @@ export default function Page() {
                                                     <option value="yearly">Roczny</option>
                                                 </select>
                                             </label>
+                                            <label className="flex flex-col gap-2 rounded-2xl border border-gray-200 bg-white/80 px-4 py-3 shadow-sm">
+                                                <span className="text-gray-600">Kapitał początkowy</span>
+                                                <input
+                                                    type="number"
+                                                    min={0}
+                                                    step={100}
+                                                    value={pfInitial}
+                                                    onChange={(e) => setPfInitial(Number(e.target.value))}
+                                                    className="rounded-xl border px-3 py-2"
+                                                />
+                                            </label>
+                                            <label className="flex flex-col gap-2 rounded-2xl border border-gray-200 bg-white/80 px-4 py-3 shadow-sm">
+                                                <span className="text-gray-600">Koszt transakcyjny (%)</span>
+                                                <input
+                                                    type="number"
+                                                    min={0}
+                                                    step={0.1}
+                                                    value={pfFee}
+                                                    onChange={(e) => setPfFee(Number(e.target.value))}
+                                                    className="rounded-xl border px-3 py-2"
+                                                />
+                                            </label>
+                                            <label className="flex flex-col gap-2 rounded-2xl border border-gray-200 bg-white/80 px-4 py-3 shadow-sm">
+                                                <span className="text-gray-600">Próg rebalansingu (%)</span>
+                                                <input
+                                                    type="number"
+                                                    min={0}
+                                                    step={0.1}
+                                                    value={pfThreshold}
+                                                    onChange={(e) =>
+                                                        setPfThreshold(Number(e.target.value))
+                                                    }
+                                                    className="rounded-xl border px-3 py-2"
+                                                />
+                                            </label>
                                         </div>
+                                        <div className="space-y-2">
+                                            <span className="text-sm text-gray-600">Benchmark (opcjonalnie)</span>
+                                            <div className="flex flex-wrap items-center gap-2">
+                                                <TickerAutosuggest
+                                                    onPick={(sym) => setPfBenchmark(sym)}
+                                                    placeholder="Dodaj benchmark (np. WIG20.WA)"
+                                                    inputClassName="w-60"
+                                                />
+                                                {pfBenchmark && (
+                                                    <div className="flex items-center gap-2 text-sm text-gray-600">
+                                                        <span className="font-medium text-gray-900">{pfBenchmark}</span>
+                                                        <button
+                                                            onClick={() => setPfBenchmark(null)}
+                                                            className="px-2 py-1 text-xs rounded-lg border"
+                                                        >
+                                                            Wyczyść
+                                                        </button>
+                                                    </div>
+                                                )}
+                                                {!pfBenchmark && (
+                                                    <span className="text-xs text-gray-500">
+                                                        Wykres porówna portfel z wybranym benchmarkiem.
+                                                    </span>
+                                                )}
+                                            </div>
+                                        </div>
+                                        {pfRangeInvalid && (
+                                            <div className="text-xs text-rose-600">
+                                                Data końca musi być późniejsza niż data startu.
+                                            </div>
+                                        )}
                                         <button
                                             disabled={
-                                                pfTotal !== 100 || pfRows.some((r2) => !r2.symbol) || pfLoading
+                                                pfTotal !== 100 ||
+                                                pfRows.some((r2) => !r2.symbol) ||
+                                                pfLoading ||
+                                                pfInitial <= 0 ||
+                                                pfRangeInvalid
                                             }
                                             onClick={async () => {
                                                 try {
@@ -1208,13 +1406,17 @@ export default function Page() {
                                                     setPfRes(null);
                                                     const symbols = pfRows.map((r2) => r2.symbol);
                                                     const weights = pfRows.map((r2) => Number(r2.weight));
-                                                    const res = await backtestPortfolio(
-                                                        symbols,
-                                                        weights,
-                                                        pfStart,
-                                                        pfFreq
-                                                    );
+                                                    const res = await backtestPortfolio(symbols, weights, {
+                                                        start: pfStart,
+                                                        end: pfEnd,
+                                                        rebalance: pfFreq,
+                                                        initialCapital: pfInitial,
+                                                        feePct: pfFee,
+                                                        thresholdPct: pfThreshold,
+                                                        benchmark: pfBenchmark,
+                                                    });
                                                     setPfRes(res);
+                                                    setPfLastBenchmark(pfBenchmark);
                                                 } catch (e: unknown) {
                                                     const message =
                                                         e instanceof Error ? e.message : String(e);
@@ -1250,7 +1452,7 @@ export default function Page() {
                                             )}
                                             <div className="h-72">
                                                 <ResponsiveContainer width="100%" height="100%">
-                                                    <LineChart data={pfRes.equity}>
+                                                    <LineChart data={pfChartData}>
                                                         <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
                                                         <XAxis
                                                             dataKey="date"
@@ -1258,13 +1460,31 @@ export default function Page() {
                                                             tickMargin={8}
                                                         />
                                                         <YAxis tick={{ fontSize: 12 }} width={60} />
-                                                        <Tooltip />
+                                                        <Tooltip
+                                                            formatter={(value: number) =>
+                                                                typeof value === "number"
+                                                                    ? value.toFixed(2)
+                                                                    : value
+                                                            }
+                                                        />
+                                                        <Legend verticalAlign="top" height={36} />
                                                         <Line
                                                             type="monotone"
-                                                            dataKey="value"
+                                                            dataKey="portfolio"
+                                                            name="Portfel"
                                                             stroke="#111827"
                                                             dot={false}
                                                         />
+                                                        {pfRes.benchmark && pfRes.benchmark.length > 0 && (
+                                                            <Line
+                                                                type="monotone"
+                                                                dataKey="benchmark"
+                                                                name="Benchmark"
+                                                                stroke="#6b7280"
+                                                                strokeDasharray="4 2"
+                                                                dot={false}
+                                                            />
+                                                        )}
                                                     </LineChart>
                                                 </ResponsiveContainer>
                                             </div>
@@ -1273,9 +1493,26 @@ export default function Page() {
                                                     <RebalanceTimeline events={pfRes.rebalances} />
                                                 </div>
                                             )}
-                                            <div className="text-xs text-gray-500 mt-2">
-                                                Symulacja startuje z wartości 1.0, rebalansing: {pfFreq}.
-                                                Wagi są normalizowane do 100%.
+                                            <div className="text-xs text-gray-500 mt-2 space-y-1">
+                                                <div>
+                                                    Zakres: {pfStart} → {pfEnd}. Rebalansing: {pfFreq}
+                                                    {pfThreshold > 0
+                                                        ? ` (próg ${pfThreshold.toFixed(1)}%)`
+                                                        : ""}
+                                                    . Koszt transakcyjny: {pfFee.toFixed(2)}%.
+                                                </div>
+                                                <div>
+                                                    Wartość początkowa:
+                                                    {typeof pfRes.stats.initial_value === "number"
+                                                        ? ` ${pfRes.stats.initial_value.toFixed(2)}`
+                                                        : ` ${pfInitial.toFixed(2)}`} {" "}• Wagi są
+                                                    normalizowane do 100%.
+                                                </div>
+                                                <div>
+                                                    {pfRes.benchmark && pfRes.benchmark.length > 0
+                                                        ? `Benchmark: ${pfLastBenchmark ?? "dostarczony w odpowiedzi"}.`
+                                                        : "Bez benchmarku."}
+                                                </div>
                                             </div>
                                         </>
                                     )}
