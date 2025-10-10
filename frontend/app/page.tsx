@@ -330,7 +330,7 @@ function normalizePortfolioResponse(raw: unknown): PortfolioResp {
                                     ),
                                 };
                             })
-                            .filter((item): item is PortfolioRebalanceTrade => Boolean(item))
+                            .filter((item): item is PortfolioRebalanceTrade => item !== null)
                       : undefined;
 
                   const dateCandidate =
@@ -347,7 +347,7 @@ function normalizePortfolioResponse(raw: unknown): PortfolioResp {
                       trades,
                   };
               })
-              .filter((item): item is PortfolioRebalanceEvent => Boolean(item))
+              .filter((item): item is PortfolioRebalanceEvent => item !== null)
         : undefined;
 
     return {
