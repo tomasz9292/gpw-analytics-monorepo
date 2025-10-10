@@ -122,17 +122,56 @@ async function backtestPortfolio(
 ): Promise<PortfolioResp> {
     const { start, end, rebalance, initialCapital, feePct, thresholdPct, benchmark } = options;
 
-    const positions = symbols.map((symbol, idx) => ({
-        symbol,
-        weight: weightsPct[idx],
-    }));
+    const prepared = symbols
+        .map((symbol, idx) => ({
+            symbol: symbol?.trim(),
+            weight: Number(weightsPct[idx]),
+        }))
+        .filter((row) => row.symbol);
+
+    if (!prepared.length) {
+        throw new Error("Dodaj co najmniej jedną spółkę z wagą, aby uruchomić symulację.");
+    }
+
+    const rawWeights = prepared.map((row) => (Number.isFinite(row.weight) ? (row.weight as number) : 0));
+    const totalWeight = rawWeights.reduce((sum, weight) => sum + (Number(weight) || 0), 0);
+    const safeTotal = totalWeight === 0 ? 1 : totalWeight;
+
+    const positions = prepared.map((row, idx) => {
+        const rawWeight = rawWeights[idx] ?? 0;
+        const weightRatio = (Number(rawWeight) || 0) / safeTotal;
+        const weightPct = weightRatio * 100;
+
+        return {
+            symbol: row.symbol as string,
+            weight: weightRatio,
+            weight_ratio: weightRatio,
+            target_weight: weightRatio,
+            allocation: weightRatio,
+            share: weightRatio,
+            weight_pct: weightPct,
+            weight_percentage: weightPct,
+            weight_percent: weightPct,
+            percentage: weightPct,
+        };
+    });
+
+    const weightsRatio = positions.map((p) => p.weight as number);
+    const weightsPercent = rawWeights.map((weight) => (Number(weight) || 0));
 
     const payload: Record<string, unknown> = {
         start_date: start,
-        rebalance,
-        rebalance_frequency: rebalance,
         positions,
+        weights: weightsRatio,
+        weights_ratio: weightsRatio,
+        weights_pct: weightsPercent,
+        weights_percentage: weightsPercent,
     };
+
+    if (rebalance && rebalance !== "none") {
+        payload.rebalance = rebalance;
+        payload.rebalance_frequency = rebalance;
+    }
 
     if (end) {
         payload.end_date = end;
@@ -188,11 +227,30 @@ async function backtestPortfolio(
     }
 
     const qs = new URLSearchParams({
-        symbols: symbols.join(","),
-        weights: weightsPct.join(","),
+        symbols: positions.map((p) => p.symbol).join(","),
+        weights: weightsRatio.map((weight) => weight.toString()).join(","),
         start,
-        rebalance,
     });
+
+    if (weightsRatio.some((weight) => weight)) {
+        qs.set("weights_ratio", weightsRatio.map((weight) => weight.toString()).join(","));
+    }
+
+    if (weightsPercent.some((weight) => weight)) {
+        qs.set("weights_pct", weightsPercent.join(","));
+        qs.set(
+            "weights_percentage",
+            weightsPercent.map((weight) => weight.toString()).join(",")
+        );
+        qs.set(
+            "weights_percent",
+            weightsPercent.map((weight) => weight.toString()).join(",")
+        );
+    }
+
+    if (rebalance && rebalance !== "none") {
+        qs.set("rebalance", rebalance);
+    }
 
     if (end) qs.set("end", end);
     if (typeof initialCapital === "number" && !Number.isNaN(initialCapital)) {
