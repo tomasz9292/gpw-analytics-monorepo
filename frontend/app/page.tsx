@@ -255,31 +255,41 @@ function normalizePortfolioResponse(raw: unknown): PortfolioResp {
 
     const allocationRaw = Array.isArray(allocationSource) ? allocationSource : [];
 
-    const allocations: PortfolioAllocation[] | undefined = Array.isArray(allocationRaw)
-        ? allocationRaw
-              .map((item) => {
-                  if (!item || typeof item !== "object") return null;
-                  const record = item as Record<string, unknown>;
-                  const symbolRaw =
-                      record.symbol ?? record.ticker ?? record.name ?? record.asset ?? record.instrument;
-                  if (!symbolRaw) return null;
-                  return {
-                      symbol: String(symbolRaw),
-                      target_weight:
-                          pickNumber([record], ["target_weight", "target", "weight", "allocation"]) ?? 0,
-                      realized_weight: pickNumber(
-                          [record],
-                          ["realized_weight", "actual_weight", "avg_weight", "average_weight"]
-                      ),
-                      return_pct: pickNumber([record], ["return_pct", "return", "total_return", "performance"]),
-                      contribution_pct: pickNumber(
-                          [record],
-                          ["contribution_pct", "contribution", "contrib", "contribution_share"]
-                      ),
-                      value: pickNumber([record], ["value", "ending_value", "final_value", "amount"]),
-                  };
-              })
-              .filter((item): item is PortfolioAllocation => Boolean(item))
+    const normalizedAllocations = allocationRaw.reduce<PortfolioAllocation[]>((acc, item) => {
+        if (!item || typeof item !== "object") return acc;
+        const record = item as Record<string, unknown>;
+        const symbolRaw = record.symbol ?? record.ticker ?? record.name ?? record.asset ?? record.instrument;
+        if (!symbolRaw) return acc;
+
+        const normalized: PortfolioAllocation = {
+            symbol: String(symbolRaw),
+            target_weight: pickNumber([record], ["target_weight", "target", "weight", "allocation"]) ?? 0,
+        };
+
+        const realized = pickNumber(
+            [record],
+            ["realized_weight", "actual_weight", "avg_weight", "average_weight"]
+        );
+        if (realized !== undefined) normalized.realized_weight = realized;
+
+        const returnPct = pickNumber([record], ["return_pct", "return", "total_return", "performance"]);
+        if (returnPct !== undefined) normalized.return_pct = returnPct;
+
+        const contribution = pickNumber(
+            [record],
+            ["contribution_pct", "contribution", "contrib", "contribution_share"]
+        );
+        if (contribution !== undefined) normalized.contribution_pct = contribution;
+
+        const value = pickNumber([record], ["value", "ending_value", "final_value", "amount"]);
+        if (value !== undefined) normalized.value = value;
+
+        acc.push(normalized);
+        return acc;
+    }, []);
+
+    const allocations: PortfolioAllocation[] | undefined = normalizedAllocations.length
+        ? normalizedAllocations
         : undefined;
 
     const rebalanceSource =
@@ -290,64 +300,81 @@ function normalizePortfolioResponse(raw: unknown): PortfolioResp {
 
     const rebalanceRaw = Array.isArray(rebalanceSource) ? rebalanceSource : [];
 
-    const rebalances: PortfolioRebalanceEvent[] | undefined = Array.isArray(rebalanceRaw)
-        ? rebalanceRaw
-              .map((event) => {
-                  if (!event || typeof event !== "object") return null;
-                  const record = event as Record<string, unknown>;
-                  const tradesRaw =
-                      (Array.isArray(record.trades) && record.trades) ||
-                      (Array.isArray(record.orders) && record.orders) ||
-                      (Array.isArray(record.moves) && record.moves) ||
-                      (Array.isArray(record.actions) && record.actions) ||
-                      [];
+    const normalizedRebalances = rebalanceRaw.reduce<PortfolioRebalanceEvent[]>((acc, event) => {
+        if (!event || typeof event !== "object") return acc;
+        const record = event as Record<string, unknown>;
 
-                  const trades: PortfolioRebalanceTrade[] | undefined = Array.isArray(tradesRaw)
-                      ? tradesRaw
-                            .map((trade) => {
-                                if (!trade || typeof trade !== "object") return null;
-                                const tradeRecord = trade as Record<string, unknown>;
-                                const symbolRaw =
-                                    tradeRecord.symbol ??
-                                    tradeRecord.ticker ??
-                                    tradeRecord.asset ??
-                                    tradeRecord.name;
-                                if (!symbolRaw) return null;
-                                return {
-                                    symbol: String(symbolRaw),
-                                    action: (tradeRecord.action ?? tradeRecord.type ?? tradeRecord.side) as string | undefined,
-                                    weight_change: pickNumber(
-                                        [tradeRecord],
-                                        ["weight_change", "delta_weight", "weight", "change"]
-                                    ),
-                                    value_change: pickNumber(
-                                        [tradeRecord],
-                                        ["value_change", "delta_value", "value", "amount"]
-                                    ),
-                                    target_weight: pickNumber(
-                                        [tradeRecord],
-                                        ["target_weight", "new_weight", "weight_after"]
-                                    ),
-                                };
-                            })
-                            .filter((item): item is PortfolioRebalanceTrade => item !== null)
-                      : undefined;
+        const dateCandidate =
+            record.date ?? record.event_date ?? record.timestamp ?? record.time ?? record.period;
+        if (!dateCandidate) return acc;
 
-                  const dateCandidate =
-                      record.date ?? record.event_date ?? record.timestamp ?? record.time ?? record.period;
-                  if (!dateCandidate) return null;
+        const tradesRaw =
+            (Array.isArray(record.trades) && record.trades) ||
+            (Array.isArray(record.orders) && record.orders) ||
+            (Array.isArray(record.moves) && record.moves) ||
+            (Array.isArray(record.actions) && record.actions) ||
+            [];
 
-                  return {
-                      date: String(dateCandidate),
-                      reason: (record.reason ?? record.note ?? record.description) as string | undefined,
-                      turnover: pickNumber(
-                          [record],
-                          ["turnover", "turnover_pct", "turnover_ratio", "turnover_percentage"]
-                      ),
-                      trades,
-                  };
-              })
-              .filter((item): item is PortfolioRebalanceEvent => item !== null)
+        const trades = tradesRaw.reduce<PortfolioRebalanceTrade[]>((tradeAcc, trade) => {
+            if (!trade || typeof trade !== "object") return tradeAcc;
+            const tradeRecord = trade as Record<string, unknown>;
+
+            const symbolRaw =
+                tradeRecord.symbol ?? tradeRecord.ticker ?? tradeRecord.asset ?? tradeRecord.name;
+            if (!symbolRaw) return tradeAcc;
+
+            const normalizedTrade: PortfolioRebalanceTrade = {
+                symbol: String(symbolRaw),
+            };
+
+            const actionRaw = tradeRecord.action ?? tradeRecord.type ?? tradeRecord.side;
+            if (actionRaw !== undefined) normalizedTrade.action = String(actionRaw);
+
+            const weightChange = pickNumber(
+                [tradeRecord],
+                ["weight_change", "delta_weight", "weight", "change"]
+            );
+            if (weightChange !== undefined) normalizedTrade.weight_change = weightChange;
+
+            const valueChange = pickNumber(
+                [tradeRecord],
+                ["value_change", "delta_value", "value", "amount"]
+            );
+            if (valueChange !== undefined) normalizedTrade.value_change = valueChange;
+
+            const targetWeight = pickNumber(
+                [tradeRecord],
+                ["target_weight", "new_weight", "weight_after"]
+            );
+            if (targetWeight !== undefined) normalizedTrade.target_weight = targetWeight;
+
+            tradeAcc.push(normalizedTrade);
+            return tradeAcc;
+        }, []);
+
+        const normalizedEvent: PortfolioRebalanceEvent = {
+            date: String(dateCandidate),
+        };
+
+        const reasonRaw = record.reason ?? record.note ?? record.description;
+        if (reasonRaw !== undefined) normalizedEvent.reason = String(reasonRaw);
+
+        const turnover = pickNumber(
+            [record],
+            ["turnover", "turnover_pct", "turnover_ratio", "turnover_percentage"]
+        );
+        if (turnover !== undefined) normalizedEvent.turnover = turnover;
+
+        if (trades.length) {
+            normalizedEvent.trades = trades;
+        }
+
+        acc.push(normalizedEvent);
+        return acc;
+    }, []);
+
+    const rebalances: PortfolioRebalanceEvent[] | undefined = normalizedRebalances.length
+        ? normalizedRebalances
         : undefined;
 
     return {
