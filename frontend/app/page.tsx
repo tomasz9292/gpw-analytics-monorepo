@@ -44,8 +44,45 @@ type PortfolioStats = {
     volatility: number;
     sharpe: number;
     last_value: number;
+    total_return?: number;
+    best_year?: number;
+    worst_year?: number;
+    turnover?: number;
+    trades?: number;
+    final_value?: number;
+    initial_value?: number;
 };
-type PortfolioResp = { equity: PortfolioPoint[]; stats: PortfolioStats };
+
+type PortfolioAllocation = {
+    symbol: string;
+    target_weight: number;
+    realized_weight?: number;
+    return_pct?: number;
+    contribution_pct?: number;
+    value?: number;
+};
+
+type PortfolioRebalanceTrade = {
+    symbol: string;
+    action?: string;
+    weight_change?: number;
+    value_change?: number;
+    target_weight?: number;
+};
+
+type PortfolioRebalanceEvent = {
+    date: string;
+    reason?: string;
+    turnover?: number;
+    trades?: PortfolioRebalanceTrade[];
+};
+
+type PortfolioResp = {
+    equity: PortfolioPoint[];
+    stats: PortfolioStats;
+    allocations?: PortfolioAllocation[];
+    rebalances?: PortfolioRebalanceEvent[];
+};
 
 /** =========================
  *  API helpers
@@ -72,15 +109,280 @@ async function backtestPortfolio(
     start: string,
     rebalance: Rebalance
 ): Promise<PortfolioResp> {
+    const payload = {
+        start_date: start,
+        rebalance,
+        positions: symbols.map((symbol, idx) => ({
+            symbol,
+            weight: weightsPct[idx],
+        })),
+    };
+
+    const url = `/api/backtest/portfolio`;
+    const primary = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+    });
+
+    if (primary.ok) {
+        const json = await primary.json();
+        return normalizePortfolioResponse(json);
+    }
+
     const qs = new URLSearchParams({
         symbols: symbols.join(","),
-        weights: weightsPct.join(","), // w %
+        weights: weightsPct.join(","),
         start,
         rebalance,
     });
-    const r = await fetch(`/api/backtest/portfolio?${qs.toString()}`);
-    if (!r.ok) throw new Error(`API /backtest/portfolio ${r.status}`);
-    return r.json();
+
+    const fallback = await fetch(`${url}?${qs.toString()}`);
+    if (!fallback.ok) {
+        throw new Error(`API /backtest/portfolio ${primary.status} / ${fallback.status}`);
+    }
+    const fallbackJson = await fallback.json();
+    return normalizePortfolioResponse(fallbackJson);
+}
+
+const parseNumber = (value: unknown): number | undefined => {
+    if (value === null || value === undefined) return undefined;
+    const num = Number(value);
+    return Number.isFinite(num) ? num : undefined;
+};
+
+const getProp = (obj: unknown, key: string): unknown => {
+    if (!obj || typeof obj !== "object") return undefined;
+    return (obj as Record<string, unknown>)[key];
+};
+
+const pickNumber = (sources: unknown[], keys: string[]): number | undefined => {
+    for (const source of sources) {
+        if (!source || typeof source !== "object") continue;
+        for (const key of keys) {
+            const candidate = parseNumber(getProp(source, key));
+            if (candidate !== undefined) {
+                return candidate;
+            }
+        }
+    }
+    return undefined;
+};
+
+const normalizeEquity = (raw: unknown): PortfolioPoint[] => {
+    if (!Array.isArray(raw)) return [];
+    return raw
+        .map((point) => {
+            if (!point) return null;
+            if (Array.isArray(point)) {
+                if (point.length < 2) return null;
+                const [dateCandidate, valueCandidate] = point;
+                const value = parseNumber(valueCandidate);
+                if (value === undefined) return null;
+                return {
+                    date: String(dateCandidate),
+                    value,
+                };
+            }
+            if (typeof point === "object") {
+                const dateCandidate =
+                    (point as Record<string, unknown>).date ??
+                    (point as Record<string, unknown>).timestamp ??
+                    (point as Record<string, unknown>).period ??
+                    (point as Record<string, unknown>).time;
+                const value =
+                    pickNumber([point], ["value", "portfolio", "equity", "balance", "portfolio_value"]);
+                if (!dateCandidate || value === undefined) return null;
+                return {
+                    date: String(dateCandidate),
+                    value,
+                };
+            }
+            return null;
+        })
+        .filter((item): item is PortfolioPoint => Boolean(item));
+};
+
+function normalizePortfolioResponse(raw: unknown): PortfolioResp {
+    const equitySource =
+        getProp(raw, "equity") ??
+        getProp(raw, "equity_curve") ??
+        getProp(raw, "portfolio") ??
+        getProp(raw, "history") ??
+        getProp(raw, "values");
+
+    const equity = normalizeEquity(equitySource);
+
+    const statsSources = [
+        getProp(raw, "stats"),
+        getProp(raw, "statistics"),
+        getProp(raw, "metrics"),
+        getProp(raw, "summary"),
+        raw,
+    ];
+
+    const cagr = pickNumber(statsSources, ["cagr", "annualized_return", "annual_return", "cagr_pct"]) ?? 0;
+    const maxDrawdown =
+        pickNumber(statsSources, ["max_drawdown", "max_dd", "max_drawdown_pct", "worst_drawdown"]) ?? 0;
+    const volatility =
+        pickNumber(statsSources, ["volatility", "stdev", "std_dev", "std", "annualized_volatility"]) ?? 0;
+    const sharpe = pickNumber(statsSources, ["sharpe", "sharpe_ratio"]) ?? 0;
+    const lastValue =
+        pickNumber(statsSources, ["last_value", "final_value", "ending_value", "last_equity"]) ??
+        (equity.length ? equity[equity.length - 1].value : 0);
+
+    const stats: PortfolioStats = {
+        cagr,
+        max_drawdown: maxDrawdown,
+        volatility,
+        sharpe,
+        last_value: lastValue,
+        total_return: pickNumber(statsSources, ["total_return", "return", "cumulative_return", "total_pct"]),
+        best_year: pickNumber(statsSources, ["best_year", "best_year_return", "best_annual_return"]),
+        worst_year: pickNumber(statsSources, ["worst_year", "worst_year_return", "worst_annual_return"]),
+        turnover: pickNumber(statsSources, ["turnover", "turnover_pct", "turnover_ratio"]),
+        trades: pickNumber(statsSources, ["trades", "transaction_count", "trades_count"]),
+        final_value: pickNumber(statsSources, ["final_value", "ending_value", "last_value"]),
+        initial_value: pickNumber(statsSources, ["initial_value", "starting_value", "start_value"]),
+    };
+
+    const allocationSource =
+        getProp(raw, "allocations") ??
+        getProp(raw, "allocation") ??
+        getProp(raw, "allocation_summary") ??
+        getProp(raw, "allocations_summary") ??
+        getProp(raw, "breakdown");
+
+    const allocationRaw = Array.isArray(allocationSource) ? allocationSource : [];
+
+    const normalizedAllocations = allocationRaw.reduce<PortfolioAllocation[]>((acc, item) => {
+        if (!item || typeof item !== "object") return acc;
+        const record = item as Record<string, unknown>;
+        const symbolRaw = record.symbol ?? record.ticker ?? record.name ?? record.asset ?? record.instrument;
+        if (!symbolRaw) return acc;
+
+        const normalized: PortfolioAllocation = {
+            symbol: String(symbolRaw),
+            target_weight: pickNumber([record], ["target_weight", "target", "weight", "allocation"]) ?? 0,
+        };
+
+        const realized = pickNumber(
+            [record],
+            ["realized_weight", "actual_weight", "avg_weight", "average_weight"]
+        );
+        if (realized !== undefined) normalized.realized_weight = realized;
+
+        const returnPct = pickNumber([record], ["return_pct", "return", "total_return", "performance"]);
+        if (returnPct !== undefined) normalized.return_pct = returnPct;
+
+        const contribution = pickNumber(
+            [record],
+            ["contribution_pct", "contribution", "contrib", "contribution_share"]
+        );
+        if (contribution !== undefined) normalized.contribution_pct = contribution;
+
+        const value = pickNumber([record], ["value", "ending_value", "final_value", "amount"]);
+        if (value !== undefined) normalized.value = value;
+
+        acc.push(normalized);
+        return acc;
+    }, []);
+
+    const allocations: PortfolioAllocation[] | undefined = normalizedAllocations.length
+        ? normalizedAllocations
+        : undefined;
+
+    const rebalanceSource =
+        getProp(raw, "rebalances") ??
+        getProp(raw, "rebalance_events") ??
+        getProp(raw, "rebalance_log") ??
+        getProp(raw, "events");
+
+    const rebalanceRaw = Array.isArray(rebalanceSource) ? rebalanceSource : [];
+
+    const normalizedRebalances = rebalanceRaw.reduce<PortfolioRebalanceEvent[]>((acc, event) => {
+        if (!event || typeof event !== "object") return acc;
+        const record = event as Record<string, unknown>;
+
+        const dateCandidate =
+            record.date ?? record.event_date ?? record.timestamp ?? record.time ?? record.period;
+        if (!dateCandidate) return acc;
+
+        const tradesRaw =
+            (Array.isArray(record.trades) && record.trades) ||
+            (Array.isArray(record.orders) && record.orders) ||
+            (Array.isArray(record.moves) && record.moves) ||
+            (Array.isArray(record.actions) && record.actions) ||
+            [];
+
+        const trades = tradesRaw.reduce<PortfolioRebalanceTrade[]>((tradeAcc, trade) => {
+            if (!trade || typeof trade !== "object") return tradeAcc;
+            const tradeRecord = trade as Record<string, unknown>;
+
+            const symbolRaw =
+                tradeRecord.symbol ?? tradeRecord.ticker ?? tradeRecord.asset ?? tradeRecord.name;
+            if (!symbolRaw) return tradeAcc;
+
+            const normalizedTrade: PortfolioRebalanceTrade = {
+                symbol: String(symbolRaw),
+            };
+
+            const actionRaw = tradeRecord.action ?? tradeRecord.type ?? tradeRecord.side;
+            if (actionRaw !== undefined) normalizedTrade.action = String(actionRaw);
+
+            const weightChange = pickNumber(
+                [tradeRecord],
+                ["weight_change", "delta_weight", "weight", "change"]
+            );
+            if (weightChange !== undefined) normalizedTrade.weight_change = weightChange;
+
+            const valueChange = pickNumber(
+                [tradeRecord],
+                ["value_change", "delta_value", "value", "amount"]
+            );
+            if (valueChange !== undefined) normalizedTrade.value_change = valueChange;
+
+            const targetWeight = pickNumber(
+                [tradeRecord],
+                ["target_weight", "new_weight", "weight_after"]
+            );
+            if (targetWeight !== undefined) normalizedTrade.target_weight = targetWeight;
+
+            tradeAcc.push(normalizedTrade);
+            return tradeAcc;
+        }, []);
+
+        const normalizedEvent: PortfolioRebalanceEvent = {
+            date: String(dateCandidate),
+        };
+
+        const reasonRaw = record.reason ?? record.note ?? record.description;
+        if (reasonRaw !== undefined) normalizedEvent.reason = String(reasonRaw);
+
+        const turnover = pickNumber(
+            [record],
+            ["turnover", "turnover_pct", "turnover_ratio", "turnover_percentage"]
+        );
+        if (turnover !== undefined) normalizedEvent.turnover = turnover;
+
+        if (trades.length) {
+            normalizedEvent.trades = trades;
+        }
+
+        acc.push(normalizedEvent);
+        return acc;
+    }, []);
+
+    const rebalances: PortfolioRebalanceEvent[] | undefined = normalizedRebalances.length
+        ? normalizedRebalances
+        : undefined;
+
+    return {
+        equity,
+        stats,
+        allocations,
+        rebalances,
+    };
 }
 
 /** =========================
@@ -164,6 +466,171 @@ const Chip = ({
         {children}
     </button>
 );
+
+const toRatio = (value: number) => {
+    const abs = Math.abs(value);
+    if (abs === 0) return 0;
+    return abs > 1 ? value / 100 : value;
+};
+
+const formatPercent = (value: number, fractionDigits = 2) =>
+    `${(toRatio(value) * 100).toFixed(fractionDigits)}%`;
+
+function PortfolioStatsGrid({ stats }: { stats: PortfolioStats }) {
+    const config: { key: keyof PortfolioStats; label: string; format?: (value: number) => string }[] = [
+        { key: "cagr", label: "CAGR" },
+        { key: "total_return", label: "Łączna stopa zwrotu" },
+        { key: "max_drawdown", label: "Max DD" },
+        { key: "volatility", label: "Vol" },
+        { key: "sharpe", label: "Sharpe", format: (v) => v.toFixed(2) },
+        { key: "turnover", label: "Obrót" },
+        { key: "trades", label: "Transakcje", format: (v) => v.toFixed(0) },
+        { key: "best_year", label: "Najlepszy rok" },
+        { key: "worst_year", label: "Najgorszy rok" },
+        { key: "last_value", label: "Końcowa wartość", format: (v) => v.toFixed(2) },
+        { key: "final_value", label: "Wartość końcowa", format: (v) => v.toFixed(2) },
+    ];
+
+    const items = config
+        .map((item) => {
+            const value = stats[item.key];
+            if (typeof value !== "number" || Number.isNaN(value)) {
+                return null;
+            }
+            const formatter = item.format ?? ((v: number) => formatPercent(v));
+            return {
+                label: item.label,
+                display: formatter(value),
+            };
+        })
+        .filter(Boolean) as { label: string; display: string }[];
+
+    if (!items.length) return null;
+
+    return (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+            {items.map((item) => (
+                <div key={item.label}>
+                    <div className="text-gray-500">{item.label}</div>
+                    <div className="text-lg font-semibold">{item.display}</div>
+                </div>
+            ))}
+        </div>
+    );
+}
+
+function AllocationTable({ allocations }: { allocations: PortfolioAllocation[] }) {
+    if (!allocations.length) return null;
+
+    return (
+        <div className="space-y-2">
+            <div className="text-sm text-gray-600 font-medium">Podsumowanie pozycji</div>
+            <div className="overflow-x-auto">
+                <table className="min-w-full text-sm">
+                    <thead className="text-left text-gray-500">
+                        <tr className="border-b border-gray-200">
+                            <th className="py-2 pr-4 font-medium">Symbol</th>
+                            <th className="py-2 pr-4 font-medium">Waga docelowa</th>
+                            <th className="py-2 pr-4 font-medium">Śr. waga</th>
+                            <th className="py-2 pr-4 font-medium">Zwrot</th>
+                            <th className="py-2 pr-4 font-medium">Kontrybucja</th>
+                            <th className="py-2 pr-4 font-medium">Wartość końcowa</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {allocations.map((row, idx) => (
+                            <tr key={`${row.symbol}-${idx}`} className="border-b border-gray-100">
+                                <td className="py-2 pr-4 font-medium text-gray-900">{row.symbol}</td>
+                                <td className="py-2 pr-4">{formatPercent(row.target_weight)}</td>
+                                <td className="py-2 pr-4">
+                                    {typeof row.realized_weight === "number"
+                                        ? formatPercent(row.realized_weight)
+                                        : "—"}
+                                </td>
+                                <td className="py-2 pr-4">
+                                    {typeof row.return_pct === "number"
+                                        ? formatPercent(row.return_pct)
+                                        : "—"}
+                                </td>
+                                <td className="py-2 pr-4">
+                                    {typeof row.contribution_pct === "number"
+                                        ? formatPercent(row.contribution_pct)
+                                        : "—"}
+                                </td>
+                                <td className="py-2 pr-4">
+                                    {typeof row.value === "number" ? row.value.toFixed(2) : "—"}
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    );
+}
+
+function RebalanceTimeline({ events }: { events: PortfolioRebalanceEvent[] }) {
+    if (!events.length) return null;
+
+    return (
+        <div className="space-y-3">
+            <div className="text-sm text-gray-600 font-medium">Harmonogram rebalansingu</div>
+            <div className="space-y-3">
+                {events.map((event, idx) => (
+                    <div key={`${event.date}-${idx}`} className="rounded-xl border border-gray-200 bg-gray-50/70 p-4">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="text-sm font-semibold text-gray-900">{event.date}</div>
+                            <div className="text-xs text-gray-500">
+                                {event.reason || "Planowy rebalansing"}
+                                {typeof event.turnover === "number"
+                                    ? ` • obrót ${formatPercent(event.turnover, 1)}`
+                                    : ""}
+                            </div>
+                        </div>
+                        {event.trades && event.trades.length > 0 && (
+                            <div className="mt-3 overflow-x-auto">
+                                <table className="min-w-full text-xs md:text-sm">
+                                    <thead className="text-left text-gray-500">
+                                        <tr>
+                                            <th className="py-1 pr-3 font-medium">Spółka</th>
+                                            <th className="py-1 pr-3 font-medium">Akcja</th>
+                                            <th className="py-1 pr-3 font-medium">Zmiana wagi</th>
+                                            <th className="py-1 pr-3 font-medium">Zmiana wartości</th>
+                                            <th className="py-1 pr-3 font-medium">Waga docelowa</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {event.trades.map((trade, tradeIdx) => (
+                                            <tr key={`${trade.symbol}-${tradeIdx}`} className="border-t border-gray-100">
+                                                <td className="py-1 pr-3 font-medium text-gray-900">{trade.symbol}</td>
+                                                <td className="py-1 pr-3 capitalize">{trade.action ?? "—"}</td>
+                                                <td className="py-1 pr-3">
+                                                    {typeof trade.weight_change === "number"
+                                                        ? formatPercent(trade.weight_change, 1)
+                                                        : "—"}
+                                                </td>
+                                                <td className="py-1 pr-3">
+                                                    {typeof trade.value_change === "number"
+                                                        ? trade.value_change.toFixed(2)
+                                                        : "—"}
+                                                </td>
+                                                <td className="py-1 pr-3">
+                                                    {typeof trade.target_weight === "number"
+                                                        ? formatPercent(trade.target_weight, 1)
+                                                        : "—"}
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+}
 
 function Watchlist({
     items,
@@ -775,32 +1242,12 @@ export default function Page() {
                                         </div>
                                     ) : (
                                         <>
-                                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm mb-4">
-                                                <div>
-                                                    <div className="text-gray-500">CAGR</div>
-                                                    <div className="text-lg font-semibold">
-                                                        {(pfRes.stats.cagr * 100).toFixed(2)}%
-                                                    </div>
+                                            <PortfolioStatsGrid stats={pfRes.stats} />
+                                            {pfRes.allocations && pfRes.allocations.length > 0 && (
+                                                <div className="mt-6">
+                                                    <AllocationTable allocations={pfRes.allocations} />
                                                 </div>
-                                                <div>
-                                                    <div className="text-gray-500">Max DD</div>
-                                                    <div className="text-lg font-semibold">
-                                                        {(pfRes.stats.max_drawdown * 100).toFixed(1)}%
-                                                    </div>
-                                                </div>
-                                                <div>
-                                                    <div className="text-gray-500">Vol</div>
-                                                    <div className="text-lg font-semibold">
-                                                        {(pfRes.stats.volatility * 100).toFixed(1)}%
-                                                    </div>
-                                                </div>
-                                                <div>
-                                                    <div className="text-gray-500">Sharpe</div>
-                                                    <div className="text-lg font-semibold">
-                                                        {pfRes.stats.sharpe.toFixed(2)}
-                                                    </div>
-                                                </div>
-                                            </div>
+                                            )}
                                             <div className="h-72">
                                                 <ResponsiveContainer width="100%" height="100%">
                                                     <LineChart data={pfRes.equity}>
@@ -821,6 +1268,11 @@ export default function Page() {
                                                     </LineChart>
                                                 </ResponsiveContainer>
                                             </div>
+                                            {pfRes.rebalances && pfRes.rebalances.length > 0 && (
+                                                <div className="mt-6">
+                                                    <RebalanceTimeline events={pfRes.rebalances} />
+                                                </div>
+                                            )}
                                             <div className="text-xs text-gray-500 mt-2">
                                                 Symulacja startuje z wartości 1.0, rebalansing: {pfFreq}.
                                                 Wagi są normalizowane do 100%.
