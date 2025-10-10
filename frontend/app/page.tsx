@@ -48,6 +48,16 @@ type BacktestOptions = {
     benchmark?: string | null;
 };
 
+type ScorePortfolioOptions = BacktestOptions & {
+    score: string;
+    universe?: string | string[] | null;
+    limit?: number;
+    weighting?: string | null;
+    direction?: "asc" | "desc" | null;
+    minScore?: number | null;
+    maxScore?: number | null;
+};
+
 type PortfolioPoint = { date: string; value: number };
 type PortfolioStats = {
     cagr: number;
@@ -127,20 +137,27 @@ async function backtestPortfolio(
             symbol: symbol?.trim(),
             weight: Number(weightsPct[idx]),
         }))
-        .filter((row) => row.symbol);
+        .filter((row) => row.symbol && Number.isFinite(row.weight) && (row.weight as number) > 0);
 
     if (!prepared.length) {
-        throw new Error("Dodaj co najmniej jedną spółkę z wagą, aby uruchomić symulację.");
+        throw new Error(
+            "Dodaj co najmniej jedną spółkę z wagą większą od zera, aby uruchomić symulację."
+        );
     }
 
-    const rawWeights = prepared.map((row) => (Number.isFinite(row.weight) ? (row.weight as number) : 0));
+    const rawWeights = prepared.map((row) => (Number(row.weight) > 0 ? (row.weight as number) : 0));
     const totalWeight = rawWeights.reduce((sum, weight) => sum + (Number(weight) || 0), 0);
     const safeTotal = totalWeight === 0 ? 1 : totalWeight;
+    const weightsRatio = prepared.map((_, idx) => {
+        const rawWeight = rawWeights[idx] ?? 0;
+        return (Number(rawWeight) || 0) / safeTotal;
+    });
+    const normalizedPercent = weightsRatio.map((ratio) => Number((ratio * 100).toFixed(6)));
 
     const positions = prepared.map((row, idx) => {
-        const rawWeight = rawWeights[idx] ?? 0;
-        const weightRatio = (Number(rawWeight) || 0) / safeTotal;
-        const weightPct = weightRatio * 100;
+        const weightRatio = weightsRatio[idx] ?? 0;
+        const weightPct = normalizedPercent[idx] ?? 0;
+        const originalWeight = rawWeights[idx] ?? 0;
 
         return {
             symbol: row.symbol as string,
@@ -153,11 +170,17 @@ async function backtestPortfolio(
             weight_percentage: weightPct,
             weight_percent: weightPct,
             percentage: weightPct,
+            target_weight_pct: weightPct,
+            target_weight_percentage: weightPct,
+            target_weight_percent: weightPct,
+            input_weight: originalWeight,
+            input_weight_pct: originalWeight,
+            input_weight_percentage: originalWeight,
+            original_weight: originalWeight,
         };
     });
 
-    const weightsRatio = positions.map((p) => p.weight as number);
-    const weightsPercent = rawWeights.map((weight) => (Number(weight) || 0));
+    const weightsPercent = normalizedPercent;
 
     const payload: Record<string, unknown> = {
         start_date: start,
@@ -166,7 +189,15 @@ async function backtestPortfolio(
         weights_ratio: weightsRatio,
         weights_pct: weightsPercent,
         weights_percentage: weightsPercent,
+        weights_percent: weightsPercent,
     };
+
+    if (rawWeights.some((weight) => weight)) {
+        payload.weights_input = rawWeights;
+        payload.weights_input_pct = rawWeights;
+        payload.weights_input_percentage = rawWeights;
+        payload.weights_original = rawWeights;
+    }
 
     if (rebalance && rebalance !== "none") {
         payload.rebalance = rebalance;
@@ -237,15 +268,18 @@ async function backtestPortfolio(
     }
 
     if (weightsPercent.some((weight) => weight)) {
-        qs.set("weights_pct", weightsPercent.join(","));
-        qs.set(
-            "weights_percentage",
-            weightsPercent.map((weight) => weight.toString()).join(",")
-        );
-        qs.set(
-            "weights_percent",
-            weightsPercent.map((weight) => weight.toString()).join(",")
-        );
+        const normalized = weightsPercent.map((weight) => weight.toString());
+        qs.set("weights_pct", normalized.join(","));
+        qs.set("weights_percentage", normalized.join(","));
+        qs.set("weights_percent", normalized.join(","));
+    }
+
+    if (rawWeights.some((weight) => weight)) {
+        const raw = rawWeights.map((weight) => weight.toString());
+        qs.set("weights_input", raw.join(","));
+        qs.set("weights_input_pct", raw.join(","));
+        qs.set("weights_input_percentage", raw.join(","));
+        qs.set("weights_original", raw.join(","));
     }
 
     if (rebalance && rebalance !== "none") {
@@ -274,6 +308,190 @@ async function backtestPortfolio(
     const fallback = await fetch(`${url}?${qs.toString()}`);
     if (!fallback.ok) {
         throw new Error(`API /backtest/portfolio ${primary.status} / ${fallback.status}`);
+    }
+    const fallbackJson = await fallback.json();
+    return normalizePortfolioResponse(fallbackJson);
+}
+
+async function backtestPortfolioByScore(options: ScorePortfolioOptions): Promise<PortfolioResp> {
+    const {
+        score,
+        universe = null,
+        limit,
+        weighting,
+        direction,
+        minScore,
+        maxScore,
+        start,
+        end,
+        rebalance,
+        initialCapital,
+        feePct,
+        thresholdPct,
+        benchmark,
+    } = options;
+
+    const trimmedScore = score?.trim();
+    if (!trimmedScore) {
+        throw new Error("Podaj nazwę score, aby uruchomić symulację.");
+    }
+
+    const normalizedLimit =
+        typeof limit === "number" && Number.isFinite(limit) && limit > 0
+            ? Math.floor(limit)
+            : undefined;
+
+    const normalizedWeighting =
+        typeof weighting === "string" && weighting.trim() ? weighting.trim() : undefined;
+
+    const normalizedDirection = direction === "asc" ? "asc" : direction === "desc" ? "desc" : undefined;
+
+    const normalizedMinScore =
+        typeof minScore === "number" && Number.isFinite(minScore) ? minScore : undefined;
+    const normalizedMaxScore =
+        typeof maxScore === "number" && Number.isFinite(maxScore) ? maxScore : undefined;
+
+    const payload: Record<string, unknown> = {
+        mode: "score",
+        start_date: start,
+        start,
+        from: start,
+        score: trimmedScore,
+        score_name: trimmedScore,
+        ranking: trimmedScore,
+        metric: trimmedScore,
+    };
+
+    const qs = new URLSearchParams({
+        score: trimmedScore,
+        start,
+    });
+
+    if (normalizedLimit !== undefined) {
+        payload.top_n = normalizedLimit;
+        payload.limit = normalizedLimit;
+        payload.count = normalizedLimit;
+        payload.size = normalizedLimit;
+        payload.positions = normalizedLimit;
+        qs.set("top_n", String(normalizedLimit));
+        qs.set("limit", String(normalizedLimit));
+        qs.set("count", String(normalizedLimit));
+    }
+
+    if (normalizedWeighting) {
+        payload.weighting = normalizedWeighting;
+        payload.weighting_method = normalizedWeighting;
+        payload.weight_method = normalizedWeighting;
+        payload.weights = normalizedWeighting;
+        payload.allocation = normalizedWeighting;
+        qs.set("weighting", normalizedWeighting);
+        qs.set("weight_method", normalizedWeighting);
+    }
+
+    if (normalizedDirection) {
+        payload.direction = normalizedDirection;
+        payload.order = normalizedDirection;
+        payload.sort_direction = normalizedDirection;
+        qs.set("direction", normalizedDirection);
+    }
+
+    if (normalizedMinScore !== undefined) {
+        payload.min_score = normalizedMinScore;
+        payload.score_min = normalizedMinScore;
+        payload.min = normalizedMinScore;
+        qs.set("min_score", String(normalizedMinScore));
+    }
+
+    if (normalizedMaxScore !== undefined) {
+        payload.max_score = normalizedMaxScore;
+        payload.score_max = normalizedMaxScore;
+        payload.max = normalizedMaxScore;
+        qs.set("max_score", String(normalizedMaxScore));
+    }
+
+    if (Array.isArray(universe)) {
+        const cleaned = universe.map((item) => item?.trim()).filter(Boolean) as string[];
+        if (cleaned.length) {
+            payload.universe = cleaned;
+            payload.universe_list = cleaned;
+            payload.symbols = cleaned;
+            payload.assets = cleaned;
+            qs.set("universe", cleaned.join(","));
+            qs.set("symbols", cleaned.join(","));
+        }
+    } else if (typeof universe === "string" && universe.trim()) {
+        const trimmedUniverse = universe.trim();
+        payload.universe = trimmedUniverse;
+        payload.universe_name = trimmedUniverse;
+        payload.market = trimmedUniverse;
+        payload.category = trimmedUniverse;
+        qs.set("universe", trimmedUniverse);
+    }
+
+    if (end) {
+        payload.end_date = end;
+        payload.end = end;
+        payload.to = end;
+        qs.set("end", end);
+    }
+
+    if (rebalance && rebalance !== "none") {
+        payload.rebalance = rebalance;
+        payload.rebalance_frequency = rebalance;
+        payload.frequency = rebalance;
+        qs.set("rebalance", rebalance);
+    }
+
+    if (typeof thresholdPct === "number" && thresholdPct > 0) {
+        payload.rebalance_threshold = thresholdPct;
+        payload.threshold = thresholdPct;
+        payload.threshold_ratio = thresholdPct / 100;
+        payload.rebalance_threshold_ratio = thresholdPct / 100;
+        qs.set("threshold", String(thresholdPct));
+        qs.set("threshold_ratio", String(thresholdPct / 100));
+    }
+
+    if (typeof initialCapital === "number" && !Number.isNaN(initialCapital)) {
+        payload.initial_value = initialCapital;
+        payload.initial_capital = initialCapital;
+        payload.initial_cash = initialCapital;
+        qs.set("initial", String(initialCapital));
+    }
+
+    if (typeof feePct === "number" && feePct > 0) {
+        payload.transaction_cost = feePct;
+        payload.fee = feePct;
+        payload.fee_ratio = feePct / 100;
+        payload.transaction_cost_ratio = feePct / 100;
+        payload.commission = feePct;
+        qs.set("fee", String(feePct));
+        qs.set("fee_ratio", String(feePct / 100));
+    }
+
+    if (benchmark) {
+        payload.benchmark = benchmark;
+        payload.benchmark_symbol = benchmark;
+        payload.include_benchmark = true;
+        payload.benchmark_enabled = true;
+        qs.set("benchmark", benchmark);
+        qs.set("benchmark_enabled", "1");
+    }
+
+    const url = `/api/backtest/portfolio/score`;
+    const primary = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+    });
+
+    if (primary.ok) {
+        const json = await primary.json();
+        return normalizePortfolioResponse(json);
+    }
+
+    const fallback = await fetch(`${url}?${qs.toString()}`);
+    if (!fallback.ok) {
+        throw new Error(`API /backtest/portfolio/score ${primary.status} / ${fallback.status}`);
     }
     const fallbackJson = await fallback.json();
     return normalizePortfolioResponse(fallbackJson);
@@ -1065,6 +1283,7 @@ export default function Page() {
     const [err, setErr] = useState("");
 
     // Portfel
+    const [pfMode, setPfMode] = useState<"manual" | "score">("manual");
     const [pfRows, setPfRows] = useState<{ symbol: string; weight: number }[]>([
         { symbol: "CDR.WA", weight: 40 },
         { symbol: "ORLEN.WA", weight: 30 },
@@ -1079,10 +1298,35 @@ export default function Page() {
     const [pfLastBenchmark, setPfLastBenchmark] = useState<string | null>(null);
     const [pfFreq, setPfFreq] = useState<Rebalance>("monthly");
     const [pfRes, setPfRes] = useState<PortfolioResp | null>(null);
+    const [pfScoreName, setPfScoreName] = useState("quality_score");
+    const [pfScoreLimit, setPfScoreLimit] = useState(10);
+    const [pfScoreWeighting, setPfScoreWeighting] = useState("equal");
+    const [pfScoreDirection, setPfScoreDirection] = useState<"asc" | "desc">("desc");
+    const [pfScoreUniverse, setPfScoreUniverse] = useState("");
+    const [pfScoreMin, setPfScoreMin] = useState("");
+    const [pfScoreMax, setPfScoreMax] = useState("");
     const pfTotal = pfRows.reduce((a, b) => a + (Number(b.weight) || 0), 0);
     const pfRangeInvalid = pfStart > pfEnd;
     const [pfLoading, setPfLoading] = useState(false);
     const [pfErr, setPfErr] = useState("");
+    const pfHasInvalidWeights = pfRows.some((row) => Number(row.weight) < 0 || Number.isNaN(Number(row.weight)));
+    const pfHasMissingSymbols = pfRows.some(
+        (row) => Number(row.weight) > 0 && (!row.symbol || !row.symbol.trim())
+    );
+    const pfHasValidPositions = pfRows.some((row) => row.symbol && Number(row.weight) > 0);
+    const pfDisableManualSimulation =
+        pfLoading ||
+        pfInitial <= 0 ||
+        pfRangeInvalid ||
+        pfHasInvalidWeights ||
+        pfHasMissingSymbols ||
+        !pfHasValidPositions;
+    const pfScoreNameInvalid = !pfScoreName.trim();
+    const pfScoreLimitInvalid = !Number.isFinite(pfScoreLimit) || pfScoreLimit <= 0;
+    const pfDisableScoreSimulation =
+        pfLoading || pfInitial <= 0 || pfRangeInvalid || pfScoreNameInvalid || pfScoreLimitInvalid;
+    const pfDisableSimulation =
+        pfMode === "manual" ? pfDisableManualSimulation : pfDisableScoreSimulation;
 
     // Quotes loader
     useEffect(() => {
@@ -1157,6 +1401,71 @@ export default function Page() {
 
         return Array.from(merged.values()).sort((a, b) => a.date.localeCompare(b.date));
     }, [pfRes]);
+
+    const runPortfolioSimulation = async () => {
+        try {
+            setPfErr("");
+            setPfLoading(true);
+            setPfRes(null);
+
+            if (pfMode === "manual") {
+                const symbols = pfRows.map((r2) => r2.symbol);
+                const weights = pfRows.map((r2) => Number(r2.weight));
+                const res = await backtestPortfolio(symbols, weights, {
+                    start: pfStart,
+                    end: pfEnd,
+                    rebalance: pfFreq,
+                    initialCapital: pfInitial,
+                    feePct: pfFee,
+                    thresholdPct: pfThreshold,
+                    benchmark: pfBenchmark,
+                });
+                setPfRes(res);
+            } else {
+                const parseOptionalNumber = (value: string): number | null => {
+                    if (!value.trim()) return null;
+                    const numeric = Number(value);
+                    return Number.isFinite(numeric) ? numeric : null;
+                };
+
+                const universeCandidates = pfScoreUniverse
+                    .split(/[\s,;]+/)
+                    .map((item) => item.trim())
+                    .filter(Boolean);
+                const universeValue =
+                    universeCandidates.length === 0
+                        ? null
+                        : universeCandidates.length === 1
+                        ? universeCandidates[0]
+                        : universeCandidates;
+
+                const res = await backtestPortfolioByScore({
+                    score: pfScoreName.trim(),
+                    limit: pfScoreLimitInvalid ? undefined : Math.floor(pfScoreLimit),
+                    weighting: pfScoreWeighting,
+                    direction: pfScoreDirection,
+                    universe: universeValue,
+                    minScore: parseOptionalNumber(pfScoreMin),
+                    maxScore: parseOptionalNumber(pfScoreMax),
+                    start: pfStart,
+                    end: pfEnd,
+                    rebalance: pfFreq,
+                    initialCapital: pfInitial,
+                    feePct: pfFee,
+                    thresholdPct: pfThreshold,
+                    benchmark: pfBenchmark,
+                });
+                setPfRes(res);
+            }
+
+            setPfLastBenchmark(pfBenchmark);
+        } catch (e: unknown) {
+            const message = e instanceof Error ? e.message : String(e);
+            setPfErr(message);
+        } finally {
+            setPfLoading(false);
+        }
+    };
 
     const removeFromWatch = (sym: string) => {
         setWatch((prev) => {
@@ -1268,85 +1577,189 @@ export default function Page() {
                         {/* Portfel */}
                         <Card title="Portfel – symulacja & rebalansing">
                             <div className="space-y-6">
+                                <div className="flex flex-wrap gap-2">
+                                    <Chip active={pfMode === "manual"} onClick={() => setPfMode("manual")}>
+                                        Własne wagi
+                                    </Chip>
+                                    <Chip active={pfMode === "score"} onClick={() => setPfMode("score")}>
+                                        Automatycznie wg score
+                                    </Chip>
+                                </div>
                                 <div className="grid gap-6 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
-                                    {/* Skład portfela */}
                                     <div className="space-y-3">
-                                        <div className="text-sm text-gray-600">Skład portfela</div>
-                                        {pfRows.map((r, i) => (
-                                            <div
-                                                key={i}
-                                                className="flex flex-wrap items-center gap-3 rounded-xl border border-gray-200 bg-gray-50/60 px-3 py-3"
-                                            >
-                                                <div className="flex-1 min-w-[12rem]">
-                                                    <TickerAutosuggest
-                                                        onPick={(sym) => {
-                                                            setPfRows((rows) =>
-                                                                rows.map((x, idx) =>
-                                                                    idx === i
-                                                                        ? { ...x, symbol: sym }
-                                                                        : x
-                                                                )
-                                                            );
-                                                        }}
-                                                        placeholder={r.symbol || "Symbol"}
-                                                        inputClassName="w-full"
-                                                    />
-                                                </div>
-                                                <div className="flex flex-wrap items-center gap-2 md:flex-nowrap">
-                                                    <input
-                                                        type="number"
-                                                        min={0}
-                                                        max={100}
-                                                        step={1}
-                                                        value={r.weight}
-                                                        onChange={(e) =>
-                                                            setPfRows((rows) =>
-                                                                rows.map((x, idx) =>
-                                                                    idx === i
-                                                                        ? {
-                                                                              ...x,
-                                                                              weight: Number(e.target.value),
-                                                                          }
-                                                                        : x
-                                                                )
-                                                            )
-                                                        }
-                                                        className="w-24 md:w-20 px-3 py-2 rounded-xl border"
-                                                    />
-                                                    <span className="text-sm text-gray-500">%</span>
-                                                    <button
-                                                        onClick={() =>
-                                                            setPfRows((rows) =>
-                                                                rows.filter((_, idx) => idx !== i)
-                                                            )
-                                                        }
-                                                        className="px-2 py-1 text-sm rounded-lg border"
-                                                        title="Usuń"
+                                        {pfMode === "manual" ? (
+                                            <>
+                                                <div className="text-sm text-gray-600">Skład portfela</div>
+                                                {pfRows.map((r, i) => (
+                                                    <div
+                                                        key={i}
+                                                        className="flex flex-wrap items-center gap-3 rounded-xl border border-gray-200 bg-gray-50/60 px-3 py-3"
                                                     >
-                                                        ✕
-                                                    </button>
+                                                        <div className="flex-1 min-w-[12rem]">
+                                                            <TickerAutosuggest
+                                                                onPick={(sym) => {
+                                                                    setPfRows((rows) =>
+                                                                        rows.map((x, idx) =>
+                                                                            idx === i
+                                                                                ? { ...x, symbol: sym }
+                                                                                : x
+                                                                        )
+                                                                    );
+                                                                }}
+                                                                placeholder={r.symbol || "Symbol"}
+                                                                inputClassName="w-full"
+                                                            />
+                                                        </div>
+                                                        <div className="flex flex-wrap items-center gap-2 md:flex-nowrap">
+                                                            <input
+                                                                type="number"
+                                                                min={0}
+                                                                max={100}
+                                                                step={1}
+                                                                value={r.weight}
+                                                                onChange={(e) =>
+                                                                    setPfRows((rows) =>
+                                                                        rows.map((x, idx) =>
+                                                                            idx === i
+                                                                                ? {
+                                                                                      ...x,
+                                                                                      weight: Number(e.target.value),
+                                                                                  }
+                                                                                : x
+                                                                        )
+                                                                    )
+                                                                }
+                                                                className="w-24 md:w-20 px-3 py-2 rounded-xl border"
+                                                            />
+                                                            <span className="text-sm text-gray-500">%</span>
+                                                            <button
+                                                                onClick={() =>
+                                                                    setPfRows((rows) =>
+                                                                        rows.filter((_, idx) => idx !== i)
+                                                                    )
+                                                                }
+                                                                className="px-2 py-1 text-sm rounded-lg border"
+                                                                title="Usuń"
+                                                            >
+                                                                ✕
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                                <button
+                                                    onClick={() =>
+                                                        setPfRows((rows) => [...rows, { symbol: "", weight: 0 }])
+                                                    }
+                                                    className="w-full sm:w-auto px-3 py-2 rounded-xl border"
+                                                >
+                                                    Dodaj pozycję
+                                                </button>
+                                                <div
+                                                    className={`text-sm ${
+                                                        pfTotal === 100 ? "text-emerald-600" : "text-amber-600"
+                                                    }`}
+                                                >
+                                                    Suma wag: <b>{pfTotal}%</b>{" "}
+                                                    {pfTotal === 100 ? "(OK)" : "(zostaną przeskalowane)"}
                                                 </div>
-                                            </div>
-                                        ))}
-                                        <button
-                                            onClick={() =>
-                                                setPfRows((rows) => [...rows, { symbol: "", weight: 0 }])
-                                            }
-                                            className="w-full sm:w-auto px-3 py-2 rounded-xl border"
-                                        >
-                                            Dodaj pozycję
-                                        </button>
-                                        <div
-                                            className={`text-sm ${
-                                                pfTotal === 100 ? "text-emerald-600" : "text-rose-600"
-                                            }`}
-                                        >
-                                            Suma wag: <b>{pfTotal}%</b>{" "}
-                                            {pfTotal === 100 ? "(OK)" : "(docelowo 100%)"}
-                                        </div>
+                                                {pfTotal !== 100 && (
+                                                    <div className="text-xs text-gray-500">
+                                                        Symulacja automatycznie normalizuje wagi do 100%.
+                                                    </div>
+                                                )}
+                                            </>
+                                        ) : (
+                                            <>
+                                                <div className="text-sm text-gray-600">Generowanie według score</div>
+                                                <div className="space-y-4">
+                                                    <div className="grid gap-4 text-sm sm:grid-cols-2 xl:grid-cols-3">
+                                                        <label className="flex flex-col gap-2 rounded-2xl border border-gray-200 bg-white/80 px-4 py-3 shadow-sm">
+                                                            <span className="text-gray-600">Score</span>
+                                                            <input
+                                                                type="text"
+                                                                value={pfScoreName}
+                                                                onChange={(e) => setPfScoreName(e.target.value)}
+                                                                className="rounded-xl border px-3 py-2"
+                                                                placeholder="np. quality_score"
+                                                            />
+                                                        </label>
+                                                        <label className="flex flex-col gap-2 rounded-2xl border border-gray-200 bg-white/80 px-4 py-3 shadow-sm">
+                                                            <span className="text-gray-600">Liczba spółek (top N)</span>
+                                                            <input
+                                                                type="number"
+                                                                min={1}
+                                                                step={1}
+                                                                value={pfScoreLimit}
+                                                                onChange={(e) => setPfScoreLimit(Number(e.target.value))}
+                                                                className="rounded-xl border px-3 py-2"
+                                                            />
+                                                        </label>
+                                                        <label className="flex flex-col gap-2 rounded-2xl border border-gray-200 bg-white/80 px-4 py-3 shadow-sm">
+                                                            <span className="text-gray-600">Metoda ważenia</span>
+                                                            <select
+                                                                value={pfScoreWeighting}
+                                                                onChange={(e) => setPfScoreWeighting(e.target.value)}
+                                                                className="rounded-xl border px-3 py-2"
+                                                            >
+                                                                <option value="equal">Równe wagi</option>
+                                                                <option value="score">Proporcjonalnie do score</option>
+                                                                <option value="market_cap">Kapitalizacja</option>
+                                                            </select>
+                                                        </label>
+                                                        <label className="flex flex-col gap-2 rounded-2xl border border-gray-200 bg-white/80 px-4 py-3 shadow-sm">
+                                                            <span className="text-gray-600">Sortowanie</span>
+                                                            <select
+                                                                value={pfScoreDirection}
+                                                                onChange={(e) =>
+                                                                    setPfScoreDirection(e.target.value as "asc" | "desc")
+                                                                }
+                                                                className="rounded-xl border px-3 py-2"
+                                                            >
+                                                                <option value="desc">Najwyższy score (malejąco)</option>
+                                                                <option value="asc">Najniższy score (rosnąco)</option>
+                                                            </select>
+                                                        </label>
+                                                        <label className="flex flex-col gap-2 rounded-2xl border border-gray-200 bg-white/80 px-4 py-3 shadow-sm">
+                                                            <span className="text-gray-600">Universe / filtr</span>
+                                                            <input
+                                                                type="text"
+                                                                value={pfScoreUniverse}
+                                                                onChange={(e) => setPfScoreUniverse(e.target.value)}
+                                                                className="rounded-xl border px-3 py-2"
+                                                                placeholder="np. WIG20.WA lub lista tickerów"
+                                                            />
+                                                        </label>
+                                                        <label className="flex flex-col gap-2 rounded-2xl border border-gray-200 bg-white/80 px-4 py-3 shadow-sm">
+                                                            <span className="text-gray-600">Minimalny score</span>
+                                                            <input
+                                                                type="number"
+                                                                step={0.1}
+                                                                value={pfScoreMin}
+                                                                onChange={(e) => setPfScoreMin(e.target.value)}
+                                                                className="rounded-xl border px-3 py-2"
+                                                            />
+                                                        </label>
+                                                        <label className="flex flex-col gap-2 rounded-2xl border border-gray-200 bg-white/80 px-4 py-3 shadow-sm">
+                                                            <span className="text-gray-600">Maksymalny score</span>
+                                                            <input
+                                                                type="number"
+                                                                step={0.1}
+                                                                value={pfScoreMax}
+                                                                onChange={(e) => setPfScoreMax(e.target.value)}
+                                                                className="rounded-xl border px-3 py-2"
+                                                            />
+                                                        </label>
+                                                    </div>
+                                                    <div className="text-xs text-gray-500">
+                                                        Oddziel symbole przecinkami lub spacjami. Backend może także
+                                                        przyjmować nazwy uniwersów (np. indeksy) — sprawdź dokumentację
+                                                        po stronie API.
+                                                    </div>
+                                                </div>
+                                            </>
+                                        )}
                                     </div>
 
-                                    {/* Ustawienia symulacji */}
                                     <div className="space-y-5">
                                         <div className="grid gap-4 text-sm sm:grid-cols-2 xl:grid-cols-3">
                                             <label className="flex flex-col gap-2 rounded-2xl border border-gray-200 bg-white/80 px-4 py-3 shadow-sm">
@@ -1450,43 +1863,50 @@ export default function Page() {
                                             </div>
                                         )}
                                         <button
-                                            disabled={
-                                                pfTotal !== 100 ||
-                                                pfRows.some((r2) => !r2.symbol) ||
-                                                pfLoading ||
-                                                pfInitial <= 0 ||
-                                                pfRangeInvalid
-                                            }
-                                            onClick={async () => {
-                                                try {
-                                                    setPfErr("");
-                                                    setPfLoading(true);
-                                                    setPfRes(null);
-                                                    const symbols = pfRows.map((r2) => r2.symbol);
-                                                    const weights = pfRows.map((r2) => Number(r2.weight));
-                                                    const res = await backtestPortfolio(symbols, weights, {
-                                                        start: pfStart,
-                                                        end: pfEnd,
-                                                        rebalance: pfFreq,
-                                                        initialCapital: pfInitial,
-                                                        feePct: pfFee,
-                                                        thresholdPct: pfThreshold,
-                                                        benchmark: pfBenchmark,
-                                                    });
-                                                    setPfRes(res);
-                                                    setPfLastBenchmark(pfBenchmark);
-                                                } catch (e: unknown) {
-                                                    const message =
-                                                        e instanceof Error ? e.message : String(e);
-                                                    setPfErr(message);
-                                                } finally {
-                                                    setPfLoading(false);
-                                                }
-                                            }}
+                                            disabled={pfDisableSimulation}
+                                            onClick={runPortfolioSimulation}
                                             className="w-full md:w-auto px-4 py-2 rounded-xl bg-black text-white disabled:opacity-50"
                                         >
-                                            {pfLoading ? "Liczenie…" : "Symuluj portfel"}
+                                            {pfLoading
+                                                ? "Liczenie…"
+                                                : pfMode === "manual"
+                                                ? "Symuluj portfel"
+                                                : "Symuluj wg score"}
                                         </button>
+                                        {pfMode === "manual" ? (
+                                            <>
+                                                {pfHasInvalidWeights && (
+                                                    <div className="text-xs text-rose-600">
+                                                        Wagi muszą być liczbami większymi lub równymi zero.
+                                                    </div>
+                                                )}
+                                                {pfHasMissingSymbols && (
+                                                    <div className="text-xs text-rose-600">
+                                                        Uzupełnij symbole dla pozycji z dodatnią wagą.
+                                                    </div>
+                                                )}
+                                                {!pfHasValidPositions &&
+                                                    !pfHasMissingSymbols &&
+                                                    !pfHasInvalidWeights && (
+                                                        <div className="text-xs text-rose-600">
+                                                            Dodaj co najmniej jedną spółkę z wagą większą od zera.
+                                                        </div>
+                                                    )}
+                                            </>
+                                        ) : (
+                                            <>
+                                                {pfScoreNameInvalid && (
+                                                    <div className="text-xs text-rose-600">
+                                                        Podaj nazwę score, aby zbudować portfel.
+                                                    </div>
+                                                )}
+                                                {pfScoreLimitInvalid && (
+                                                    <div className="text-xs text-rose-600">
+                                                        Wybierz dodatnią liczbę spółek w rankingu.
+                                                    </div>
+                                                )}
+                                            </>
+                                        )}
                                         {pfErr && (
                                             <div className="text-sm text-rose-600">Błąd: {pfErr}</div>
                                         )}
@@ -1497,8 +1917,9 @@ export default function Page() {
                                 <div>
                                     {!pfRes ? (
                                         <div className="text-sm text-gray-600">
-                                            Skonfiguruj portfel (symbole + wagi), wybierz datę startu i
-                                            rebalansing, potem uruchom symulację.
+                                            {pfMode === "manual"
+                                                ? "Skonfiguruj portfel (symbole + wagi), wybierz datę startu i rebalansing, potem uruchom symulację."
+                                                : "Podaj score i parametry rankingu, ustaw zakres dat i uruchom symulację."}
                                         </div>
                                     ) : (
                                         <>
