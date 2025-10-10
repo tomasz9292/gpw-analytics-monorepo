@@ -363,6 +363,7 @@ async function backtestPortfolioByScore(options: ScorePortfolioOptions): Promise
     };
 
     const qs = new URLSearchParams({
+        mode: "score",
         score: trimmedScore,
         start,
     });
@@ -477,7 +478,7 @@ async function backtestPortfolioByScore(options: ScorePortfolioOptions): Promise
         qs.set("benchmark_enabled", "1");
     }
 
-    const url = `/api/backtest/portfolio/score`;
+    const url = `/api/backtest/portfolio`;
     const primary = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
