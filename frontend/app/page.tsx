@@ -169,17 +169,42 @@ function Watchlist({
     items,
     current,
     onPick,
+    onRemove,
 }: {
     items: string[];
-    current: string;
+    current: string | null;
     onPick: (s: string) => void;
+    onRemove: (s: string) => void;
 }) {
+    if (!items.length) {
+        return (
+            <div className="text-sm text-gray-500">
+                Dodaj spółkę powyżej, aby zbudować własną listę obserwacyjną.
+            </div>
+        );
+    }
+
     return (
         <div className="flex flex-wrap gap-2">
             {items.map((s) => (
-                <Chip key={s} active={s === current} onClick={() => onPick(s)}>
-                    {s}
-                </Chip>
+                <div key={s} className="group flex items-center gap-1">
+                    <Chip active={s === current} onClick={() => onPick(s)}>
+                        {s}
+                    </Chip>
+                    <button
+                        type="button"
+                        onClick={() => onRemove(s)}
+                        className={[
+                            "opacity-0 transition-opacity",
+                            "group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100",
+                            "text-xl leading-none text-gray-400 hover:text-rose-600 focus-visible:text-rose-600",
+                            "px-1",
+                        ].join(" ")}
+                        aria-label={`Usuń ${s} z listy`}
+                    >
+                        ×
+                    </button>
+                </div>
             ))}
         </div>
     );
@@ -226,9 +251,11 @@ function Stats({ data }: { data: Row[] }) {
 function TickerAutosuggest({
     onPick,
     placeholder = "Dodaj ticker (np. CDR.WA)",
+    inputClassName = "",
 }: {
     onPick: (symbol: string) => void;
     placeholder?: string;
+    inputClassName?: string;
 }) {
     const [q, setQ] = useState("");
     const [list, setList] = useState<SymbolRow[]>([]);
@@ -290,7 +317,12 @@ function TickerAutosuggest({
                 onFocus={() => list.length && setOpen(true)}
                 onKeyDown={onKeyDown}
                 placeholder={placeholder}
-                className="px-3 py-2 rounded-xl border bg-white w-56"
+                className={[
+                    "px-3 py-2 rounded-xl border bg-white",
+                    inputClassName || "w-56",
+                ]
+                    .filter(Boolean)
+                    .join(" ")}
             />
             {open && (
                 <div className="absolute z-20 mt-1 w-full rounded-xl border bg-white shadow-lg max-h-72 overflow-auto">
@@ -410,14 +442,8 @@ function RsiChart({ rows }: { rows: RowRSI[] }) {
  *  Strona główna
  *  ========================= */
 export default function Page() {
-    const [watch, setWatch] = useState([
-        "CDR.WA",
-        "ORLEN.WA",
-        "PKO.WA",
-        "PZU.WA",
-        "KGH.WA",
-    ]);
-    const [symbol, setSymbol] = useState(watch[0]);
+    const [watch, setWatch] = useState<string[]>([]);
+    const [symbol, setSymbol] = useState<string | null>(null);
     const [period, setPeriod] = useState<90 | 180 | 365>(365);
     const [area, setArea] = useState(true);
     const [smaOn, setSmaOn] = useState(true);
@@ -442,6 +468,13 @@ export default function Page() {
     // Quotes loader
     useEffect(() => {
         let live = true;
+        if (!symbol) {
+            setRows([]);
+            setErr("");
+            setLoading(false);
+            return;
+        }
+
         (async () => {
             try {
                 setLoading(true);
@@ -479,6 +512,21 @@ export default function Page() {
     );
     const withRsi: RowRSI[] = useMemo(() => rsi(rows, 14), [rows]);
 
+    const symbolLabel = symbol ?? "—";
+
+    const removeFromWatch = (sym: string) => {
+        setWatch((prev) => {
+            if (!prev.includes(sym)) {
+                return prev;
+            }
+            const next = prev.filter((item) => item !== sym);
+            if (symbol === sym) {
+                setSymbol(next.length ? next[0] : null);
+            }
+            return next;
+        });
+    };
+
     return (
         <div className="min-h-screen bg-gray-50 text-gray-900">
             <header className="max-w-6xl mx-auto px-4 md:px-8 py-6 flex items-center justify-between">
@@ -504,7 +552,12 @@ export default function Page() {
                         />
                     }
                 >
-                    <Watchlist items={watch} current={symbol} onPick={setSymbol} />
+                    <Watchlist
+                        items={watch}
+                        current={symbol}
+                        onPick={(sym) => setSymbol(sym)}
+                        onRemove={removeFromWatch}
+                    />
                 </Card>
 
                 <div className="grid md:grid-cols-3 gap-6">
@@ -512,7 +565,7 @@ export default function Page() {
                     <div className="md:col-span-2 space-y-6">
                         {/* Wykres cenowy */}
                         <Card
-                            title={`${symbol} – wykres cenowy`}
+                            title={symbol ? `${symbol} – wykres cenowy` : "Wykres cenowy"}
                             right={
                                 <div className="flex gap-2">
                                     <Chip active={period === 90} onClick={() => setPeriod(90)}>
@@ -533,7 +586,11 @@ export default function Page() {
                                 </div>
                             }
                         >
-                            {loading ? (
+                            {!symbol ? (
+                                <div className="p-6 text-sm text-gray-500">
+                                    Dodaj spółkę do listy obserwacyjnej, aby zobaczyć wykres.
+                                </div>
+                            ) : loading ? (
                                 <div className="p-6 text-sm text-gray-500">
                                     Ładowanie danych z API…
                                 </div>
@@ -548,148 +605,173 @@ export default function Page() {
                                     Brak danych do wyświetlenia
                                 </div>
                             )}
-                            {err && (
+                            {err && symbol && (
                                 <div className="mt-3 text-sm text-rose-600">Błąd: {err}</div>
                             )}
                         </Card>
 
                         {/* RSI */}
                         <Card title="RSI (14)">
-                            <RsiChart rows={withRsi} />
+                            {!symbol ? (
+                                <div className="p-6 text-sm text-gray-500">
+                                    Dodaj spółkę, aby zobaczyć wskaźnik RSI.
+                                </div>
+                            ) : (
+                                <RsiChart rows={withRsi} />
+                            )}
                         </Card>
 
                         {/* Portfel */}
                         <Card title="Portfel – symulacja & rebalansing">
-                            <div className="grid md:grid-cols-3 gap-6">
-                                {/* Konfiguracja portfela */}
-                                <div className="space-y-3">
-                                    <div className="text-sm text-gray-600">Skład portfela</div>
-                                    {pfRows.map((r, i) => (
-                                        <div key={i} className="flex items-center gap-2">
-                                            <TickerAutosuggest
-                                                onPick={(sym) => {
-                                                    setPfRows((rows) =>
-                                                        rows.map((x, idx) =>
-                                                            idx === i ? { ...x, symbol: sym } : x
-                                                        )
-                                                    );
-                                                }}
-                                                placeholder={r.symbol || "Symbol"}
-                                            />
-                                            <input
-                                                type="number"
-                                                min={0}
-                                                max={100}
-                                                step={1}
-                                                value={r.weight}
-                                                onChange={(e) =>
-                                                    setPfRows((rows) =>
-                                                        rows.map((x, idx) =>
-                                                            idx === i
-                                                                ? { ...x, weight: Number(e.target.value) }
-                                                                : x
-                                                        )
-                                                    )
-                                                }
-                                                className="w-20 px-3 py-2 rounded-xl border"
-                                            />
-                                            <span className="text-sm text-gray-500">%</span>
-                                            <button
-                                                onClick={() =>
-                                                    setPfRows((rows) => rows.filter((_, idx) => idx !== i))
-                                                }
-                                                className="px-2 py-1 text-sm rounded-lg border"
-                                                title="Usuń"
+                            <div className="space-y-6">
+                                <div className="grid gap-6 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+                                    {/* Skład portfela */}
+                                    <div className="space-y-3">
+                                        <div className="text-sm text-gray-600">Skład portfela</div>
+                                        {pfRows.map((r, i) => (
+                                            <div
+                                                key={i}
+                                                className="flex flex-wrap items-center gap-3 rounded-xl border border-gray-200 bg-gray-50/60 px-3 py-3"
                                             >
-                                                ✕
-                                            </button>
-                                        </div>
-                                    ))}
-                                    <button
-                                        onClick={() =>
-                                            setPfRows((rows) => [...rows, { symbol: "", weight: 0 }])
-                                        }
-                                        className="px-3 py-2 rounded-xl border"
-                                    >
-                                        Dodaj pozycję
-                                    </button>
-
-                                    <div
-                                        className={`text-sm mt-1 ${pfTotal === 100 ? "text-emerald-600" : "text-rose-600"
-                                            }`}
-                                    >
-                                        Suma wag: <b>{pfTotal}%</b>{" "}
-                                        {pfTotal === 100 ? "(OK)" : "(docelowo 100%)"}
-                                    </div>
-
-                                    <div className="grid grid-cols-2 gap-3 mt-3 text-sm">
-                                        <label className="flex flex-col gap-1">
-                                            <span className="text-gray-600">Data startu</span>
-                                            <input
-                                                type="date"
-                                                value={pfStart}
-                                                onChange={(e) => setPfStart(e.target.value)}
-                                                className="px-3 py-2 rounded-xl border"
-                                            />
-                                        </label>
-                                        <label className="flex flex-col gap-1">
-                                            <span className="text-gray-600">Rebalansing</span>
-                                            <select
-                                                value={pfFreq}
-                                                onChange={(e) =>
-                                                    setPfFreq(e.target.value as Rebalance)
-                                                }
-                                                className="px-3 py-2 rounded-xl border"
-                                            >
-                                                <option value="none">Brak</option>
-                                                <option value="monthly">Miesięczny</option>
-                                                <option value="quarterly">Kwartalny</option>
-                                                <option value="yearly">Roczny</option>
-                                            </select>
-                                        </label>
-                                    </div>
-
-                                    <button
-                                        disabled={
-                                            pfTotal !== 100 || pfRows.some((r2) => !r2.symbol) || pfLoading
-                                        }
-                                        onClick={async () => {
-                                            try {
-                                                setPfErr("");
-                                                setPfLoading(true);
-                                                setPfRes(null);
-                                                const symbols = pfRows.map((r2) => r2.symbol);
-                                                const weights = pfRows.map((r2) => Number(r2.weight));
-                                                const res = await backtestPortfolio(
-                                                    symbols,
-                                                    weights,
-                                                    pfStart,
-                                                    pfFreq
-                                                );
-                                                setPfRes(res);
-                                            } catch (e: unknown) {
-                                                const message =
-                                                    e instanceof Error ? e.message : String(e);
-                                                setPfErr(message);
-                                            } finally {
-                                                setPfLoading(false);
+                                                <div className="flex-1 min-w-[12rem]">
+                                                    <TickerAutosuggest
+                                                        onPick={(sym) => {
+                                                            setPfRows((rows) =>
+                                                                rows.map((x, idx) =>
+                                                                    idx === i
+                                                                        ? { ...x, symbol: sym }
+                                                                        : x
+                                                                )
+                                                            );
+                                                        }}
+                                                        placeholder={r.symbol || "Symbol"}
+                                                        inputClassName="w-full"
+                                                    />
+                                                </div>
+                                                <div className="flex flex-wrap items-center gap-2 md:flex-nowrap">
+                                                    <input
+                                                        type="number"
+                                                        min={0}
+                                                        max={100}
+                                                        step={1}
+                                                        value={r.weight}
+                                                        onChange={(e) =>
+                                                            setPfRows((rows) =>
+                                                                rows.map((x, idx) =>
+                                                                    idx === i
+                                                                        ? {
+                                                                              ...x,
+                                                                              weight: Number(e.target.value),
+                                                                          }
+                                                                        : x
+                                                                )
+                                                            )
+                                                        }
+                                                        className="w-24 md:w-20 px-3 py-2 rounded-xl border"
+                                                    />
+                                                    <span className="text-sm text-gray-500">%</span>
+                                                    <button
+                                                        onClick={() =>
+                                                            setPfRows((rows) =>
+                                                                rows.filter((_, idx) => idx !== i)
+                                                            )
+                                                        }
+                                                        className="px-2 py-1 text-sm rounded-lg border"
+                                                        title="Usuń"
+                                                    >
+                                                        ✕
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                        <button
+                                            onClick={() =>
+                                                setPfRows((rows) => [...rows, { symbol: "", weight: 0 }])
                                             }
-                                        }}
-                                        className="mt-2 px-4 py-2 rounded-xl bg-black text-white disabled:opacity-50"
-                                    >
-                                        {pfLoading ? "Liczenie…" : "Symuluj portfel"}
-                                    </button>
-                                    {pfErr && (
-                                        <div className="text-sm text-rose-600 mt-2">Błąd: {pfErr}</div>
-                                    )}
+                                            className="w-full sm:w-auto px-3 py-2 rounded-xl border"
+                                        >
+                                            Dodaj pozycję
+                                        </button>
+                                        <div
+                                            className={`text-sm ${
+                                                pfTotal === 100 ? "text-emerald-600" : "text-rose-600"
+                                            }`}
+                                        >
+                                            Suma wag: <b>{pfTotal}%</b>{" "}
+                                            {pfTotal === 100 ? "(OK)" : "(docelowo 100%)"}
+                                        </div>
+                                    </div>
+
+                                    {/* Ustawienia symulacji */}
+                                    <div className="space-y-4">
+                                        <div className="grid gap-3 text-sm sm:grid-cols-2">
+                                            <label className="flex flex-col gap-1">
+                                                <span className="text-gray-600">Data startu</span>
+                                                <input
+                                                    type="date"
+                                                    value={pfStart}
+                                                    onChange={(e) => setPfStart(e.target.value)}
+                                                    className="px-3 py-2 rounded-xl border"
+                                                />
+                                            </label>
+                                            <label className="flex flex-col gap-1">
+                                                <span className="text-gray-600">Rebalansing</span>
+                                                <select
+                                                    value={pfFreq}
+                                                    onChange={(e) =>
+                                                        setPfFreq(e.target.value as Rebalance)
+                                                    }
+                                                    className="px-3 py-2 rounded-xl border"
+                                                >
+                                                    <option value="none">Brak</option>
+                                                    <option value="monthly">Miesięczny</option>
+                                                    <option value="quarterly">Kwartalny</option>
+                                                    <option value="yearly">Roczny</option>
+                                                </select>
+                                            </label>
+                                        </div>
+                                        <button
+                                            disabled={
+                                                pfTotal !== 100 || pfRows.some((r2) => !r2.symbol) || pfLoading
+                                            }
+                                            onClick={async () => {
+                                                try {
+                                                    setPfErr("");
+                                                    setPfLoading(true);
+                                                    setPfRes(null);
+                                                    const symbols = pfRows.map((r2) => r2.symbol);
+                                                    const weights = pfRows.map((r2) => Number(r2.weight));
+                                                    const res = await backtestPortfolio(
+                                                        symbols,
+                                                        weights,
+                                                        pfStart,
+                                                        pfFreq
+                                                    );
+                                                    setPfRes(res);
+                                                } catch (e: unknown) {
+                                                    const message =
+                                                        e instanceof Error ? e.message : String(e);
+                                                    setPfErr(message);
+                                                } finally {
+                                                    setPfLoading(false);
+                                                }
+                                            }}
+                                            className="w-full md:w-auto px-4 py-2 rounded-xl bg-black text-white disabled:opacity-50"
+                                        >
+                                            {pfLoading ? "Liczenie…" : "Symuluj portfel"}
+                                        </button>
+                                        {pfErr && (
+                                            <div className="text-sm text-rose-600">Błąd: {pfErr}</div>
+                                        )}
+                                    </div>
                                 </div>
 
                                 {/* Wynik + wykres */}
-                                <div className="md:col-span-2">
+                                <div>
                                     {!pfRes ? (
-                                        <div className="text-sm text-gray-600 mb-2">
-                                            Skonfiguruj portfel (symbole + wagi), wybierz datę startu
-                                            i rebalansing, potem uruchom symulację.
+                                        <div className="text-sm text-gray-600">
+                                            Skonfiguruj portfel (symbole + wagi), wybierz datę startu i
+                                            rebalansing, potem uruchom symulację.
                                         </div>
                                     ) : (
                                         <>
@@ -752,21 +834,24 @@ export default function Page() {
 
                     {/* Prawa kolumna */}
                     <div className="space-y-6">
-                        <Card title={`Fundamenty – ${symbol}`}>
+                        <Card title={`Fundamenty – ${symbolLabel}`}>
                             <div className="text-sm text-gray-500">
-                                Dane przykładowe — podłączymy realne API fundamentów w kolejnym
-                                kroku.
+                                {symbol
+                                    ? "Dane przykładowe — podłączymy realne API fundamentów w kolejnym kroku."
+                                    : "Dodaj spółkę, aby zobaczyć sekcję fundamentów."}
                             </div>
-                            <div className="mt-4 grid grid-cols-2 gap-y-2 text-sm">
-                                <div className="text-gray-500">Kapitalizacja</div>
-                                <div>$—</div>
-                                <div className="text-gray-500">P/E (TTM)</div>
-                                <div>—</div>
-                                <div className="text-gray-500">Przychody</div>
-                                <div>—</div>
-                                <div className="text-gray-500">Marża netto</div>
-                                <div>—</div>
-                            </div>
+                            {symbol && (
+                                <div className="mt-4 grid grid-cols-2 gap-y-2 text-sm">
+                                    <div className="text-gray-500">Kapitalizacja</div>
+                                    <div>$—</div>
+                                    <div className="text-gray-500">P/E (TTM)</div>
+                                    <div>—</div>
+                                    <div className="text-gray-500">Przychody</div>
+                                    <div>—</div>
+                                    <div className="text-gray-500">Marża netto</div>
+                                    <div>—</div>
+                                </div>
+                            )}
                         </Card>
 
                         <Card title="Skaner (demo)" right={<Chip active>Beta</Chip>}>
