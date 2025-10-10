@@ -169,17 +169,42 @@ function Watchlist({
     items,
     current,
     onPick,
+    onRemove,
 }: {
     items: string[];
-    current: string;
+    current: string | null;
     onPick: (s: string) => void;
+    onRemove: (s: string) => void;
 }) {
+    if (!items.length) {
+        return (
+            <div className="text-sm text-gray-500">
+                Dodaj spółkę powyżej, aby zbudować własną listę obserwacyjną.
+            </div>
+        );
+    }
+
     return (
         <div className="flex flex-wrap gap-2">
             {items.map((s) => (
-                <Chip key={s} active={s === current} onClick={() => onPick(s)}>
-                    {s}
-                </Chip>
+                <div key={s} className="group flex items-center gap-1">
+                    <Chip active={s === current} onClick={() => onPick(s)}>
+                        {s}
+                    </Chip>
+                    <button
+                        type="button"
+                        onClick={() => onRemove(s)}
+                        className={[
+                            "opacity-0 transition-opacity",
+                            "group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100",
+                            "text-xl leading-none text-gray-400 hover:text-rose-600 focus-visible:text-rose-600",
+                            "px-1",
+                        ].join(" ")}
+                        aria-label={`Usuń ${s} z listy`}
+                    >
+                        ×
+                    </button>
+                </div>
             ))}
         </div>
     );
@@ -410,14 +435,8 @@ function RsiChart({ rows }: { rows: RowRSI[] }) {
  *  Strona główna
  *  ========================= */
 export default function Page() {
-    const [watch, setWatch] = useState([
-        "CDR.WA",
-        "ORLEN.WA",
-        "PKO.WA",
-        "PZU.WA",
-        "KGH.WA",
-    ]);
-    const [symbol, setSymbol] = useState(watch[0]);
+    const [watch, setWatch] = useState<string[]>([]);
+    const [symbol, setSymbol] = useState<string | null>(null);
     const [period, setPeriod] = useState<90 | 180 | 365>(365);
     const [area, setArea] = useState(true);
     const [smaOn, setSmaOn] = useState(true);
@@ -442,6 +461,13 @@ export default function Page() {
     // Quotes loader
     useEffect(() => {
         let live = true;
+        if (!symbol) {
+            setRows([]);
+            setErr("");
+            setLoading(false);
+            return;
+        }
+
         (async () => {
             try {
                 setLoading(true);
@@ -479,6 +505,21 @@ export default function Page() {
     );
     const withRsi: RowRSI[] = useMemo(() => rsi(rows, 14), [rows]);
 
+    const symbolLabel = symbol ?? "—";
+
+    const removeFromWatch = (sym: string) => {
+        setWatch((prev) => {
+            if (!prev.includes(sym)) {
+                return prev;
+            }
+            const next = prev.filter((item) => item !== sym);
+            if (symbol === sym) {
+                setSymbol(next.length ? next[0] : null);
+            }
+            return next;
+        });
+    };
+
     return (
         <div className="min-h-screen bg-gray-50 text-gray-900">
             <header className="max-w-6xl mx-auto px-4 md:px-8 py-6 flex items-center justify-between">
@@ -504,7 +545,12 @@ export default function Page() {
                         />
                     }
                 >
-                    <Watchlist items={watch} current={symbol} onPick={setSymbol} />
+                    <Watchlist
+                        items={watch}
+                        current={symbol}
+                        onPick={(sym) => setSymbol(sym)}
+                        onRemove={removeFromWatch}
+                    />
                 </Card>
 
                 <div className="grid md:grid-cols-3 gap-6">
@@ -512,7 +558,7 @@ export default function Page() {
                     <div className="md:col-span-2 space-y-6">
                         {/* Wykres cenowy */}
                         <Card
-                            title={`${symbol} – wykres cenowy`}
+                            title={symbol ? `${symbol} – wykres cenowy` : "Wykres cenowy"}
                             right={
                                 <div className="flex gap-2">
                                     <Chip active={period === 90} onClick={() => setPeriod(90)}>
@@ -533,7 +579,11 @@ export default function Page() {
                                 </div>
                             }
                         >
-                            {loading ? (
+                            {!symbol ? (
+                                <div className="p-6 text-sm text-gray-500">
+                                    Dodaj spółkę do listy obserwacyjnej, aby zobaczyć wykres.
+                                </div>
+                            ) : loading ? (
                                 <div className="p-6 text-sm text-gray-500">
                                     Ładowanie danych z API…
                                 </div>
@@ -548,14 +598,20 @@ export default function Page() {
                                     Brak danych do wyświetlenia
                                 </div>
                             )}
-                            {err && (
+                            {err && symbol && (
                                 <div className="mt-3 text-sm text-rose-600">Błąd: {err}</div>
                             )}
                         </Card>
 
                         {/* RSI */}
                         <Card title="RSI (14)">
-                            <RsiChart rows={withRsi} />
+                            {!symbol ? (
+                                <div className="p-6 text-sm text-gray-500">
+                                    Dodaj spółkę, aby zobaczyć wskaźnik RSI.
+                                </div>
+                            ) : (
+                                <RsiChart rows={withRsi} />
+                            )}
                         </Card>
 
                         {/* Portfel */}
@@ -752,21 +808,24 @@ export default function Page() {
 
                     {/* Prawa kolumna */}
                     <div className="space-y-6">
-                        <Card title={`Fundamenty – ${symbol}`}>
+                        <Card title={`Fundamenty – ${symbolLabel}`}>
                             <div className="text-sm text-gray-500">
-                                Dane przykładowe — podłączymy realne API fundamentów w kolejnym
-                                kroku.
+                                {symbol
+                                    ? "Dane przykładowe — podłączymy realne API fundamentów w kolejnym kroku."
+                                    : "Dodaj spółkę, aby zobaczyć sekcję fundamentów."}
                             </div>
-                            <div className="mt-4 grid grid-cols-2 gap-y-2 text-sm">
-                                <div className="text-gray-500">Kapitalizacja</div>
-                                <div>$—</div>
-                                <div className="text-gray-500">P/E (TTM)</div>
-                                <div>—</div>
-                                <div className="text-gray-500">Przychody</div>
-                                <div>—</div>
-                                <div className="text-gray-500">Marża netto</div>
-                                <div>—</div>
-                            </div>
+                            {symbol && (
+                                <div className="mt-4 grid grid-cols-2 gap-y-2 text-sm">
+                                    <div className="text-gray-500">Kapitalizacja</div>
+                                    <div>$—</div>
+                                    <div className="text-gray-500">P/E (TTM)</div>
+                                    <div>—</div>
+                                    <div className="text-gray-500">Przychody</div>
+                                    <div>—</div>
+                                    <div className="text-gray-500">Marża netto</div>
+                                    <div>—</div>
+                                </div>
+                            )}
                         </Card>
 
                         <Card title="Skaner (demo)" right={<Chip active>Beta</Chip>}>
