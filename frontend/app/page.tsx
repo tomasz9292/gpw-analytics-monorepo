@@ -182,7 +182,19 @@ async function backtestPortfolio(
 
     const weightsPercent = normalizedPercent;
 
-    const payload: Record<string, unknown> = {
+    const modernPositions = prepared.map((row, idx) => ({
+        symbol: row.symbol as string,
+        weight: Number((weightsRatio[idx] ?? 0).toFixed(6)),
+    }));
+
+    const modernPayload: Record<string, unknown> = {
+        start_date: start,
+        symbols: modernPositions.map((position) => position.symbol),
+        weights: modernPositions.map((position) => position.weight),
+        positions: modernPositions,
+    };
+
+    const legacyPayload: Record<string, unknown> = {
         start_date: start,
         positions,
         weights: weightsRatio,
@@ -193,26 +205,29 @@ async function backtestPortfolio(
     };
 
     if (rawWeights.some((weight) => weight)) {
-        payload.weights_input = rawWeights;
-        payload.weights_input_pct = rawWeights;
-        payload.weights_input_percentage = rawWeights;
-        payload.weights_original = rawWeights;
+        legacyPayload.weights_input = rawWeights;
+        legacyPayload.weights_input_pct = rawWeights;
+        legacyPayload.weights_input_percentage = rawWeights;
+        legacyPayload.weights_original = rawWeights;
     }
 
     if (rebalance && rebalance !== "none") {
-        payload.rebalance = rebalance;
-        payload.rebalance_frequency = rebalance;
+        modernPayload.rebalance = rebalance;
+        legacyPayload.rebalance = rebalance;
+        legacyPayload.rebalance_frequency = rebalance;
     }
 
     if (end) {
-        payload.end_date = end;
-        payload.end = end;
+        modernPayload.end_date = end;
+        legacyPayload.end_date = end;
+        legacyPayload.end = end;
     }
 
     if (typeof initialCapital === "number" && !Number.isNaN(initialCapital)) {
-        payload.initial_value = initialCapital;
-        payload.initial_capital = initialCapital;
-        payload.initial_cash = initialCapital;
+        modernPayload.initial_value = initialCapital;
+        legacyPayload.initial_value = initialCapital;
+        legacyPayload.initial_capital = initialCapital;
+        legacyPayload.initial_cash = initialCapital;
     }
 
     const rebalanceSettings: Record<string, unknown> = {};
@@ -221,39 +236,57 @@ async function backtestPortfolio(
     }
     if (typeof thresholdPct === "number" && thresholdPct > 0) {
         rebalanceSettings.threshold = thresholdPct;
-        payload.rebalance_threshold = thresholdPct;
-        payload.threshold = thresholdPct;
-        payload.rebalance_threshold_ratio = thresholdPct / 100;
+        modernPayload.threshold = thresholdPct;
+        legacyPayload.rebalance_threshold = thresholdPct;
+        legacyPayload.threshold = thresholdPct;
+        legacyPayload.rebalance_threshold_ratio = thresholdPct / 100;
     }
     if (Object.keys(rebalanceSettings).length) {
-        payload.rebalance_settings = rebalanceSettings;
+        legacyPayload.rebalance_settings = rebalanceSettings;
     }
 
     if (typeof feePct === "number" && feePct > 0) {
-        payload.transaction_cost = feePct;
-        payload.fee = feePct;
-        payload.fees = { transaction: feePct, trading: feePct };
-        payload.commission = feePct;
-        payload.transaction_cost_ratio = feePct / 100;
-        payload.fee_ratio = feePct / 100;
+        modernPayload.transaction_cost = feePct;
+        legacyPayload.transaction_cost = feePct;
+        legacyPayload.fee = feePct;
+        legacyPayload.fees = { transaction: feePct, trading: feePct };
+        legacyPayload.commission = feePct;
+        legacyPayload.transaction_cost_ratio = feePct / 100;
+        legacyPayload.fee_ratio = feePct / 100;
     }
 
     if (benchmark) {
-        payload.benchmark = benchmark;
-        payload.benchmark_symbol = benchmark;
-        payload.include_benchmark = true;
-        payload.benchmark_enabled = true;
+        modernPayload.benchmark = benchmark;
+        legacyPayload.benchmark = benchmark;
+        legacyPayload.benchmark_symbol = benchmark;
+        legacyPayload.include_benchmark = true;
+        legacyPayload.benchmark_enabled = true;
     }
 
     const url = `/api/backtest/portfolio`;
-    const primary = await fetch(url, {
+    const modernResponse = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(
+            Object.fromEntries(
+                Object.entries(modernPayload).filter(([, value]) => value !== undefined)
+            )
+        ),
     });
 
-    if (primary.ok) {
-        const json = await primary.json();
+    if (modernResponse.ok) {
+        const json = await modernResponse.json();
+        return normalizePortfolioResponse(json);
+    }
+
+    const legacyResponse = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(legacyPayload),
+    });
+
+    if (legacyResponse.ok) {
+        const json = await legacyResponse.json();
         return normalizePortfolioResponse(json);
     }
 
@@ -262,6 +295,8 @@ async function backtestPortfolio(
         weights: weightsRatio.map((weight) => weight.toString()).join(","),
         start,
     });
+
+    qs.set("start_date", start);
 
     if (weightsRatio.some((weight) => weight)) {
         qs.set("weights_ratio", weightsRatio.map((weight) => weight.toString()).join(","));
@@ -284,9 +319,13 @@ async function backtestPortfolio(
 
     if (rebalance && rebalance !== "none") {
         qs.set("rebalance", rebalance);
+        qs.set("rebalance_frequency", rebalance);
     }
 
-    if (end) qs.set("end", end);
+    if (end) {
+        qs.set("end", end);
+        qs.set("end_date", end);
+    }
     if (typeof initialCapital === "number" && !Number.isNaN(initialCapital)) {
         qs.set("initial", String(initialCapital));
         qs.set("initial_value", String(initialCapital));
@@ -295,19 +334,27 @@ async function backtestPortfolio(
         qs.set("fee", String(feePct));
         qs.set("transaction_cost", String(feePct));
         qs.set("fee_ratio", String(feePct / 100));
+        qs.set("transaction_cost_ratio", String(feePct / 100));
     }
     if (typeof thresholdPct === "number" && thresholdPct > 0) {
         qs.set("threshold", String(thresholdPct));
         qs.set("threshold_ratio", String(thresholdPct / 100));
+        qs.set("rebalance_threshold", String(thresholdPct));
     }
     if (benchmark) {
         qs.set("benchmark", benchmark);
         qs.set("benchmark_enabled", "1");
     }
 
+    if (modernPositions.length) {
+        qs.set("positions", JSON.stringify(modernPositions));
+    }
+
     const fallback = await fetch(`${url}?${qs.toString()}`);
     if (!fallback.ok) {
-        throw new Error(`API /backtest/portfolio ${primary.status} / ${fallback.status}`);
+        throw new Error(
+            `API /backtest/portfolio ${modernResponse.status} / ${legacyResponse.status} / ${fallback.status}`
+        );
     }
     const fallbackJson = await fallback.json();
     return normalizePortfolioResponse(fallbackJson);
