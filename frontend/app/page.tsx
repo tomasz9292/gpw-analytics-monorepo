@@ -125,7 +125,7 @@ async function backtestPortfolio(
     const prepared = symbols
         .map((symbol, idx) => ({
             symbol: symbol?.trim(),
-            weight: weightsPct[idx],
+            weight: Number(weightsPct[idx]),
         }))
         .filter((row) => row.symbol);
 
@@ -133,17 +133,39 @@ async function backtestPortfolio(
         throw new Error("Dodaj co najmniej jedną spółkę z wagą, aby uruchomić symulację.");
     }
 
-    const totalWeight = prepared.reduce((sum, row) => sum + (Number(row.weight) || 0), 0);
+    const rawWeights = prepared.map((row) => (Number.isFinite(row.weight) ? (row.weight as number) : 0));
+    const totalWeight = rawWeights.reduce((sum, weight) => sum + (Number(weight) || 0), 0);
     const safeTotal = totalWeight === 0 ? 1 : totalWeight;
 
-    const positions = prepared.map((row) => ({
-        symbol: row.symbol as string,
-        weight: (Number(row.weight) || 0) / safeTotal,
-    }));
+    const positions = prepared.map((row, idx) => {
+        const rawWeight = rawWeights[idx] ?? 0;
+        const weightRatio = (Number(rawWeight) || 0) / safeTotal;
+        const weightPct = weightRatio * 100;
+
+        return {
+            symbol: row.symbol as string,
+            weight: weightRatio,
+            weight_ratio: weightRatio,
+            target_weight: weightRatio,
+            allocation: weightRatio,
+            share: weightRatio,
+            weight_pct: weightPct,
+            weight_percentage: weightPct,
+            weight_percent: weightPct,
+            percentage: weightPct,
+        };
+    });
+
+    const weightsRatio = positions.map((p) => p.weight as number);
+    const weightsPercent = rawWeights.map((weight) => (Number(weight) || 0));
 
     const payload: Record<string, unknown> = {
         start_date: start,
         positions,
+        weights: weightsRatio,
+        weights_ratio: weightsRatio,
+        weights_pct: weightsPercent,
+        weights_percentage: weightsPercent,
     };
 
     if (rebalance && rebalance !== "none") {
@@ -206,9 +228,25 @@ async function backtestPortfolio(
 
     const qs = new URLSearchParams({
         symbols: positions.map((p) => p.symbol).join(","),
-        weights: positions.map((p) => p.weight.toString()).join(","),
+        weights: weightsRatio.map((weight) => weight.toString()).join(","),
         start,
     });
+
+    if (weightsRatio.some((weight) => weight)) {
+        qs.set("weights_ratio", weightsRatio.map((weight) => weight.toString()).join(","));
+    }
+
+    if (weightsPercent.some((weight) => weight)) {
+        qs.set("weights_pct", weightsPercent.join(","));
+        qs.set(
+            "weights_percentage",
+            weightsPercent.map((weight) => weight.toString()).join(",")
+        );
+        qs.set(
+            "weights_percent",
+            weightsPercent.map((weight) => weight.toString()).join(",")
+        );
+    }
 
     if (rebalance && rebalance !== "none") {
         qs.set("rebalance", rebalance);
