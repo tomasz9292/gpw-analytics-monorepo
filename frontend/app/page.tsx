@@ -19,6 +19,33 @@ import {
  *  ========================= */
 const API = "/api";
 
+const removeUndefined = (obj: Record<string, unknown>) =>
+    Object.fromEntries(
+        Object.entries(obj).filter(([, value]) => value !== undefined && value !== null)
+    );
+
+const createRuleId = () =>
+    `rule-${Math.random().toString(36).slice(2, 8)}-${Date.now().toString(36)}`;
+
+const SCORE_METRIC_OPTIONS: { value: string; label: string; defaultDirection: "asc" | "desc" }[] = [
+    { value: "roic", label: "ROIC", defaultDirection: "desc" },
+    { value: "gross_margin", label: "Marża brutto", defaultDirection: "desc" },
+    { value: "net_margin", label: "Marża netto", defaultDirection: "desc" },
+    { value: "pe_ratio_ttm", label: "P/E (TTM)", defaultDirection: "asc" },
+    { value: "debt_to_equity", label: "Dług/kapitał", defaultDirection: "asc" },
+    { value: "revenue_growth_3y", label: "Wzrost przychodów 3Y", defaultDirection: "desc" },
+    { value: "ebitda_margin", label: "Marża EBITDA", defaultDirection: "desc" },
+    { value: "free_cash_flow_yield", label: "FCF Yield", defaultDirection: "desc" },
+    { value: "dividend_yield", label: "DY", defaultDirection: "desc" },
+];
+
+const getDefaultScoreRules = (): ScoreBuilderRule[] => [
+    { id: createRuleId(), metric: "roic", weight: 35, direction: "desc", transform: "raw" },
+    { id: createRuleId(), metric: "net_margin", weight: 25, direction: "desc", transform: "raw" },
+    { id: createRuleId(), metric: "debt_to_equity", weight: 20, direction: "asc", transform: "raw" },
+    { id: createRuleId(), metric: "revenue_growth_3y", weight: 20, direction: "desc", transform: "raw" },
+];
+
 /** =========================
  *  Typy danych
  *  ========================= */
@@ -56,6 +83,59 @@ type ScorePortfolioOptions = BacktestOptions & {
     direction?: "asc" | "desc" | null;
     minScore?: number | null;
     maxScore?: number | null;
+};
+
+type ScoreBuilderRule = {
+    id: string;
+    metric: string;
+    label?: string | null;
+    weight: number;
+    direction: "asc" | "desc";
+    min?: string;
+    max?: string;
+    transform?: "raw" | "zscore" | "percentile" | "";
+};
+
+type ScorePreviewRulePayload = {
+    metric: string;
+    weight?: number;
+    direction?: "asc" | "desc";
+    min?: number | null;
+    max?: number | null;
+    transform?: string | null;
+};
+
+type ScorePreviewRequest = {
+    name?: string;
+    description?: string;
+    rules: ScorePreviewRulePayload[];
+    limit?: number;
+    universe?: string | string[] | null;
+    sort?: "asc" | "desc" | null;
+    filters?: Record<string, number | string | boolean | null | undefined>;
+    asOf?: string | null;
+};
+
+type ScorePreviewRow = {
+    symbol: string;
+    name?: string;
+    score?: number;
+    weight?: number;
+    rank?: number;
+    metrics?: Record<string, number>;
+};
+
+type ScorePreviewMeta = {
+    asOf?: string;
+    totalUniverse?: number;
+    runId?: string;
+    requestId?: string;
+    name?: string;
+};
+
+type ScorePreviewResult = {
+    rows: ScorePreviewRow[];
+    meta: ScorePreviewMeta;
 };
 
 type PortfolioPoint = { date: string; value: number };
@@ -801,6 +881,371 @@ function normalizePortfolioResponse(raw: unknown): PortfolioResp {
     };
 }
 
+const normalizeScoreRankingResponse = (raw: unknown): ScorePreviewResult => {
+    const rows: ScorePreviewRow[] = [];
+    const collections: unknown[] = [];
+
+    if (Array.isArray(raw)) {
+        collections.push(raw);
+    }
+
+    const rankingSources = [
+        getProp(raw, "items"),
+        getProp(raw, "results"),
+        getProp(raw, "ranking"),
+        getProp(raw, "rows"),
+        getProp(raw, "data"),
+        getProp(raw, "list"),
+        getProp(raw, "scores"),
+    ];
+
+    for (const candidate of rankingSources) {
+        if (Array.isArray(candidate)) {
+            collections.push(candidate);
+        }
+    }
+
+    let ranking: unknown[] = [];
+    for (const candidate of collections) {
+        if (Array.isArray(candidate) && candidate.length > 0) {
+            ranking = candidate;
+            break;
+        }
+    }
+
+    ranking.forEach((entry, index) => {
+        if (!entry) return;
+
+        if (Array.isArray(entry)) {
+            let symbol = "";
+            let name: string | undefined;
+            const numbers: number[] = [];
+            const metricBuckets: Record<string, number>[] = [];
+
+            entry.forEach((value) => {
+                if (typeof value === "string") {
+                    if (!symbol) symbol = value;
+                    else if (!name) name = value;
+                } else if (typeof value === "number") {
+                    numbers.push(value);
+                } else if (value && typeof value === "object" && !Array.isArray(value)) {
+                    const bucket: Record<string, number> = {};
+                    Object.entries(value as Record<string, unknown>).forEach(([key, v]) => {
+                        const numeric = parseNumber(v);
+                        if (numeric !== undefined) {
+                            bucket[key] = numeric;
+                        }
+                    });
+                    if (Object.keys(bucket).length) {
+                        metricBuckets.push(bucket);
+                    }
+                }
+            });
+
+            if (!symbol) return;
+
+            const row: ScorePreviewRow = { symbol };
+            if (name) row.name = name;
+            if (numbers.length > 0) row.score = numbers[0];
+            if (numbers.length > 1) row.weight = numbers[1];
+            if (numbers.length > 2 && Number.isInteger(numbers[2])) {
+                row.rank = numbers[2];
+            }
+            if (!row.rank) {
+                row.rank = index + 1;
+            }
+            if (metricBuckets.length) {
+                row.metrics = Object.assign({}, ...metricBuckets);
+            }
+            rows.push(row);
+            return;
+        }
+
+        if (typeof entry === "object") {
+            const record = entry as Record<string, unknown>;
+            const symbolRaw =
+                record.symbol ??
+                record.ticker ??
+                record.code ??
+                record.asset ??
+                record.instrument ??
+                record.company_symbol;
+            if (!symbolRaw) return;
+
+            const row: ScorePreviewRow = { symbol: String(symbolRaw) };
+            const nameCandidate =
+                record.name ??
+                record.company ??
+                record.title ??
+                record.label ??
+                record.security;
+            if (nameCandidate) row.name = String(nameCandidate);
+
+            const score = pickNumber(
+                [record, getProp(record, "score")],
+                ["score", "value", "total", "points", "final_score", "composite", "ranking"]
+            );
+            if (score !== undefined) row.score = score;
+
+            const weight = pickNumber(
+                [record],
+                [
+                    "weight",
+                    "allocation",
+                    "target_weight",
+                    "weight_pct",
+                    "weight_percentage",
+                    "weight_percent",
+                    "position_weight",
+                ]
+            );
+            if (weight !== undefined) row.weight = weight;
+
+            const rank = pickNumber(
+                [record],
+                ["rank", "position", "order", "index", "place", "ranking_position"]
+            );
+            if (rank !== undefined) row.rank = rank;
+
+            const metricSources = [
+                getProp(record, "metrics"),
+                getProp(record, "components"),
+                getProp(record, "values"),
+                getProp(record, "details"),
+                getProp(record, "factors"),
+            ];
+
+            const metrics: Record<string, number> = {};
+            metricSources.forEach((source) => {
+                if (!source || typeof source !== "object" || Array.isArray(source)) return;
+                Object.entries(source as Record<string, unknown>).forEach(([key, value]) => {
+                    const numeric = parseNumber(value);
+                    if (numeric !== undefined) {
+                        metrics[key] = numeric;
+                    }
+                });
+            });
+
+            if (Object.keys(metrics).length) {
+                row.metrics = metrics;
+            }
+
+            if (!row.rank) {
+                row.rank = index + 1;
+            }
+
+            rows.push(row);
+        }
+    });
+
+    rows.forEach((row, idx) => {
+        if (typeof row.rank !== "number" || Number.isNaN(row.rank)) {
+            row.rank = idx + 1;
+        }
+    });
+
+    const metaSources = [getProp(raw, "meta"), getProp(raw, "summary"), raw];
+
+    const meta: ScorePreviewMeta = {};
+    const asOfCandidate =
+        getProp(raw, "as_of") ??
+        getProp(raw, "asAt") ??
+        getProp(raw, "date") ??
+        getProp(getProp(raw, "meta"), "as_of") ??
+        getProp(getProp(raw, "meta"), "date");
+    if (asOfCandidate) meta.asOf = String(asOfCandidate);
+
+    const nameCandidate =
+        getProp(raw, "name") ??
+        getProp(raw, "title") ??
+        getProp(raw, "score_name") ??
+        getProp(raw, "rule_name");
+    if (nameCandidate) meta.name = String(nameCandidate);
+
+    const runIdCandidate =
+        getProp(raw, "run_id") ??
+        getProp(raw, "id") ??
+        getProp(raw, "request_id") ??
+        getProp(getProp(raw, "meta"), "run_id");
+    if (runIdCandidate) meta.runId = String(runIdCandidate);
+
+    const requestIdCandidate =
+        getProp(raw, "request_id") ?? getProp(getProp(raw, "meta"), "request_id");
+    if (requestIdCandidate) meta.requestId = String(requestIdCandidate);
+
+    const totalUniverse = pickNumber(metaSources, [
+        "universe_count",
+        "universe_size",
+        "total",
+        "count",
+        "universe",
+        "available",
+    ]);
+    if (totalUniverse !== undefined) meta.totalUniverse = totalUniverse;
+
+    return { rows, meta };
+};
+
+async function previewScoreRanking(payload: ScorePreviewRequest): Promise<ScorePreviewResult> {
+    const rulePayload = payload.rules
+        .filter((rule) => rule.metric && rule.metric.trim())
+        .map((rule) => {
+            const normalized: Record<string, unknown> = {
+                metric: rule.metric.trim(),
+                field: rule.metric.trim(),
+                key: rule.metric.trim(),
+            };
+
+            if (rule.weight !== undefined && Number.isFinite(rule.weight)) {
+                normalized.weight = rule.weight;
+                normalized.score_weight = rule.weight;
+                normalized.importance = rule.weight;
+            }
+
+            if (rule.direction) {
+                normalized.direction = rule.direction;
+                normalized.order = rule.direction;
+                normalized.sort = rule.direction;
+            }
+
+            if (rule.min !== null && rule.min !== undefined) {
+                normalized.min = rule.min;
+                normalized.floor = rule.min;
+            }
+
+            if (rule.max !== null && rule.max !== undefined) {
+                normalized.max = rule.max;
+                normalized.ceiling = rule.max;
+            }
+
+            if (rule.transform && rule.transform !== "raw") {
+                normalized.transform = rule.transform;
+                normalized.method = rule.transform;
+            }
+
+            return removeUndefined(normalized);
+        });
+
+    if (!rulePayload.length) {
+        throw new Error("Dodaj co najmniej jedną metrykę scoringową.");
+    }
+
+    const filters = payload.filters
+        ? Object.fromEntries(
+              Object.entries(payload.filters).filter(([, value]) =>
+                  value === 0 ? true : Boolean(value)
+              )
+          )
+        : undefined;
+
+    const prepared = removeUndefined({
+        name: payload.name,
+        title: payload.name,
+        score_name: payload.name,
+        description: payload.description,
+        rules: rulePayload,
+        limit: payload.limit,
+        top_n: payload.limit,
+        top: payload.limit,
+        count: payload.limit,
+        size: payload.limit,
+        sort: payload.sort ?? undefined,
+        direction: payload.sort ?? undefined,
+        order: payload.sort ?? undefined,
+        universe: payload.universe,
+        universe_filter: payload.universe,
+        filter: payload.universe,
+        as_of: payload.asOf ?? undefined,
+        date: payload.asOf ?? undefined,
+        filters,
+        constraints: filters,
+    });
+
+    const endpoints = [
+        "/api/scores/preview",
+        "/api/score/preview",
+        "/api/scores/run",
+        "/api/score/run",
+        "/api/scores",
+        "/api/score",
+        "/api/rules/preview",
+        "/api/rules/run",
+    ];
+
+    const errors: string[] = [];
+
+    for (const endpoint of endpoints) {
+        try {
+            const response = await fetch(endpoint, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(prepared),
+            });
+
+            if (response.ok) {
+                const json = await response.json();
+                return normalizeScoreRankingResponse(json);
+            }
+
+            errors.push(`${endpoint}: ${response.status}`);
+        } catch (e: unknown) {
+            errors.push(`${endpoint}: ${e instanceof Error ? e.message : String(e)}`);
+        }
+    }
+
+    const qs = new URLSearchParams();
+    if (payload.name && payload.name.trim()) {
+        ["name", "score", "score_name", "rule", "rule_name"].forEach((key) =>
+            qs.set(key, payload.name as string)
+        );
+    }
+    if (payload.limit && Number.isFinite(payload.limit)) {
+        const limitString = String(payload.limit);
+        ["limit", "top", "top_n", "count", "size"].forEach((key) =>
+            qs.set(key, limitString)
+        );
+    }
+    if (payload.sort) {
+        ["sort", "direction", "order"].forEach((key) => qs.set(key, payload.sort as string));
+    }
+    if (payload.universe) {
+        const universeValue = Array.isArray(payload.universe)
+            ? payload.universe.join(",")
+            : payload.universe;
+        ["universe", "filter", "universe_filter"].forEach((key) =>
+            qs.set(key, universeValue as string)
+        );
+    }
+    if (payload.asOf) {
+        ["as_of", "date"].forEach((key) => qs.set(key, payload.asOf as string));
+    }
+    if (filters) {
+        Object.entries(filters).forEach(([key, value]) => {
+            if (value === undefined || value === null || value === "") return;
+            qs.set(key, String(value));
+        });
+    }
+
+    const queryString = qs.toString();
+    const getEndpoints = ["/api/scores/preview", "/api/score/preview", "/api/scores", "/api/score"];
+    for (const endpoint of getEndpoints) {
+        try {
+            const url = queryString ? `${endpoint}?${queryString}` : endpoint;
+            const response = await fetch(url);
+            if (response.ok) {
+                const json = await response.json();
+                return normalizeScoreRankingResponse(json);
+            }
+            errors.push(`${url}: ${response.status}`);
+        } catch (e: unknown) {
+            const url = queryString ? `${endpoint}?${queryString}` : endpoint;
+            errors.push(`${url}: ${e instanceof Error ? e.message : String(e)}`);
+        }
+    }
+
+    throw new Error(`API score preview niedostępne (${errors.join(" | ")})`);
+}
+
 /** =========================
  *  Obliczenia: SMA / RSI
  *  ========================= */
@@ -862,6 +1307,63 @@ const Card = ({
         <div className="p-4 md:p-6">{children}</div>
     </div>
 );
+
+const Section = ({
+    id,
+    kicker,
+    title,
+    description,
+    actions,
+    children,
+}: {
+    id: string;
+    kicker?: string;
+    title: string;
+    description?: string;
+    actions?: React.ReactNode;
+    children: React.ReactNode;
+}) => (
+    <section id={id} className="scroll-mt-28">
+        <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+            <div className="space-y-2">
+                {kicker && (
+                    <span className="text-xs uppercase tracking-[0.35em] text-gray-400">
+                        {kicker}
+                    </span>
+                )}
+                <div className="space-y-1">
+                    <h2 className="text-2xl md:text-3xl font-semibold text-gray-900">{title}</h2>
+                    {description && (
+                        <p className="text-sm text-gray-600 max-w-2xl">{description}</p>
+                    )}
+                </div>
+            </div>
+            {actions && <div className="flex flex-wrap gap-2">{actions}</div>}
+        </div>
+        <div className="mt-8">{children}</div>
+    </section>
+);
+
+const SectionNav = ({
+    items,
+}: {
+    items: { href: string; label: string }[];
+}) => {
+    if (!items.length) return null;
+    return (
+        <nav className="flex flex-wrap gap-2 text-sm">
+            {items.map((item) => (
+                <a
+                    key={item.href}
+                    href={item.href}
+                    className="px-3 py-1 rounded-full border border-gray-200 bg-white text-gray-600 hover:text-gray-900 hover:border-gray-300 transition"
+                >
+                    {item.label}
+                </a>
+            ))}
+        </nav>
+    );
+};
 
 const Chip = ({
     active,
@@ -1045,6 +1547,58 @@ function RebalanceTimeline({ events }: { events: PortfolioRebalanceEvent[] }) {
                     </div>
                 ))}
             </div>
+        </div>
+    );
+}
+
+function ScoreRankingTable({ rows }: { rows: ScorePreviewRow[] }) {
+    if (!rows.length) return null;
+
+    const metricKeys = Array.from(
+        new Set(rows.flatMap((row) => Object.keys(row.metrics ?? {})))
+    ).slice(0, 4);
+
+    return (
+        <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+                <thead className="text-left text-gray-500">
+                    <tr className="border-b border-gray-200">
+                        <th className="py-2 pr-4 font-medium">Pozycja</th>
+                        <th className="py-2 pr-4 font-medium">Spółka</th>
+                        <th className="py-2 pr-4 font-medium">Score</th>
+                        <th className="py-2 pr-4 font-medium">Waga</th>
+                        {metricKeys.map((key) => (
+                            <th key={key} className="py-2 pr-4 font-medium capitalize">
+                                {key.replace(/_/g, " ")}
+                            </th>
+                        ))}
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows.map((row, idx) => (
+                        <tr key={`${row.symbol}-${idx}`} className="border-b border-gray-100">
+                            <td className="py-2 pr-4 font-medium text-gray-500">#{row.rank ?? idx + 1}</td>
+                            <td className="py-2 pr-4">
+                                <div className="font-semibold text-gray-900">{row.symbol}</div>
+                                {row.name && <div className="text-xs text-gray-500">{row.name}</div>}
+                            </td>
+                            <td className="py-2 pr-4">
+                                {typeof row.score === "number" ? row.score.toFixed(2) : "—"}
+                            </td>
+                            <td className="py-2 pr-4">
+                                {typeof row.weight === "number" ? formatPercent(row.weight) : "—"}
+                            </td>
+                            {metricKeys.map((key) => (
+                                <td key={key} className="py-2 pr-4">
+                                    {row.metrics && typeof row.metrics[key] === "number"
+                                        ? row.metrics[key].toFixed(2)
+                                        : "—"}
+                                </td>
+                            ))}
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
         </div>
     );
 }
@@ -1336,6 +1890,30 @@ export default function Page() {
     const [loading, setLoading] = useState(false);
     const [err, setErr] = useState("");
 
+    // Score builder
+    const [scoreRules, setScoreRules] = useState<ScoreBuilderRule[]>(() => getDefaultScoreRules());
+    const [scoreNameInput, setScoreNameInput] = useState("custom_quality");
+    const [scoreDescription, setScoreDescription] = useState("Ranking jakościowy – przykład");
+    const [scoreLimit, setScoreLimit] = useState(10);
+    const [scoreSort, setScoreSort] = useState<"asc" | "desc">("desc");
+    const [scoreUniverse, setScoreUniverse] = useState("WIG20.WA");
+    const [scoreAsOf, setScoreAsOf] = useState(() => new Date().toISOString().slice(0, 10));
+    const [scoreMinMcap, setScoreMinMcap] = useState("");
+    const [scoreMinTurnover, setScoreMinTurnover] = useState("");
+    const [scoreResults, setScoreResults] = useState<ScorePreviewResult | null>(null);
+    const [scoreLoading, setScoreLoading] = useState(false);
+    const [scoreError, setScoreError] = useState("");
+
+    const scoreValidRules = scoreRules.filter(
+        (rule) => rule.metric.trim() && Number.isFinite(rule.weight) && Number(rule.weight) !== 0
+    );
+    const scoreTotalWeight = scoreValidRules.reduce(
+        (acc, rule) => acc + (Number(rule.weight) || 0),
+        0
+    );
+    const scoreLimitInvalid = !Number.isFinite(scoreLimit) || scoreLimit <= 0;
+    const scoreDisabled = scoreLoading || scoreLimitInvalid || !scoreValidRules.length;
+
     // Portfel
     const [pfMode, setPfMode] = useState<"manual" | "score">("manual");
     const [pfRows, setPfRows] = useState<{ symbol: string; weight: number }[]>([
@@ -1430,6 +2008,12 @@ export default function Page() {
     const withRsi: RowRSI[] = useMemo(() => rsi(rows, 14), [rows]);
 
     const symbolLabel = symbol ?? "—";
+    const navItems = [
+        { href: "#watchlist", label: "Watchlista" },
+        { href: "#analysis", label: "Analiza techniczna" },
+        { href: "#score", label: "Ranking score" },
+        { href: "#portfolio", label: "Symulacja portfela" },
+    ];
 
     const pfChartData = useMemo(() => {
         if (!pfRes) return [];
@@ -1455,6 +2039,113 @@ export default function Page() {
 
         return Array.from(merged.values()).sort((a, b) => a.date.localeCompare(b.date));
     }, [pfRes]);
+
+    const parseScoreBound = (value?: string): number | null => {
+        if (!value) return null;
+        const trimmed = value.trim();
+        if (!trimmed) return null;
+        const numeric = Number(trimmed);
+        return Number.isFinite(numeric) ? numeric : null;
+    };
+
+    const parseUniverseValue = (value: string): string | string[] | null => {
+        const trimmed = value.trim();
+        if (!trimmed) return null;
+        const tokens = trimmed
+            .split(/[\s,;]+/)
+            .map((token) => token.trim())
+            .filter(Boolean);
+        if (!tokens.length) return null;
+        return tokens.length === 1 ? tokens[0] : tokens;
+    };
+
+    const addScoreRule = () => {
+        setScoreRules((prev) => [
+            ...prev,
+            { id: createRuleId(), metric: "", weight: 10, direction: "desc", transform: "raw" },
+        ]);
+    };
+
+    const removeScoreRule = (id: string) => {
+        setScoreRules((prev) => prev.filter((rule) => rule.id !== id));
+    };
+
+    const resetScoreBuilder = () => {
+        setScoreRules(getDefaultScoreRules());
+        setScoreNameInput("custom_quality");
+        setScoreDescription("Ranking jakościowy – przykład");
+        setScoreLimit(10);
+        setScoreSort("desc");
+        setScoreUniverse("WIG20.WA");
+        setScoreAsOf(new Date().toISOString().slice(0, 10));
+        setScoreMinMcap("");
+        setScoreMinTurnover("");
+        setScoreResults(null);
+        setScoreError("");
+    };
+
+    const handleScorePreview = async () => {
+        try {
+            setScoreError("");
+            setScoreLoading(true);
+            setScoreResults(null);
+
+            const rulePayload = scoreRules
+                .map((rule) => {
+                    const metric = rule.metric.trim();
+                    if (!metric) return null;
+                    const weightNumeric = Number(rule.weight);
+                    const min = parseScoreBound(rule.min);
+                    const max = parseScoreBound(rule.max);
+                    return {
+                        metric,
+                        weight: Number.isFinite(weightNumeric) ? weightNumeric : undefined,
+                        direction: rule.direction,
+                        min,
+                        max,
+                        transform:
+                            rule.transform && rule.transform !== "raw" && rule.transform !== ""
+                                ? rule.transform
+                                : null,
+                    };
+                })
+                .filter((item): item is ScorePreviewRulePayload => Boolean(item));
+
+            const filters: Record<string, number> = {};
+            const minMcap = parseScoreBound(scoreMinMcap);
+            if (minMcap !== null) {
+                filters.min_market_cap = minMcap;
+            }
+            const minTurnover = parseScoreBound(scoreMinTurnover);
+            if (minTurnover !== null) {
+                filters.min_turnover = minTurnover;
+                filters.min_liquidity = minTurnover;
+            }
+
+            const limitValue = !scoreLimitInvalid && Number.isFinite(scoreLimit)
+                ? Math.floor(Number(scoreLimit))
+                : undefined;
+
+            const payload: ScorePreviewRequest = {
+                name: scoreNameInput.trim() || undefined,
+                description: scoreDescription.trim() || undefined,
+                rules: rulePayload,
+                limit: limitValue,
+                universe: parseUniverseValue(scoreUniverse),
+                sort: scoreSort,
+                filters: Object.keys(filters).length ? filters : undefined,
+                asOf: scoreAsOf && scoreAsOf.trim() ? scoreAsOf : undefined,
+            };
+
+            const result = await previewScoreRanking(payload);
+            setScoreResults(result);
+        } catch (e: unknown) {
+            const message = e instanceof Error ? e.message : String(e);
+            setScoreError(message);
+        } finally {
+            setScoreLoading(false);
+        }
+    };
 
     const runPortfolioSimulation = async () => {
         try {
@@ -1536,21 +2227,37 @@ export default function Page() {
 
     return (
         <div className="min-h-screen bg-gray-50 text-gray-900">
-            <header className="max-w-6xl mx-auto px-4 md:px-8 py-6 flex items-center justify-between">
-                <h1 className="text-2xl md:text-3xl font-bold">Analityka Rynków</h1>
-                <div className="flex gap-2">
-                    <button className="px-4 py-2 rounded-xl border">Zaloguj</button>
-                    <button className="px-4 py-2 rounded-xl bg-black text-white">
-                        Utwórz konto
-                    </button>
+            <header className="border-b bg-white/80 backdrop-blur">
+                <div className="max-w-6xl mx-auto px-4 md:px-8 py-10 space-y-8">
+                    <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
+                        <div className="space-y-3">
+                            <span className="text-xs uppercase tracking-[0.35em] text-gray-400">Panel demo</span>
+                            <h1 className="text-3xl md:text-4xl font-bold">Analityka Rynków</h1>
+                            <p className="text-gray-600 max-w-2xl">
+                                Zbieraj notowania, konfiguruj score i sprawdzaj portfel w jednym miejscu połączonym z
+                                backendem.
+                            </p>
+                        </div>
+                        <div className="flex items-center gap-3 self-start md:self-auto">
+                            <button className="px-4 py-2 rounded-xl border border-gray-300 text-gray-700 hover:border-gray-400">
+                                Zaloguj
+                            </button>
+                            <button className="px-4 py-2 rounded-xl bg-black text-white hover:bg-gray-900">
+                                Utwórz konto
+                            </button>
+                        </div>
+                    </div>
+                    <SectionNav items={navItems} />
                 </div>
             </header>
 
-            <main className="max-w-6xl mx-auto px-4 md:px-8 space-y-6 pb-10">
-                {/* Watchlist */}
-                <Card
-                    title="Twoja lista obserwacyjna"
-                    right={
+            <main className="max-w-6xl mx-auto px-4 md:px-8 py-12 space-y-16">
+                <Section
+                    id="watchlist"
+                    kicker="Krok 1"
+                    title="Monitoruj swoje spółki"
+                    description="Dodawaj tickery z GPW, aby szybko przełączać wykresy oraz sekcje analityczne na stronie."
+                    actions={
                         <TickerAutosuggest
                             onPick={(sym) => {
                                 setWatch((w) => (w.includes(sym) ? w : [sym, ...w]));
@@ -1559,78 +2266,512 @@ export default function Page() {
                         />
                     }
                 >
-                    <Watchlist
-                        items={watch}
-                        current={symbol}
-                        onPick={(sym) => setSymbol(sym)}
-                        onRemove={removeFromWatch}
-                    />
-                </Card>
+                    <Card>
+                        <div className="space-y-4">
+                            <p className="text-sm text-gray-600">
+                                Kliknij na ticker, aby przełączyć moduły poniżej. Usuń zbędne pozycje przyciskiem ×.
+                            </p>
+                            <Watchlist
+                                items={watch}
+                                current={symbol}
+                                onPick={(sym) => setSymbol(sym)}
+                                onRemove={removeFromWatch}
+                            />
+                        </div>
+                    </Card>
+                </Section>
 
-                <div className="grid md:grid-cols-3 gap-6">
-                    {/* Lewa kolumna */}
-                    <div className="md:col-span-2 space-y-6">
-                        {/* Wykres cenowy */}
-                        <Card
-                            title={symbol ? `${symbol} – wykres cenowy` : "Wykres cenowy"}
-                            right={
-                                <div className="flex gap-2">
-                                    <Chip active={period === 90} onClick={() => setPeriod(90)}>
-                                        3M
-                                    </Chip>
-                                    <Chip active={period === 180} onClick={() => setPeriod(180)}>
-                                        6M
-                                    </Chip>
-                                    <Chip active={period === 365} onClick={() => setPeriod(365)}>
-                                        1R
-                                    </Chip>
-                                    <Chip active={area} onClick={() => setArea(!area)}>
-                                        Area
-                                    </Chip>
-                                    <Chip active={smaOn} onClick={() => setSmaOn(!smaOn)}>
-                                        SMA 20
-                                    </Chip>
+                <Section
+                    id="analysis"
+                    kicker="Krok 2"
+                    title="Analiza techniczna i kontekst"
+                    description="Przeglądaj kluczowe statystyki, wykres cenowy oraz wskaźniki momentum, a obok miej szybki podgląd fundamentów."
+                >
+                    <div className="grid md:grid-cols-3 gap-6">
+                        <div className="md:col-span-2 space-y-6">
+                            <Card
+                                title={symbol ? `${symbol} – wykres cenowy` : "Wykres cenowy"}
+                                right={
+                                    <div className="flex gap-2">
+                                        <Chip active={period === 90} onClick={() => setPeriod(90)}>
+                                            3M
+                                        </Chip>
+                                        <Chip active={period === 180} onClick={() => setPeriod(180)}>
+                                            6M
+                                        </Chip>
+                                        <Chip active={period === 365} onClick={() => setPeriod(365)}>
+                                            1R
+                                        </Chip>
+                                        <Chip active={area} onClick={() => setArea(!area)}>
+                                            Area
+                                        </Chip>
+                                        <Chip active={smaOn} onClick={() => setSmaOn(!smaOn)}>
+                                            SMA 20
+                                        </Chip>
+                                    </div>
+                                }
+                            >
+                                {!symbol ? (
+                                    <div className="p-6 text-sm text-gray-500">
+                                        Dodaj spółkę do listy obserwacyjnej, aby zobaczyć wykres.
+                                    </div>
+                                ) : loading ? (
+                                    <div className="p-6 text-sm text-gray-500">
+                                        Ładowanie danych z API…
+                                    </div>
+                                ) : rows.length ? (
+                                    <>
+                                        <Stats data={rows} />
+                                        <div className="h-2" />
+                                        <PriceChart rows={withSma} showArea={area} showSMA={smaOn} />
+                                    </>
+                                ) : (
+                                    <div className="p-6 text-sm text-gray-500">
+                                        Brak danych do wyświetlenia
+                                    </div>
+                                )}
+                                {err && symbol && (
+                                    <div className="mt-3 text-sm text-rose-600">Błąd: {err}</div>
+                                )}
+                            </Card>
+
+                            <Card title="RSI (14)">
+                                {!symbol ? (
+                                    <div className="p-6 text-sm text-gray-500">
+                                        Dodaj spółkę, aby zobaczyć wskaźnik RSI.
+                                    </div>
+                                ) : (
+                                    <RsiChart rows={withRsi} />
+                                )}
+                            </Card>
+                        </div>
+
+                        <div className="space-y-6">
+                            <Card title={`Fundamenty – ${symbolLabel}`}>
+                                <div className="text-sm text-gray-500">
+                                    {symbol
+                                        ? "Dane przykładowe — podłączymy realne API fundamentów w kolejnym kroku."
+                                        : "Dodaj spółkę, aby zobaczyć sekcję fundamentów."}
                                 </div>
-                            }
-                        >
-                            {!symbol ? (
-                                <div className="p-6 text-sm text-gray-500">
-                                    Dodaj spółkę do listy obserwacyjnej, aby zobaczyć wykres.
+                                {symbol && (
+                                    <div className="mt-4 grid grid-cols-2 gap-y-2 text-sm">
+                                        <div className="text-gray-500">Kapitalizacja</div>
+                                        <div>$—</div>
+                                        <div className="text-gray-500">P/E (TTM)</div>
+                                        <div>—</div>
+                                        <div className="text-gray-500">Przychody</div>
+                                        <div>—</div>
+                                        <div className="text-gray-500">Marża netto</div>
+                                        <div>—</div>
+                                    </div>
+                                )}
+                            </Card>
+
+                            <Card title="Skaner (demo)" right={<Chip active>Beta</Chip>}>
+                                <ul className="text-sm list-disc pl-5 space-y-1">
+                                    <li>Wysoki wolumen vs 20-sesyjna średnia</li>
+                                    <li>RSI &lt; 30 (wyprzedanie)</li>
+                                    <li>Przebicie SMA50 od dołu</li>
+                                    <li>Nowe 52-tygodniowe maksimum</li>
+                                </ul>
+                                <p className="text-xs text-gray-500 mt-3">
+                                    Podmienimy na realny backend skanera.
+                                </p>
+                            </Card>
+                        </div>
+                    </div>
+                </Section>
+
+                <Section
+                    id="score"
+                    kicker="Krok 3"
+                    title="Konfigurator score"
+                    description="Skonfiguruj zasady rankingu i pobierz wynik z backendu jednym kliknięciem."
+                >
+                    <Card title="Konfigurator score" right={<Chip active>Nowość</Chip>}>
+                        <div className="space-y-5 text-sm">
+                            <div className="grid gap-4 md:grid-cols-2">
+                                <label className="flex flex-col gap-2">
+                                    <span className="text-gray-600 text-xs uppercase tracking-wide">
+                                        Nazwa score
+                                    </span>
+                                    <input
+                                        type="text"
+                                        value={scoreNameInput}
+                                        onChange={(e) => setScoreNameInput(e.target.value)}
+                                        className="rounded-xl border px-3 py-2"
+                                        placeholder="np. custom_quality"
+                                    />
+                                </label>
+                                <label className="flex flex-col gap-2">
+                                    <span className="text-gray-600 text-xs uppercase tracking-wide">
+                                        Opis (opcjonalnie)
+                                    </span>
+                                    <input
+                                        type="text"
+                                        value={scoreDescription}
+                                        onChange={(e) => setScoreDescription(e.target.value)}
+                                        className="rounded-xl border px-3 py-2"
+                                        placeholder="Krótka nazwa w raporcie"
+                                    />
+                                </label>
+                            </div>
+                            <div className="grid gap-4 md:grid-cols-2">
+                                <label className="flex flex-col gap-2">
+                                    <span className="text-gray-600 text-xs uppercase tracking-wide">
+                                        Universe / filtr
+                                    </span>
+                                    <input
+                                        type="text"
+                                        value={scoreUniverse}
+                                        onChange={(e) => setScoreUniverse(e.target.value)}
+                                        className="rounded-xl border px-3 py-2"
+                                        placeholder="np. WIG20.WA, WIG40.WA"
+                                    />
+                                </label>
+                                <label className="flex flex-col gap-2">
+                                    <span className="text-gray-600 text-xs uppercase tracking-wide">
+                                        Liczba spółek
+                                    </span>
+                                    <input
+                                        type="number"
+                                        min={1}
+                                        step={1}
+                                        value={scoreLimit}
+                                        onChange={(e) => setScoreLimit(Number(e.target.value))}
+                                        className="rounded-xl border px-3 py-2"
+                                    />
+                                </label>
+                            </div>
+                            <div className="grid gap-4 md:grid-cols-2">
+                                <label className="flex flex-col gap-2">
+                                    <span className="text-gray-600 text-xs uppercase tracking-wide">
+                                        Sortowanie
+                                    </span>
+                                    <div className="flex gap-2">
+                                        <Chip active={scoreSort === "desc"} onClick={() => setScoreSort("desc")}>
+                                            Najwyższe score
+                                        </Chip>
+                                        <Chip active={scoreSort === "asc"} onClick={() => setScoreSort("asc")}>
+                                            Najniższe score
+                                        </Chip>
+                                    </div>
+                                </label>
+                                <label className="flex flex-col gap-2">
+                                    <span className="text-gray-600 text-xs uppercase tracking-wide">
+                                        Data (as of)
+                                    </span>
+                                    <input
+                                        type="date"
+                                        value={scoreAsOf}
+                                        onChange={(e) => setScoreAsOf(e.target.value)}
+                                        className="rounded-xl border px-3 py-2"
+                                    />
+                                </label>
+                            </div>
+                            <div className="grid gap-4 md:grid-cols-2">
+                                <label className="flex flex-col gap-2">
+                                    <span className="text-gray-600 text-xs uppercase tracking-wide">
+                                        Min kapitalizacja (mln)
+                                    </span>
+                                    <input
+                                        type="number"
+                                        value={scoreMinMcap}
+                                        onChange={(e) => setScoreMinMcap(e.target.value)}
+                                        className="rounded-xl border px-3 py-2"
+                                    />
+                                </label>
+                                <label className="flex flex-col gap-2">
+                                    <span className="text-gray-600 text-xs uppercase tracking-wide">
+                                        Min obrót (mln)
+                                    </span>
+                                    <input
+                                        type="number"
+                                        value={scoreMinTurnover}
+                                        onChange={(e) => setScoreMinTurnover(e.target.value)}
+                                        className="rounded-xl border px-3 py-2"
+                                    />
+                                </label>
+                            </div>
+                            <div className="space-y-4">
+                                <div className="flex items-center justify-between flex-wrap gap-3">
+                                    <div>
+                                        <div className="text-sm font-medium text-gray-900">Zasady rankingu</div>
+                                        <div className="text-xs text-gray-500">
+                                            Dobierz metryki, kierunek i wagi. Każde kliknięcie od razu aktualizuje payload
+                                            wysyłany do backendu.
+                                        </div>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={addScoreRule}
+                                        className="px-3 py-2 rounded-xl border border-dashed text-sm"
+                                    >
+                                        Dodaj metrykę
+                                    </button>
                                 </div>
-                            ) : loading ? (
-                                <div className="p-6 text-sm text-gray-500">
-                                    Ładowanie danych z API…
+                                <div className="space-y-4">
+                                    {scoreRules.map((rule, idx) => (
+                                        <div
+                                            key={rule.id}
+                                            className="rounded-2xl border border-gray-200 bg-gray-50/60 p-4"
+                                        >
+                                            <div className="flex items-start justify-between gap-4">
+                                                <div className="space-y-3 flex-1">
+                                                    <div className="grid gap-3 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+                                                        <label className="flex flex-col gap-2">
+                                                            <span className="text-xs uppercase tracking-wide text-gray-600">
+                                                                Metryka
+                                                            </span>
+                                                            <select
+                                                                value={rule.metric}
+                                                                onChange={(e) =>
+                                                                    setScoreRules((prev) =>
+                                                                        prev.map((r) =>
+                                                                            r.id === rule.id
+                                                                                ? {
+                                                                                      ...r,
+                                                                                      metric: e.target.value,
+                                                                                      label:
+                                                                                          SCORE_METRIC_OPTIONS.find(
+                                                                                              (option) =>
+                                                                                                  option.value ===
+                                                                                                  e.target.value
+                                                                                          )?.label ?? r.label,
+                                                                                      direction:
+                                                                                          SCORE_METRIC_OPTIONS.find(
+                                                                                              (option) =>
+                                                                                                  option.value ===
+                                                                                                  e.target.value
+                                                                                          )?.defaultDirection ??
+                                                                                          r.direction,
+                                                                                  }
+                                                                                : r
+                                                                        )
+                                                                    )
+                                                                }
+                                                                className="rounded-xl border px-3 py-2"
+                                                            >
+                                                                <option value="">Wybierz…</option>
+                                                                {SCORE_METRIC_OPTIONS.map((option) => (
+                                                                    <option key={option.value} value={option.value}>
+                                                                        {option.label}
+                                                                    </option>
+                                                                ))}
+                                                            </select>
+                                                        </label>
+                                                        <label className="flex flex-col gap-2">
+                                                            <span className="text-xs uppercase tracking-wide text-gray-600">
+                                                                Waga
+                                                            </span>
+                                                            <input
+                                                                type="number"
+                                                                value={rule.weight}
+                                                                onChange={(e) =>
+                                                                    setScoreRules((prev) =>
+                                                                        prev.map((r) =>
+                                                                            r.id === rule.id
+                                                                                ? { ...r, weight: Number(e.target.value) }
+                                                                                : r
+                                                                        )
+                                                                    )
+                                                                }
+                                                                className="rounded-xl border px-3 py-2"
+                                                            />
+                                                        </label>
+                                                    </div>
+                                                    <div className="grid gap-3 md:grid-cols-3">
+                                                        <div>
+                                                            <span className="text-xs uppercase tracking-wide text-gray-600">
+                                                                Kierunek
+                                                            </span>
+                                                            <div className="mt-1 flex flex-wrap gap-2">
+                                                                <Chip
+                                                                    active={rule.direction === "desc"}
+                                                                    onClick={() =>
+                                                                        setScoreRules((prev) =>
+                                                                            prev.map((r) =>
+                                                                                r.id === rule.id
+                                                                                    ? { ...r, direction: "desc" }
+                                                                                    : r
+                                                                            )
+                                                                        )
+                                                                    }
+                                                                >
+                                                                    Więcej = lepiej
+                                                                </Chip>
+                                                                <Chip
+                                                                    active={rule.direction === "asc"}
+                                                                    onClick={() =>
+                                                                        setScoreRules((prev) =>
+                                                                            prev.map((r) =>
+                                                                                r.id === rule.id
+                                                                                    ? { ...r, direction: "asc" }
+                                                                                    : r
+                                                                            )
+                                                                        )
+                                                                    }
+                                                                >
+                                                                    Mniej = lepiej
+                                                                </Chip>
+                                                            </div>
+                                                        </div>
+                                                        <label className="flex flex-col gap-2">
+                                                            <span className="text-xs uppercase tracking-wide text-gray-600">
+                                                                Minimalna wartość
+                                                            </span>
+                                                            <input
+                                                                type="number"
+                                                                value={rule.min ?? ""}
+                                                                onChange={(e) =>
+                                                                    setScoreRules((prev) =>
+                                                                        prev.map((r) =>
+                                                                            r.id === rule.id
+                                                                                ? { ...r, min: e.target.value }
+                                                                                : r
+                                                                        )
+                                                                    )
+                                                                }
+                                                                className="rounded-xl border px-3 py-2"
+                                                            />
+                                                        </label>
+                                                        <label className="flex flex-col gap-2">
+                                                            <span className="text-xs uppercase tracking-wide text-gray-600">
+                                                                Maksymalna wartość
+                                                            </span>
+                                                            <input
+                                                                type="number"
+                                                                value={rule.max ?? ""}
+                                                                onChange={(e) =>
+                                                                    setScoreRules((prev) =>
+                                                                        prev.map((r) =>
+                                                                            r.id === rule.id
+                                                                                ? { ...r, max: e.target.value }
+                                                                                : r
+                                                                        )
+                                                                    )
+                                                                }
+                                                                className="rounded-xl border px-3 py-2"
+                                                            />
+                                                        </label>
+                                                    </div>
+                                                    <div className="grid gap-3 md:grid-cols-2">
+                                                        <label className="flex flex-col gap-2">
+                                                            <span className="text-xs uppercase tracking-wide text-gray-600">
+                                                                Normalizacja
+                                                            </span>
+                                                            <select
+                                                                value={rule.transform ?? "raw"}
+                                                                onChange={(e) =>
+                                                                    setScoreRules((prev) =>
+                                                                        prev.map((r) =>
+                                                                            r.id === rule.id
+                                                                                ? {
+                                                                                      ...r,
+                                                                                      transform: e.target
+                                                                                          .value as ScoreBuilderRule["transform"],
+                                                                                  }
+                                                                                : r
+                                                                        )
+                                                                    )
+                                                                }
+                                                                className="rounded-xl border px-3 py-2"
+                                                            >
+                                                                <option value="raw">Bez zmian</option>
+                                                                <option value="zscore">Z-score</option>
+                                                                <option value="percentile">Percentyl</option>
+                                                            </select>
+                                                        </label>
+                                                        <div className="text-xs text-gray-500">
+                                                            Backend akceptuje dowolne nazwy metryk. Wagi są skalowane
+                                                            automatycznie.
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => removeScoreRule(rule.id)}
+                                                    className="px-2 py-1 text-xs rounded-lg border"
+                                                >
+                                                    Usuń
+                                                </button>
+                                            </div>
+                                            {idx === scoreRules.length - 1 && (
+                                                <div className="mt-3 text-xs text-gray-400">
+                                                    Zmieniaj wagi i parametry, aby zobaczyć wpływ na ranking.
+                                                </div>
+                                            )}
+                                        </div>
+                                    ))}
                                 </div>
-                            ) : rows.length ? (
-                                <>
-                                    <Stats data={rows} />
-                                    <div className="h-2" />
-                                    <PriceChart rows={withSma} showArea={area} showSMA={smaOn} />
-                                </>
+                                <div className="text-xs text-gray-500">
+                                    Suma wag: <b>{scoreTotalWeight.toFixed(1)}</b>. Wartość względna — backend normalizuje
+                                    je przy obliczeniach.
+                                </div>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-3">
+                                <button
+                                    type="button"
+                                    onClick={handleScorePreview}
+                                    disabled={scoreDisabled}
+                                    className="px-4 py-2 rounded-xl bg-black text-white disabled:opacity-50"
+                                >
+                                    {scoreLoading ? "Łączenie…" : "Przelicz ranking"}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={resetScoreBuilder}
+                                    className="px-4 py-2 rounded-xl border border-gray-300"
+                                >
+                                    Resetuj
+                                </button>
+                                {!scoreValidRules.length && !scoreLoading && (
+                                    <div className="text-xs text-rose-600">
+                                        Dodaj co najmniej jedną metrykę z wagą różną od zera.
+                                    </div>
+                                )}
+                                {scoreLimitInvalid && !scoreLoading && (
+                                    <div className="text-xs text-rose-600">Liczba spółek musi być dodatnia.</div>
+                                )}
+                            </div>
+                            {scoreError && <div className="text-sm text-rose-600">Błąd: {scoreError}</div>}
+                            {scoreResults ? (
+                                <div className="space-y-4">
+                                    <div className="text-xs text-gray-500">
+                                        {[
+                                            scoreResults.meta.name ? `Score: ${scoreResults.meta.name}` : null,
+                                            scoreResults.meta.asOf ? `Stan na ${scoreResults.meta.asOf}` : null,
+                                            typeof scoreResults.meta.totalUniverse === "number"
+                                                ? `Universe: ${scoreResults.meta.totalUniverse}`
+                                                : null,
+                                            scoreResults.meta.runId ? `ID: ${scoreResults.meta.runId}` : null,
+                                            scoreResults.meta.requestId ? `Request: ${scoreResults.meta.requestId}` : null,
+                                        ]
+                                            .filter(Boolean)
+                                            .join(" • ")}
+                                    </div>
+                                    <ScoreRankingTable rows={scoreResults.rows} />
+                                </div>
                             ) : (
-                                <div className="p-6 text-sm text-gray-500">
-                                    Brak danych do wyświetlenia
+                                <div className="text-xs text-gray-500">
+                                    {scoreLoading
+                                        ? "Łączenie z backendem…"
+                                        : "Zdefiniuj zasady i kliknij \"Przelicz ranking\", aby pobrać wyniki."}
                                 </div>
                             )}
-                            {err && symbol && (
-                                <div className="mt-3 text-sm text-rose-600">Błąd: {err}</div>
-                            )}
-                        </Card>
+                        </div>
+                    </Card>
+                </Section>
 
-                        {/* RSI */}
-                        <Card title="RSI (14)">
-                            {!symbol ? (
-                                <div className="p-6 text-sm text-gray-500">
-                                    Dodaj spółkę, aby zobaczyć wskaźnik RSI.
-                                </div>
-                            ) : (
-                                <RsiChart rows={withRsi} />
-                            )}
-                        </Card>
-
-                        {/* Portfel */}
-                        <Card title="Portfel – symulacja & rebalansing">
-                            <div className="space-y-6">
+                <Section
+                    id="portfolio"
+                    kicker="Krok 4"
+                    title="Portfel – symulacja i rebalansing"
+                    description="Porównaj strategie z realnymi wagami lub rankingiem score, w tym statystyki, wykres i log rebalansingu."
+                >
+                    <Card>
+                        <div className="space-y-8">
+                            <div className="space-y-4">
                                 <div className="flex flex-wrap gap-2">
                                     <Chip active={pfMode === "manual"} onClick={() => setPfMode("manual")}>
                                         Własne wagi
@@ -1639,456 +2780,412 @@ export default function Page() {
                                         Automatycznie wg score
                                     </Chip>
                                 </div>
-                                <div className="grid gap-6 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
-                                    <div className="space-y-3">
-                                        {pfMode === "manual" ? (
-                                            <>
-                                                <div className="text-sm text-gray-600">Skład portfela</div>
-                                                {pfRows.map((r, i) => (
-                                                    <div
-                                                        key={i}
-                                                        className="flex flex-wrap items-center gap-3 rounded-xl border border-gray-200 bg-gray-50/60 px-3 py-3"
-                                                    >
-                                                        <div className="flex-1 min-w-[12rem]">
-                                                            <TickerAutosuggest
-                                                                onPick={(sym) => {
-                                                                    setPfRows((rows) =>
-                                                                        rows.map((x, idx) =>
-                                                                            idx === i
-                                                                                ? { ...x, symbol: sym }
-                                                                                : x
-                                                                        )
-                                                                    );
-                                                                }}
-                                                                placeholder={r.symbol || "Symbol"}
-                                                                inputClassName="w-full"
-                                                            />
-                                                        </div>
-                                                        <div className="flex flex-wrap items-center gap-2 md:flex-nowrap">
-                                                            <input
-                                                                type="number"
-                                                                min={0}
-                                                                max={100}
-                                                                step={1}
-                                                                value={r.weight}
-                                                                onChange={(e) =>
-                                                                    setPfRows((rows) =>
-                                                                        rows.map((x, idx) =>
-                                                                            idx === i
-                                                                                ? {
-                                                                                      ...x,
-                                                                                      weight: Number(e.target.value),
-                                                                                  }
-                                                                                : x
-                                                                        )
-                                                                    )
-                                                                }
-                                                                className="w-24 md:w-20 px-3 py-2 rounded-xl border"
-                                                            />
-                                                            <span className="text-sm text-gray-500">%</span>
-                                                            <button
-                                                                onClick={() =>
-                                                                    setPfRows((rows) =>
-                                                                        rows.filter((_, idx) => idx !== i)
-                                                                    )
-                                                                }
-                                                                className="px-2 py-1 text-sm rounded-lg border"
-                                                                title="Usuń"
-                                                            >
-                                                                ✕
-                                                            </button>
-                                                        </div>
-                                                    </div>
-                                                ))}
-                                                <button
-                                                    onClick={() =>
-                                                        setPfRows((rows) => [...rows, { symbol: "", weight: 0 }])
-                                                    }
-                                                    className="w-full sm:w-auto px-3 py-2 rounded-xl border"
-                                                >
-                                                    Dodaj pozycję
-                                                </button>
+                                <p className="text-sm text-gray-600">
+                                    Wybierz tryb konfiguracji portfela. Wariant score wykorzysta parametry zdefiniowane
+                                    powyżej lub dowolną istniejącą nazwę rankingu z backendu.
+                                </p>
+                            </div>
+                            <div className="grid gap-6 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+                                <div className="space-y-3">
+                                    {pfMode === "manual" ? (
+                                        <>
+                                            <div className="text-sm font-medium text-gray-700">Skład portfela</div>
+                                            {pfRows.map((r, i) => (
                                                 <div
-                                                    className={`text-sm ${
-                                                        pfTotal === 100 ? "text-emerald-600" : "text-amber-600"
-                                                    }`}
+                                                    key={i}
+                                                    className="flex flex-wrap items-center gap-3 rounded-xl border border-gray-200 bg-gray-50/60 px-3 py-3"
                                                 >
-                                                    Suma wag: <b>{pfTotal}%</b>{" "}
-                                                    {pfTotal === 100 ? "(OK)" : "(zostaną przeskalowane)"}
-                                                </div>
-                                                {pfTotal !== 100 && (
-                                                    <div className="text-xs text-gray-500">
-                                                        Symulacja automatycznie normalizuje wagi do 100%.
+                                                    <div className="flex-1 min-w-[12rem]">
+                                                        <TickerAutosuggest
+                                                            onPick={(sym) => {
+                                                                setPfRows((rows) =>
+                                                                    rows.map((x, idx) =>
+                                                                        idx === i
+                                                                            ? { ...x, symbol: sym }
+                                                                            : x
+                                                                    )
+                                                                );
+                                                            }}
+                                                            placeholder={r.symbol || "Symbol"}
+                                                            inputClassName="w-full"
+                                                        />
                                                     </div>
-                                                )}
-                                            </>
-                                        ) : (
-                                            <>
-                                                <div className="text-sm text-gray-600">Generowanie według score</div>
-                                                <div className="space-y-4">
-                                                    <div className="grid gap-4 text-sm sm:grid-cols-2 xl:grid-cols-3">
-                                                        <label className="flex flex-col gap-2 rounded-2xl border border-gray-200 bg-white/80 px-4 py-3 shadow-sm">
-                                                            <span className="text-gray-600">Score</span>
-                                                            <input
-                                                                type="text"
-                                                                value={pfScoreName}
-                                                                onChange={(e) => setPfScoreName(e.target.value)}
-                                                                className="rounded-xl border px-3 py-2"
-                                                                placeholder="np. quality_score"
-                                                            />
-                                                        </label>
-                                                        <label className="flex flex-col gap-2 rounded-2xl border border-gray-200 bg-white/80 px-4 py-3 shadow-sm">
-                                                            <span className="text-gray-600">Liczba spółek (top N)</span>
-                                                            <input
-                                                                type="number"
-                                                                min={1}
-                                                                step={1}
-                                                                value={pfScoreLimit}
-                                                                onChange={(e) => setPfScoreLimit(Number(e.target.value))}
-                                                                className="rounded-xl border px-3 py-2"
-                                                            />
-                                                        </label>
-                                                        <label className="flex flex-col gap-2 rounded-2xl border border-gray-200 bg-white/80 px-4 py-3 shadow-sm">
-                                                            <span className="text-gray-600">Metoda ważenia</span>
-                                                            <select
-                                                                value={pfScoreWeighting}
-                                                                onChange={(e) => setPfScoreWeighting(e.target.value)}
-                                                                className="rounded-xl border px-3 py-2"
-                                                            >
-                                                                <option value="equal">Równe wagi</option>
-                                                                <option value="score">Proporcjonalnie do score</option>
-                                                                <option value="market_cap">Kapitalizacja</option>
-                                                            </select>
-                                                        </label>
-                                                        <label className="flex flex-col gap-2 rounded-2xl border border-gray-200 bg-white/80 px-4 py-3 shadow-sm">
-                                                            <span className="text-gray-600">Sortowanie</span>
-                                                            <select
-                                                                value={pfScoreDirection}
-                                                                onChange={(e) =>
-                                                                    setPfScoreDirection(e.target.value as "asc" | "desc")
-                                                                }
-                                                                className="rounded-xl border px-3 py-2"
-                                                            >
-                                                                <option value="desc">Najwyższy score (malejąco)</option>
-                                                                <option value="asc">Najniższy score (rosnąco)</option>
-                                                            </select>
-                                                        </label>
-                                                        <label className="flex flex-col gap-2 rounded-2xl border border-gray-200 bg-white/80 px-4 py-3 shadow-sm">
-                                                            <span className="text-gray-600">Universe / filtr</span>
-                                                            <input
-                                                                type="text"
-                                                                value={pfScoreUniverse}
-                                                                onChange={(e) => setPfScoreUniverse(e.target.value)}
-                                                                className="rounded-xl border px-3 py-2"
-                                                                placeholder="np. WIG20.WA lub lista tickerów"
-                                                            />
-                                                        </label>
-                                                        <label className="flex flex-col gap-2 rounded-2xl border border-gray-200 bg-white/80 px-4 py-3 shadow-sm">
-                                                            <span className="text-gray-600">Minimalny score</span>
-                                                            <input
-                                                                type="number"
-                                                                step={0.1}
-                                                                value={pfScoreMin}
-                                                                onChange={(e) => setPfScoreMin(e.target.value)}
-                                                                className="rounded-xl border px-3 py-2"
-                                                            />
-                                                        </label>
-                                                        <label className="flex flex-col gap-2 rounded-2xl border border-gray-200 bg-white/80 px-4 py-3 shadow-sm">
-                                                            <span className="text-gray-600">Maksymalny score</span>
-                                                            <input
-                                                                type="number"
-                                                                step={0.1}
-                                                                value={pfScoreMax}
-                                                                onChange={(e) => setPfScoreMax(e.target.value)}
-                                                                className="rounded-xl border px-3 py-2"
-                                                            />
-                                                        </label>
-                                                    </div>
-                                                    <div className="text-xs text-gray-500">
-                                                        Oddziel symbole przecinkami lub spacjami. Backend może także
-                                                        przyjmować nazwy uniwersów (np. indeksy) — sprawdź dokumentację
-                                                        po stronie API.
-                                                    </div>
-                                                </div>
-                                            </>
-                                        )}
-                                    </div>
-
-                                    <div className="space-y-5">
-                                        <div className="grid gap-4 text-sm sm:grid-cols-2 xl:grid-cols-3">
-                                            <label className="flex flex-col gap-2 rounded-2xl border border-gray-200 bg-white/80 px-4 py-3 shadow-sm">
-                                                <span className="text-gray-600">Data startu</span>
-                                                <input
-                                                    type="date"
-                                                    value={pfStart}
-                                                    onChange={(e) => setPfStart(e.target.value)}
-                                                    className="rounded-xl border px-3 py-2"
-                                                />
-                                            </label>
-                                            <label className="flex flex-col gap-2 rounded-2xl border border-gray-200 bg-white/80 px-4 py-3 shadow-sm">
-                                                <span className="text-gray-600">Data końca</span>
-                                                <input
-                                                    type="date"
-                                                    value={pfEnd}
-                                                    onChange={(e) => setPfEnd(e.target.value)}
-                                                    className="rounded-xl border px-3 py-2"
-                                                />
-                                            </label>
-                                            <label className="flex flex-col gap-2 rounded-2xl border border-gray-200 bg-white/80 px-4 py-3 shadow-sm">
-                                                <span className="text-gray-600">Rebalansing</span>
-                                                <select
-                                                    value={pfFreq}
-                                                    onChange={(e) =>
-                                                        setPfFreq(e.target.value as Rebalance)
-                                                    }
-                                                    className="rounded-xl border px-3 py-2"
-                                                >
-                                                    <option value="none">Brak</option>
-                                                    <option value="monthly">Miesięczny</option>
-                                                    <option value="quarterly">Kwartalny</option>
-                                                    <option value="yearly">Roczny</option>
-                                                </select>
-                                            </label>
-                                            <label className="flex flex-col gap-2 rounded-2xl border border-gray-200 bg-white/80 px-4 py-3 shadow-sm">
-                                                <span className="text-gray-600">Kapitał początkowy</span>
-                                                <input
-                                                    type="number"
-                                                    min={0}
-                                                    step={100}
-                                                    value={pfInitial}
-                                                    onChange={(e) => setPfInitial(Number(e.target.value))}
-                                                    className="rounded-xl border px-3 py-2"
-                                                />
-                                            </label>
-                                            <label className="flex flex-col gap-2 rounded-2xl border border-gray-200 bg-white/80 px-4 py-3 shadow-sm">
-                                                <span className="text-gray-600">Koszt transakcyjny (%)</span>
-                                                <input
-                                                    type="number"
-                                                    min={0}
-                                                    step={0.1}
-                                                    value={pfFee}
-                                                    onChange={(e) => setPfFee(Number(e.target.value))}
-                                                    className="rounded-xl border px-3 py-2"
-                                                />
-                                            </label>
-                                            <label className="flex flex-col gap-2 rounded-2xl border border-gray-200 bg-white/80 px-4 py-3 shadow-sm">
-                                                <span className="text-gray-600">Próg rebalansingu (%)</span>
-                                                <input
-                                                    type="number"
-                                                    min={0}
-                                                    step={0.1}
-                                                    value={pfThreshold}
-                                                    onChange={(e) =>
-                                                        setPfThreshold(Number(e.target.value))
-                                                    }
-                                                    className="rounded-xl border px-3 py-2"
-                                                />
-                                            </label>
-                                        </div>
-                                        <div className="space-y-2">
-                                            <span className="text-sm text-gray-600">Benchmark (opcjonalnie)</span>
-                                            <div className="flex flex-wrap items-center gap-2">
-                                                <TickerAutosuggest
-                                                    onPick={(sym) => setPfBenchmark(sym)}
-                                                    placeholder="Dodaj benchmark (np. WIG20.WA)"
-                                                    inputClassName="w-60"
-                                                />
-                                                {pfBenchmark && (
-                                                    <div className="flex items-center gap-2 text-sm text-gray-600">
-                                                        <span className="font-medium text-gray-900">{pfBenchmark}</span>
+                                                    <div className="flex flex-wrap items-center gap-2 md:flex-nowrap">
+                                                        <input
+                                                            type="number"
+                                                            min={0}
+                                                            max={100}
+                                                            step={1}
+                                                            value={r.weight}
+                                                            onChange={(e) =>
+                                                                setPfRows((rows) =>
+                                                                    rows.map((x, idx) =>
+                                                                        idx === i
+                                                                            ? {
+                                                                                  ...x,
+                                                                                  weight: Number(e.target.value),
+                                                                              }
+                                                                            : x
+                                                                    )
+                                                                )
+                                                            }
+                                                            className="w-24 md:w-20 px-3 py-2 rounded-xl border"
+                                                        />
+                                                        <span className="text-sm text-gray-500">%</span>
                                                         <button
-                                                            onClick={() => setPfBenchmark(null)}
+                                                            onClick={() =>
+                                                                setPfRows((rows) => rows.filter((_, idx) => idx !== i))
+                                                            }
                                                             className="px-2 py-1 text-xs rounded-lg border"
                                                         >
-                                                            Wyczyść
+                                                            Usuń
                                                         </button>
                                                     </div>
-                                                )}
-                                                {!pfBenchmark && (
-                                                    <span className="text-xs text-gray-500">
-                                                        Wykres porówna portfel z wybranym benchmarkiem.
-                                                    </span>
-                                                )}
-                                            </div>
-                                        </div>
-                                        {pfRangeInvalid && (
-                                            <div className="text-xs text-rose-600">
-                                                Data końca musi być późniejsza niż data startu.
-                                            </div>
-                                        )}
-                                        <button
-                                            disabled={pfDisableSimulation}
-                                            onClick={runPortfolioSimulation}
-                                            className="w-full md:w-auto px-4 py-2 rounded-xl bg-black text-white disabled:opacity-50"
-                                        >
-                                            {pfLoading
-                                                ? "Liczenie…"
-                                                : pfMode === "manual"
-                                                ? "Symuluj portfel"
-                                                : "Symuluj wg score"}
-                                        </button>
-                                        {pfMode === "manual" ? (
-                                            <>
-                                                {pfHasInvalidWeights && (
-                                                    <div className="text-xs text-rose-600">
-                                                        Wagi muszą być liczbami większymi lub równymi zero.
-                                                    </div>
-                                                )}
-                                                {pfHasMissingSymbols && (
-                                                    <div className="text-xs text-rose-600">
-                                                        Uzupełnij symbole dla pozycji z dodatnią wagą.
-                                                    </div>
-                                                )}
-                                                {!pfHasValidPositions &&
-                                                    !pfHasMissingSymbols &&
-                                                    !pfHasInvalidWeights && (
-                                                        <div className="text-xs text-rose-600">
-                                                            Dodaj co najmniej jedną spółkę z wagą większą od zera.
-                                                        </div>
-                                                    )}
-                                            </>
-                                        ) : (
-                                            <>
-                                                {pfScoreNameInvalid && (
-                                                    <div className="text-xs text-rose-600">
-                                                        Podaj nazwę score, aby zbudować portfel.
-                                                    </div>
-                                                )}
-                                                {pfScoreLimitInvalid && (
-                                                    <div className="text-xs text-rose-600">
-                                                        Wybierz dodatnią liczbę spółek w rankingu.
-                                                    </div>
-                                                )}
-                                            </>
-                                        )}
-                                        {pfErr && (
-                                            <div className="text-sm text-rose-600">Błąd: {pfErr}</div>
-                                        )}
-                                    </div>
-                                </div>
-
-                                {/* Wynik + wykres */}
-                                <div>
-                                    {!pfRes ? (
-                                        <div className="text-sm text-gray-600">
-                                            {pfMode === "manual"
-                                                ? "Skonfiguruj portfel (symbole + wagi), wybierz datę startu i rebalansing, potem uruchom symulację."
-                                                : "Podaj score i parametry rankingu, ustaw zakres dat i uruchom symulację."}
-                                        </div>
-                                    ) : (
-                                        <>
-                                            <PortfolioStatsGrid stats={pfRes.stats} />
-                                            {pfRes.allocations && pfRes.allocations.length > 0 && (
-                                                <div className="mt-6">
-                                                    <AllocationTable allocations={pfRes.allocations} />
                                                 </div>
-                                            )}
-                                            <div className="h-72">
-                                                <ResponsiveContainer width="100%" height="100%">
-                                                    <LineChart data={pfChartData}>
-                                                        <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
-                                                        <XAxis
-                                                            dataKey="date"
-                                                            tick={{ fontSize: 12 }}
-                                                            tickMargin={8}
-                                                        />
-                                                        <YAxis tick={{ fontSize: 12 }} width={60} />
-                                                        <Tooltip
-                                                            formatter={(value: number) =>
-                                                                typeof value === "number"
-                                                                    ? value.toFixed(2)
-                                                                    : value
-                                                            }
-                                                        />
-                                                        <Legend verticalAlign="top" height={36} />
-                                                        <Line
-                                                            type="monotone"
-                                                            dataKey="portfolio"
-                                                            name="Portfel"
-                                                            stroke="#111827"
-                                                            dot={false}
-                                                        />
-                                                        {pfRes.benchmark && pfRes.benchmark.length > 0 && (
-                                                            <Line
-                                                                type="monotone"
-                                                                dataKey="benchmark"
-                                                                name="Benchmark"
-                                                                stroke="#6b7280"
-                                                                strokeDasharray="4 2"
-                                                                dot={false}
-                                                            />
-                                                        )}
-                                                    </LineChart>
-                                                </ResponsiveContainer>
-                                            </div>
-                                            {pfRes.rebalances && pfRes.rebalances.length > 0 && (
-                                                <div className="mt-6">
-                                                    <RebalanceTimeline events={pfRes.rebalances} />
-                                                </div>
-                                            )}
-                                            <div className="text-xs text-gray-500 mt-2 space-y-1">
-                                                <div>
-                                                    Zakres: {pfStart} → {pfEnd}. Rebalansing: {pfFreq}
-                                                    {pfThreshold > 0
-                                                        ? ` (próg ${pfThreshold.toFixed(1)}%)`
-                                                        : ""}
-                                                    . Koszt transakcyjny: {pfFee.toFixed(2)}%.
-                                                </div>
-                                                <div>
-                                                    Wartość początkowa:
-                                                    {typeof pfRes.stats.initial_value === "number"
-                                                        ? ` ${pfRes.stats.initial_value.toFixed(2)}`
-                                                        : ` ${pfInitial.toFixed(2)}`} {" "}• Wagi są
-                                                    normalizowane do 100%.
-                                                </div>
-                                                <div>
-                                                    {pfRes.benchmark && pfRes.benchmark.length > 0
-                                                        ? `Benchmark: ${pfLastBenchmark ?? "dostarczony w odpowiedzi"}.`
-                                                        : "Bez benchmarku."}
-                                                </div>
+                                            ))}
+                                            <button
+                                                onClick={() =>
+                                                    setPfRows((rows) => [
+                                                        ...rows,
+                                                        { symbol: "", weight: 0 },
+                                                    ])
+                                                }
+                                                className="px-3 py-2 rounded-xl border border-dashed text-sm"
+                                            >
+                                                Dodaj pozycję
+                                            </button>
+                                            <div className="text-xs text-gray-500">
+                                                Suma wag: {pfTotal.toFixed(1)}% (normalizujemy do 100%).
                                             </div>
                                         </>
+                                    ) : (
+                                        <div className="space-y-3">
+                                            <div className="grid gap-3 md:grid-cols-2">
+                                                <label className="flex flex-col gap-2">
+                                                    <span className="text-xs uppercase tracking-wide text-gray-600">
+                                                        Score
+                                                    </span>
+                                                    <input
+                                                        type="text"
+                                                        value={pfScoreName}
+                                                        onChange={(e) => setPfScoreName(e.target.value)}
+                                                        className="rounded-xl border px-3 py-2"
+                                                        placeholder="np. quality_score"
+                                                    />
+                                                </label>
+                                                <label className="flex flex-col gap-2">
+                                                    <span className="text-xs uppercase tracking-wide text-gray-600">
+                                                        Limit spółek
+                                                    </span>
+                                                    <input
+                                                        type="number"
+                                                        min={1}
+                                                        step={1}
+                                                        value={pfScoreLimit}
+                                                        onChange={(e) => setPfScoreLimit(Number(e.target.value))}
+                                                        className="rounded-xl border px-3 py-2"
+                                                    />
+                                                </label>
+                                            </div>
+                                            <div className="grid gap-3 md:grid-cols-3">
+                                                <label className="flex flex-col gap-2">
+                                                    <span className="text-xs uppercase tracking-wide text-gray-600">
+                                                        Wagi
+                                                    </span>
+                                                    <select
+                                                        value={pfScoreWeighting}
+                                                        onChange={(e) => setPfScoreWeighting(e.target.value)}
+                                                        className="rounded-xl border px-3 py-2"
+                                                    >
+                                                        <option value="equal">Równe</option>
+                                                        <option value="score">Proporcjonalne do score</option>
+                                                        <option value="volatility_inverse">Odwrotność zmienności</option>
+                                                    </select>
+                                                </label>
+                                                <div>
+                                                    <span className="text-xs uppercase tracking-wide text-gray-600">
+                                                        Kierunek
+                                                    </span>
+                                                    <div className="mt-1 flex flex-wrap gap-2">
+                                                        <Chip
+                                                            active={pfScoreDirection === "desc"}
+                                                            onClick={() => setPfScoreDirection("desc")}
+                                                        >
+                                                            Najwyższy score
+                                                        </Chip>
+                                                        <Chip
+                                                            active={pfScoreDirection === "asc"}
+                                                            onClick={() => setPfScoreDirection("asc")}
+                                                        >
+                                                            Najniższy score
+                                                        </Chip>
+                                                    </div>
+                                                </div>
+                                                <label className="flex flex-col gap-2">
+                                                    <span className="text-xs uppercase tracking-wide text-gray-600">
+                                                        Universe / filtr
+                                                    </span>
+                                                    <input
+                                                        type="text"
+                                                        value={pfScoreUniverse}
+                                                        onChange={(e) => setPfScoreUniverse(e.target.value)}
+                                                        className="rounded-xl border px-3 py-2"
+                                                        placeholder="np. WIG20.WA"
+                                                    />
+                                                </label>
+                                            </div>
+                                            <div className="grid gap-3 md:grid-cols-2">
+                                                <label className="flex flex-col gap-2">
+                                                    <span className="text-xs uppercase tracking-wide text-gray-600">
+                                                        Min score
+                                                    </span>
+                                                    <input
+                                                        type="number"
+                                                        value={pfScoreMin}
+                                                        onChange={(e) => setPfScoreMin(e.target.value)}
+                                                        className="rounded-xl border px-3 py-2"
+                                                    />
+                                                </label>
+                                                <label className="flex flex-col gap-2">
+                                                    <span className="text-xs uppercase tracking-wide text-gray-600">
+                                                        Max score
+                                                    </span>
+                                                    <input
+                                                        type="number"
+                                                        value={pfScoreMax}
+                                                        onChange={(e) => setPfScoreMax(e.target.value)}
+                                                        className="rounded-xl border px-3 py-2"
+                                                    />
+                                                </label>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                                <div className="space-y-4">
+                                    <div className="grid gap-3 md:grid-cols-2">
+                                        <label className="flex flex-col gap-2 rounded-2xl border border-gray-200 bg-white/80 px-4 py-3 shadow-sm">
+                                            <span className="text-gray-600">Data startu</span>
+                                            <input
+                                                type="date"
+                                                value={pfStart}
+                                                onChange={(e) => setPfStart(e.target.value)}
+                                                className="rounded-xl border px-3 py-2"
+                                            />
+                                        </label>
+                                        <label className="flex flex-col gap-2 rounded-2xl border border-gray-200 bg-white/80 px-4 py-3 shadow-sm">
+                                            <span className="text-gray-600">Data końca</span>
+                                            <input
+                                                type="date"
+                                                value={pfEnd}
+                                                onChange={(e) => setPfEnd(e.target.value)}
+                                                className="rounded-xl border px-3 py-2"
+                                            />
+                                        </label>
+                                        <label className="flex flex-col gap-2 rounded-2xl border border-gray-200 bg-white/80 px-4 py-3 shadow-sm">
+                                            <span className="text-gray-600">Rebalansing</span>
+                                            <select
+                                                value={pfFreq}
+                                                onChange={(e) => setPfFreq(e.target.value as Rebalance)}
+                                                className="rounded-xl border px-3 py-2"
+                                            >
+                                                <option value="monthly">Miesięcznie</option>
+                                                <option value="quarterly">Kwartalnie</option>
+                                                <option value="yearly">Rocznie</option>
+                                                <option value="none">Bez rebalansingu</option>
+                                            </select>
+                                        </label>
+                                        <label className="flex flex-col gap-2 rounded-2xl border border-gray-200 bg-white/80 px-4 py-3 shadow-sm">
+                                            <span className="text-gray-600">Kapitał początkowy</span>
+                                            <input
+                                                type="number"
+                                                min={0}
+                                                step={100}
+                                                value={pfInitial}
+                                                onChange={(e) => setPfInitial(Number(e.target.value))}
+                                                className="rounded-xl border px-3 py-2"
+                                            />
+                                        </label>
+                                        <label className="flex flex-col gap-2 rounded-2xl border border-gray-200 bg-white/80 px-4 py-3 shadow-sm">
+                                            <span className="text-gray-600">Koszt transakcyjny (%)</span>
+                                            <input
+                                                type="number"
+                                                min={0}
+                                                step={0.1}
+                                                value={pfFee}
+                                                onChange={(e) => setPfFee(Number(e.target.value))}
+                                                className="rounded-xl border px-3 py-2"
+                                            />
+                                        </label>
+                                        <label className="flex flex-col gap-2 rounded-2xl border border-gray-200 bg-white/80 px-4 py-3 shadow-sm">
+                                            <span className="text-gray-600">Próg rebalansingu (%)</span>
+                                            <input
+                                                type="number"
+                                                min={0}
+                                                step={0.1}
+                                                value={pfThreshold}
+                                                onChange={(e) => setPfThreshold(Number(e.target.value))}
+                                                className="rounded-xl border px-3 py-2"
+                                            />
+                                        </label>
+                                    </div>
+                                    <div className="space-y-2">
+                                        <span className="text-sm text-gray-600">Benchmark (opcjonalnie)</span>
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            <TickerAutosuggest
+                                                onPick={(sym) => setPfBenchmark(sym)}
+                                                placeholder="Dodaj benchmark (np. WIG20.WA)"
+                                                inputClassName="w-60"
+                                            />
+                                            {pfBenchmark && (
+                                                <div className="flex items-center gap-2 text-sm text-gray-600">
+                                                    <span className="font-medium text-gray-900">{pfBenchmark}</span>
+                                                    <button
+                                                        onClick={() => setPfBenchmark(null)}
+                                                        className="px-2 py-1 text-xs rounded-lg border"
+                                                    >
+                                                        Wyczyść
+                                                    </button>
+                                                </div>
+                                            )}
+                                            {!pfBenchmark && (
+                                                <span className="text-xs text-gray-500">
+                                                    Wykres porówna portfel z wybranym benchmarkiem.
+                                                </span>
+                                            )}
+                                        </div>
+                                    </div>
+                                    {pfRangeInvalid && (
+                                        <div className="text-xs text-rose-600">
+                                            Data końca musi być późniejsza niż data startu.
+                                        </div>
+                                    )}
+                                    <button
+                                        disabled={pfDisableSimulation}
+                                        onClick={runPortfolioSimulation}
+                                        className="w-full md:w-auto px-4 py-2 rounded-xl bg-black text-white disabled:opacity-50"
+                                    >
+                                        {pfLoading
+                                            ? "Liczenie…"
+                                            : pfMode === "manual"
+                                            ? "Symuluj portfel"
+                                            : "Symuluj wg score"}
+                                    </button>
+                                    {pfMode === "manual" ? (
+                                        <>
+                                            {pfHasInvalidWeights && (
+                                                <div className="text-xs text-rose-600">
+                                                    Wagi muszą być liczbami większymi lub równymi zero.
+                                                </div>
+                                            )}
+                                            {pfHasMissingSymbols && (
+                                                <div className="text-xs text-rose-600">
+                                                    Uzupełnij symbole dla pozycji z dodatnią wagą.
+                                                </div>
+                                            )}
+                                            {!pfHasValidPositions &&
+                                                !pfHasMissingSymbols &&
+                                                !pfHasInvalidWeights && (
+                                                    <div className="text-xs text-rose-600">
+                                                        Dodaj co najmniej jedną spółkę z wagą większą od zera.
+                                                    </div>
+                                                )}
+                                        </>
+                                    ) : (
+                                        <>
+                                            {pfScoreNameInvalid && (
+                                                <div className="text-xs text-rose-600">
+                                                    Podaj nazwę score, aby zbudować portfel.
+                                                </div>
+                                            )}
+                                            {pfScoreLimitInvalid && (
+                                                <div className="text-xs text-rose-600">
+                                                    Wybierz dodatnią liczbę spółek w rankingu.
+                                                </div>
+                                            )}
+                                        </>
+                                    )}
+                                    {pfErr && (
+                                        <div className="text-sm text-rose-600">Błąd: {pfErr}</div>
                                     )}
                                 </div>
                             </div>
-                        </Card>
-                    </div>
 
-                    {/* Prawa kolumna */}
-                    <div className="space-y-6">
-                        <Card title={`Fundamenty – ${symbolLabel}`}>
-                            <div className="text-sm text-gray-500">
-                                {symbol
-                                    ? "Dane przykładowe — podłączymy realne API fundamentów w kolejnym kroku."
-                                    : "Dodaj spółkę, aby zobaczyć sekcję fundamentów."}
+                            <div className="space-y-4">
+                                {!pfRes ? (
+                                    <div className="text-sm text-gray-600">
+                                        {pfMode === "manual"
+                                            ? "Skonfiguruj portfel (symbole + wagi), wybierz datę startu i rebalansing, potem uruchom symulację."
+                                            : "Podaj score i parametry rankingu, ustaw zakres dat i uruchom symulację."}
+                                    </div>
+                                ) : (
+                                    <>
+                                        <PortfolioStatsGrid stats={pfRes.stats} />
+                                        {pfRes.allocations && pfRes.allocations.length > 0 && (
+                                            <div className="mt-6">
+                                                <AllocationTable allocations={pfRes.allocations} />
+                                            </div>
+                                        )}
+                                        <div className="h-72">
+                                            <ResponsiveContainer width="100%" height="100%">
+                                                <LineChart data={pfChartData}>
+                                                    <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
+                                                    <XAxis dataKey="date" tick={{ fontSize: 12 }} tickMargin={8} />
+                                                    <YAxis tick={{ fontSize: 12 }} width={60} />
+                                                    <Tooltip
+                                                        formatter={(value: number) =>
+                                                            typeof value === "number" ? value.toFixed(2) : value
+                                                        }
+                                                    />
+                                                    <Legend verticalAlign="top" height={36} />
+                                                    <Line
+                                                        type="monotone"
+                                                        dataKey="portfolio"
+                                                        name="Portfel"
+                                                        stroke="#111827"
+                                                        dot={false}
+                                                    />
+                                                    {pfRes.benchmark && pfRes.benchmark.length > 0 && (
+                                                        <Line
+                                                            type="monotone"
+                                                            dataKey="benchmark"
+                                                            name="Benchmark"
+                                                            stroke="#6b7280"
+                                                            strokeDasharray="4 2"
+                                                            dot={false}
+                                                        />
+                                                    )}
+                                                </LineChart>
+                                            </ResponsiveContainer>
+                                        </div>
+                                        {pfRes.rebalances && pfRes.rebalances.length > 0 && (
+                                            <div className="mt-6">
+                                                <RebalanceTimeline events={pfRes.rebalances} />
+                                            </div>
+                                        )}
+                                        <div className="text-xs text-gray-500 mt-2 space-y-1">
+                                            <div>
+                                                Zakres: {pfStart} → {pfEnd}. Rebalansing: {pfFreq}
+                                                {pfThreshold > 0 ? ` (próg ${pfThreshold.toFixed(1)}%)` : ""}.
+                                                Koszt transakcyjny: {pfFee.toFixed(2)}%.
+                                            </div>
+                                            <div>
+                                                Wartość początkowa:
+                                                {typeof pfRes.stats.initial_value === "number"
+                                                    ? ` ${pfRes.stats.initial_value.toFixed(2)}`
+                                                    : ` ${pfInitial.toFixed(2)}`} {" "}• Wagi są normalizowane do 100%.
+                                            </div>
+                                            <div>
+                                                {pfRes.benchmark && pfRes.benchmark.length > 0
+                                                    ? `Benchmark: ${pfLastBenchmark ?? "dostarczony w odpowiedzi"}.`
+                                                    : "Bez benchmarku."}
+                                            </div>
+                                        </div>
+                                    </>
+                                )}
                             </div>
-                            {symbol && (
-                                <div className="mt-4 grid grid-cols-2 gap-y-2 text-sm">
-                                    <div className="text-gray-500">Kapitalizacja</div>
-                                    <div>$—</div>
-                                    <div className="text-gray-500">P/E (TTM)</div>
-                                    <div>—</div>
-                                    <div className="text-gray-500">Przychody</div>
-                                    <div>—</div>
-                                    <div className="text-gray-500">Marża netto</div>
-                                    <div>—</div>
-                                </div>
-                            )}
-                        </Card>
-
-                        <Card title="Skaner (demo)" right={<Chip active>Beta</Chip>}>
-                            <ul className="text-sm list-disc pl-5 space-y-1">
-                                <li>Wysoki wolumen vs 20-sesyjna średnia</li>
-                                <li>RSI &lt; 30 (wyprzedanie)</li>
-                                <li>Przebicie SMA50 od dołu</li>
-                                <li>Nowe 52-tygodniowe maksimum</li>
-                            </ul>
-                            <p className="text-xs text-gray-500 mt-3">
-                                Podmienimy na realny backend skanera.
-                            </p>
-                        </Card>
-                    </div>
-                </div>
+                        </div>
+                    </Card>
+                </Section>
 
                 <footer className="pt-6 text-center text-sm text-gray-500">
                     © {new Date().getFullYear()} Analityka Rynków • MVP
