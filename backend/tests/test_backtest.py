@@ -212,6 +212,8 @@ def test_parse_backtest_get_accepts_comma_separated_values():
         top_n=None,
         weighting="equal",
         components=None,
+        score=None,
+        direction="desc",
         filters_include=None,
         filters_exclude=None,
         filters_prefixes=None,
@@ -220,3 +222,67 @@ def test_parse_backtest_get_accepts_comma_separated_values():
     assert req.manual is not None
     assert req.manual.symbols == ["AAA", "BBB"]
     assert req.manual.weights == [pytest.approx(0.6), pytest.approx(0.4)]
+
+
+def test_parse_backtest_get_supports_score_mode():
+    req = main._parse_backtest_get(
+        mode="score",
+        start="2023-01-01",
+        rebalance="monthly",
+        symbols=None,
+        weights=None,
+        top_n=3,
+        weighting="score",
+        components=None,
+        score="quality_score",
+        direction="asc",
+        filters_include=None,
+        filters_exclude=None,
+        filters_prefixes=None,
+    )
+
+    assert req.auto is not None
+    assert req.auto.top_n == 3
+    assert req.auto.direction == "asc"
+    assert len(req.auto.components) > 0
+
+
+def test_portfolio_score_respects_ascending_direction(monkeypatch):
+    data = {
+        "AAA": [
+            ("2023-01-01", 100.0),
+            ("2023-01-02", 110.0),
+            ("2023-01-03", 120.0),
+            ("2023-01-04", 130.0),
+        ],
+        "BBB": [
+            ("2023-01-01", 100.0),
+            ("2023-01-02", 99.0),
+            ("2023-01-03", 98.0),
+            ("2023-01-04", 97.0),
+        ],
+        "CCC": [
+            ("2023-01-01", 50.0),
+            ("2023-01-02", 50.0),
+            ("2023-01-03", 50.0),
+            ("2023-01-04", 50.0),
+        ],
+    }
+
+    fake = FakeClickHouse(data)
+    monkeypatch.setattr(main, "get_ch", lambda: fake)
+
+    request = main.PortfolioScoreRequest(
+        auto=main.AutoSelectionConfig(
+            top_n=1,
+            components=[
+                main.ScoreComponent(lookback_days=2, metric="total_return", weight=5)
+            ],
+            weighting="equal",
+            direction="asc",
+        )
+    )
+
+    result = main.backtest_portfolio_score(request)
+
+    assert result[0].raw == "BBB"

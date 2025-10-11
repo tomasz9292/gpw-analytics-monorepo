@@ -108,8 +108,11 @@ Content-Type: application/json
 
 * Manual: `/backtest/portfolio?mode=manual&symbols=CDR.WA&symbols=PKN.WA&start=2022-01-01`
 * Auto: `/backtest/portfolio?mode=auto&top_n=3&components=252:total_return:5`
+* Score (preset): `/backtest/portfolio?mode=score&score=quality_score&top_n=5`
 
-Parametr `components` można podawać jako JSON w query stringu, np. `%7B%22lookback_days%22%3A126%2C%22metric%22%3A%22total_return%22%2C%22weight%22%3A5%7D`.
+Parametr `components` można podawać jako JSON w query stringu, np. `%7B%22lookback_days%22%3A126%2C%22metric%22%3A%22total_return%22%2C%22weight%22%3A5%7D`. Tryb `score`
+obsługuje dodatkowo predefiniowane rankingi (np. `quality_score`) i pozwala na ustawienie `direction=asc` lub
+`direction=desc` (domyślnie `desc`).
 
 ## Struktura odpowiedzi
 

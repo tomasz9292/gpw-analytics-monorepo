@@ -341,6 +341,17 @@ class ScoreComponent(BaseModel):
         return value
 
 
+SCORE_PRESETS: Dict[str, List[ScoreComponent]] = {
+    # Ranking jakościowy używany w demie frontendu.
+    "quality_score": [
+        ScoreComponent(lookback_days=252, metric="total_return", weight=40, direction="desc"),
+        ScoreComponent(lookback_days=126, metric="total_return", weight=25, direction="desc"),
+        ScoreComponent(lookback_days=252, metric="max_drawdown", weight=20, direction="asc"),
+        ScoreComponent(lookback_days=63, metric="volatility", weight=15, direction="asc"),
+    ],
+}
+
+
 class UniverseFilters(BaseModel):
     include: Optional[List[str]] = None
     exclude: Optional[List[str]] = None
@@ -385,6 +396,7 @@ class AutoSelectionConfig(BaseModel):
     components: List[ScoreComponent] = Field(..., min_length=1)
     filters: Optional[UniverseFilters] = None
     weighting: str = Field("equal", pattern="^(equal|score)$")
+    direction: str = Field("desc", pattern="^(asc|desc)$")
 
 
 class BacktestPortfolioRequest(BaseModel):
@@ -848,6 +860,7 @@ def _build_auto_config_from_preview(req: ScorePreviewRequest) -> AutoSelectionCo
         components=components,
         filters=filters,
         weighting="equal",
+        direction="asc" if req.sort == "asc" else "desc",
     )
 
 
@@ -1006,6 +1019,8 @@ def _run_backtest(req: BacktestPortfolioRequest) -> PortfolioResp:
             raise HTTPException(404, "Brak symboli do oceny")
 
         ranked = _rank_symbols_by_score(ch, candidates, req.auto.components)
+        if req.auto.direction == "asc":
+            ranked = list(reversed(ranked))
         if not ranked:
             raise HTTPException(404, "Brak symboli ze wszystkimi wymaganymi danymi")
 
@@ -1042,6 +1057,8 @@ def _compute_portfolio_score(req: PortfolioScoreRequest) -> List[PortfolioScoreI
         raise HTTPException(404, "Brak symboli do oceny")
 
     ranked = _rank_symbols_by_score(ch, candidates, req.auto.components)
+    if req.auto.direction == "asc":
+        ranked = list(reversed(ranked))
     if not ranked:
         raise HTTPException(404, "Brak symboli ze wszystkimi wymaganymi danymi")
 
@@ -1159,6 +1176,14 @@ def _parse_backtest_get(
             "lookback:metric:weight (np. 252:total_return:5)."
         ),
     ),
+    score: Optional[str] = Query(
+        default=None,
+        description="Nazwa predefiniowanego score'u (np. quality_score) dla trybu score.",
+    ),
+    direction: str = Query(
+        default="desc",
+        description="Sortowanie rankingu (desc lub asc).",
+    ),
     filters_include: Optional[List[str]] = Query(
         default=None,
         description="Filtr: bierz pod uwagę tylko wskazane symbole.",
@@ -1192,31 +1217,14 @@ def _parse_backtest_get(
                     collected.append(part)
         return collected
 
-    mode_normalized = mode.strip().lower()
-    if mode_normalized == "manual":
-        parsed_symbols = _split_csv(symbols)
-        if not parsed_symbols:
-            raise HTTPException(400, "Tryb manual wymaga co najmniej jednego symbolu")
-        manual_payload: Dict[str, object] = {"symbols": parsed_symbols}
-        parsed_weights = _split_csv(weights)
-        if parsed_weights:
-            try:
-                manual_payload["weights"] = [float(item) for item in parsed_weights]
-            except ValueError as exc:
-                raise HTTPException(400, "Wagi muszą być liczbami") from exc
-        payload["manual"] = manual_payload
-    elif mode_normalized == "auto":
-        if top_n is None:
-            raise HTTPException(400, "Tryb auto wymaga parametru top_n")
-        if not components:
-            raise HTTPException(400, "Tryb auto wymaga przynajmniej jednego komponentu")
-
-        parsed_components: List[Dict[str, object]] = []
-        for raw in components:
+    def _parse_components(raw_components: Optional[List[str]]) -> List[Dict[str, object]]:
+        parsed: List[Dict[str, object]] = []
+        if not raw_components:
+            return parsed
+        for raw in raw_components:
             raw_value = raw.strip()
             if not raw_value:
                 continue
-            comp_data: Dict[str, object]
             try:
                 loaded = json.loads(raw_value)
             except json.JSONDecodeError:
@@ -1243,8 +1251,29 @@ def _parse_backtest_get(
                 if not isinstance(loaded, dict):
                     raise HTTPException(400, "JSON komponentu musi być obiektem")
                 comp_data = loaded
-            parsed_components.append(comp_data)
+            parsed.append(comp_data)
+        return parsed
 
+    mode_normalized = mode.strip().lower()
+    direction_normalized = direction.strip().lower()
+    if direction_normalized not in {"asc", "desc"}:
+        raise HTTPException(400, "Parametr direction musi przyjmować wartości asc lub desc")
+    if mode_normalized == "manual":
+        parsed_symbols = _split_csv(symbols)
+        if not parsed_symbols:
+            raise HTTPException(400, "Tryb manual wymaga co najmniej jednego symbolu")
+        manual_payload: Dict[str, object] = {"symbols": parsed_symbols}
+        parsed_weights = _split_csv(weights)
+        if parsed_weights:
+            try:
+                manual_payload["weights"] = [float(item) for item in parsed_weights]
+            except ValueError as exc:
+                raise HTTPException(400, "Wagi muszą być liczbami") from exc
+        payload["manual"] = manual_payload
+    elif mode_normalized == "auto":
+        if top_n is None:
+            raise HTTPException(400, "Tryb auto wymaga parametru top_n")
+        parsed_components = _parse_components(components)
         if not parsed_components:
             raise HTTPException(400, "Lista komponentów nie może być pusta")
 
@@ -1252,6 +1281,7 @@ def _parse_backtest_get(
             "top_n": top_n,
             "weighting": weighting,
             "components": parsed_components,
+            "direction": direction_normalized,
         }
 
         if filters_include or filters_exclude or filters_prefixes:
@@ -1265,8 +1295,43 @@ def _parse_backtest_get(
             auto_payload["filters"] = filters_payload
 
         payload["auto"] = auto_payload
+    elif mode_normalized == "score":
+        parsed_components = _parse_components(components)
+        if not parsed_components:
+            if not score or not score.strip():
+                raise HTTPException(
+                    400, "Tryb score wymaga parametru score lub listy komponentów"
+                )
+            score_key = score.strip().lower()
+            preset_components = SCORE_PRESETS.get(score_key)
+            if not preset_components:
+                raise HTTPException(404, f"Nieznany score: {score}")
+            parsed_components = [comp.model_dump() for comp in preset_components]
+
+        top_value = top_n or max(len(parsed_components), 1)
+
+        auto_payload = {
+            "top_n": top_value,
+            "weighting": weighting,
+            "components": parsed_components,
+            "direction": direction_normalized,
+        }
+
+        if filters_include or filters_exclude or filters_prefixes:
+            filters_payload = {}
+            if filters_include:
+                filters_payload["include"] = list(filters_include)
+            if filters_exclude:
+                filters_payload["exclude"] = list(filters_exclude)
+            if filters_prefixes:
+                filters_payload["prefixes"] = list(filters_prefixes)
+            auto_payload["filters"] = filters_payload
+
+        payload["auto"] = auto_payload
     else:
-        raise HTTPException(400, "Parametr mode musi przyjmować wartości manual lub auto")
+        raise HTTPException(
+            400, "Parametr mode musi przyjmować wartości manual, auto lub score"
+        )
 
     try:
         return BacktestPortfolioRequest.model_validate(payload)
