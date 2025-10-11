@@ -2528,11 +2528,17 @@ export default function Page() {
                                     {scoreRules.map((rule, idx) => (
                                         <div
                                             key={rule.id}
-                                            className="rounded-2xl border border-soft bg-soft-surface p-4"
+                                            className="relative rounded-2xl border border-soft bg-soft-surface p-4"
                                         >
-                                            <div className="flex items-start justify-between gap-4">
-                                                <div className="space-y-3 flex-1">
-                                                    <div className="grid gap-3 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+                                            <button
+                                                type="button"
+                                                onClick={() => removeScoreRule(rule.id)}
+                                                className="absolute right-4 top-4 inline-flex items-center justify-center rounded-lg border border-soft px-2 py-1 text-xs text-muted transition hover:border-[var(--color-primary)] hover:text-primary"
+                                            >
+                                                Usuń
+                                            </button>
+                                            <div className="space-y-3 pt-8 md:pt-3">
+                                                <div className="grid gap-3 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
                                                         <label className="flex flex-col gap-2">
                                                             <span className="text-xs uppercase tracking-wide text-muted">
                                                                 Metryka
@@ -2704,14 +2710,6 @@ export default function Page() {
                                                         </div>
                                                     </div>
                                                 </div>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => removeScoreRule(rule.id)}
-                                                    className="px-2 py-1 text-xs rounded-lg border border-soft text-muted transition hover:border-[var(--color-primary)] hover:text-primary"
-                                                >
-                                                    Usuń
-                                                </button>
-                                            </div>
                                             {idx === scoreRules.length - 1 && (
                                                 <div className="mt-3 text-xs text-subtle">
                                                     Zmieniaj wagi i parametry, aby zobaczyć wpływ na ranking.
