@@ -4,7 +4,9 @@ from __future__ import annotations
 import io
 import json
 import os
+import statistics
 from datetime import date, datetime, timedelta
+from math import sqrt
 from typing import Dict, List, Optional, Tuple
 
 from urllib.parse import parse_qs, urlparse
@@ -20,6 +22,8 @@ from pydantic import BaseModel, Field, ValidationError, field_validator, model_v
 # =========================
 
 TABLE_OHLC = os.getenv("TABLE_OHLC", "ohlc")
+
+ALLOWED_SCORE_METRICS = {"total_return", "volatility", "max_drawdown", "sharpe"}
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -326,14 +330,14 @@ class PortfolioScoreItem(BaseModel):
 class ScoreComponent(BaseModel):
     lookback_days: int = Field(..., ge=1, le=3650)
     metric: str = Field(..., description="Typ metryki score'u (np. total_return)")
-    weight: int = Field(..., ge=1, le=10)
+    weight: float = Field(..., gt=0)
+    direction: str = Field("desc", pattern="^(asc|desc)$")
 
     @field_validator("metric")
     @classmethod
     def _validate_metric(cls, value: str) -> str:
-        allowed = {"total_return"}
-        if value not in allowed:
-            raise ValueError(f"metric must be one of {sorted(allowed)}")
+        if value not in ALLOWED_SCORE_METRICS:
+            raise ValueError(f"metric must be one of {sorted(ALLOWED_SCORE_METRICS)}")
         return value
 
 
@@ -434,6 +438,49 @@ class BacktestPortfolioTooling(BaseModel):
 
 class PortfolioScoreRequest(BaseModel):
     auto: AutoSelectionConfig
+
+
+class ScoreRulePayload(BaseModel):
+    metric: str
+    weight: float | None = None
+    direction: str | None = Field(None, pattern="^(asc|desc)$")
+    lookback_days: int | None = Field(None, ge=5, le=3650)
+    lookback: int | None = Field(None, ge=5, le=3650)
+
+
+class ScorePreviewRequest(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    rules: List[ScoreRulePayload] = Field(..., min_length=1)
+    limit: Optional[int] = Field(None, ge=1, le=100)
+    universe: Optional[List[str]] = None
+    sort: Optional[str] = Field(None, pattern="^(asc|desc)$")
+
+    @field_validator("universe", mode="before")
+    @classmethod
+    def _normalize_universe(cls, value):
+        if value is None:
+            return value
+        if isinstance(value, str):
+            tokens = [token.strip() for token in value.split(",") if token.strip()]
+            return tokens
+        return list(value)
+
+
+class ScorePreviewRow(BaseModel):
+    symbol: str
+    raw: str
+    score: float
+    rank: int
+    metrics: Dict[str, float]
+
+
+class ScorePreviewResponse(BaseModel):
+    name: Optional[str] = None
+    as_of: str
+    universe_count: int
+    rows: List[ScorePreviewRow]
+    meta: Dict[str, object]
 
 
 # =========================
@@ -558,54 +605,122 @@ def _fetch_close_history(ch_client, raw_symbol: str) -> List[Tuple[str, float]]:
     return [(str(d), float(c)) for (d, c) in rows]
 
 
-def _normalize_return(value: float) -> float:
-    return max(0.0, min(2.0, 1.0 + value))
-
-
-def _compute_component_return(
+def _slice_closes_window(
     closes: List[Tuple[str, float]], lookback_days: int
+) -> List[Tuple[datetime, float]]:
+    if not closes:
+        return []
+
+    last_date_str, _ = closes[-1]
+    last_dt = datetime.fromisoformat(last_date_str).date()
+    min_dt = last_dt - timedelta(days=lookback_days)
+
+    window: List[Tuple[datetime, float]] = []
+    for date_str, close in closes:
+        dt = datetime.fromisoformat(date_str).date()
+        if dt < min_dt:
+            continue
+        if close <= 0:
+            continue
+        window.append((dt, close))
+
+    return window
+
+
+def _compute_metric_value(
+    closes: List[Tuple[str, float]], metric: str, lookback_days: int
 ) -> Optional[float]:
     if not closes:
         return None
 
-    last_date_str, last_close = closes[-1]
-    if last_close <= 0:
+    if metric == "total_return":
+        last_date_str, last_close = closes[-1]
+        if last_close <= 0:
+            return None
+        last_dt = datetime.fromisoformat(last_date_str).date()
+        target_dt = last_dt - timedelta(days=lookback_days)
+        base_close = None
+        for date_str, close in reversed(closes):
+            dt = datetime.fromisoformat(date_str).date()
+            if dt <= target_dt:
+                if close > 0:
+                    base_close = close
+                break
+        if base_close is None or base_close <= 0:
+            return None
+        return (last_close / base_close) - 1.0
+
+    window = _slice_closes_window(closes, lookback_days)
+    if len(window) < 2:
         return None
 
-    last_dt = datetime.fromisoformat(last_date_str).date()
-    target_date = last_dt - timedelta(days=lookback_days)
+    returns: List[float] = []
+    for (_, prev_close), (_, next_close) in zip(window, window[1:]):
+        if prev_close <= 0:
+            continue
+        returns.append(next_close / prev_close - 1.0)
 
-    base_close = None
-    for date_str, close in reversed(closes):
-        dt = datetime.fromisoformat(date_str).date()
-        if dt <= target_date:
-            if close > 0:
-                base_close = close
-            break
+    if metric == "volatility":
+        if len(returns) < 2:
+            return None
+        return statistics.pstdev(returns)
 
-    if base_close is None or base_close <= 0:
-        return None
+    if metric == "max_drawdown":
+        peak = window[0][1]
+        max_dd = 0.0
+        for _, price in window:
+            if price > peak:
+                peak = price
+            drawdown = price / peak - 1.0
+            if drawdown < max_dd:
+                max_dd = drawdown
+        return abs(max_dd)
 
-    return (last_close / base_close) - 1.0
+    if metric == "sharpe":
+        if len(returns) < 2:
+            return None
+        avg = statistics.mean(returns)
+        stdev = statistics.pstdev(returns)
+        if stdev <= 1e-12:
+            return None
+        return (avg / stdev) * sqrt(252)
+
+    return None
 
 
 def _calculate_symbol_score(
-    ch_client, raw_symbol: str, components: List[ScoreComponent]
-) -> Optional[float]:
+    ch_client,
+    raw_symbol: str,
+    components: List[ScoreComponent],
+    include_metrics: bool = False,
+) -> Optional[Tuple[float, Dict[str, float]] | float]:
     closes = _fetch_close_history(ch_client, raw_symbol)
     if not closes:
         return None
 
-    total = 0.0
-    for comp in components:
-        if comp.metric != "total_return":
-            continue
-        comp_ret = _compute_component_return(closes, comp.lookback_days)
-        if comp_ret is None:
-            return None
-        total += comp.weight * _normalize_return(comp_ret)
+    total_weight = 0.0
+    weighted = 0.0
+    metrics: Dict[str, float] = {}
 
-    return total
+    for comp in components:
+        value = _compute_metric_value(closes, comp.metric, comp.lookback_days)
+        if value is None:
+            return None
+
+        key = f"{comp.metric}_{comp.lookback_days}"
+        metrics[key] = value
+
+        direction = -1.0 if comp.direction == "asc" else 1.0
+        weighted += comp.weight * direction * value
+        total_weight += comp.weight
+
+    if total_weight <= 0:
+        return None
+
+    score = weighted / total_weight
+    if include_metrics:
+        return score, metrics
+    return score
 
 
 def _list_candidate_symbols(ch_client, filters: Optional[UniverseFilters]) -> List[str]:
@@ -651,17 +766,89 @@ def _list_candidate_symbols(ch_client, filters: Optional[UniverseFilters]) -> Li
 
 
 def _rank_symbols_by_score(
-    ch_client, candidates: List[str], components: List[ScoreComponent]
-) -> List[Tuple[str, float]]:
-    ranked: List[Tuple[str, float]] = []
+    ch_client,
+    candidates: List[str],
+    components: List[ScoreComponent],
+    include_metrics: bool = False,
+) -> List[Tuple[str, float] | Tuple[str, float, Dict[str, float]]]:
+    ranked: List[Tuple[str, float] | Tuple[str, float, Dict[str, float]]] = []
     for sym in candidates:
-        score = _calculate_symbol_score(ch_client, sym, components)
-        if score is None:
+        result = _calculate_symbol_score(
+            ch_client, sym, components, include_metrics=include_metrics
+        )
+        if result is None:
             continue
-        ranked.append((sym, score))
+        if include_metrics:
+            score, metrics = result  # type: ignore[misc]
+            ranked.append((sym, score, metrics))
+        else:
+            ranked.append((sym, result))  # type: ignore[arg-type]
 
     ranked.sort(key=lambda item: item[1], reverse=True)
     return ranked
+
+
+def _parse_metric_identifier(metric: str, rule: ScoreRulePayload) -> Tuple[str, int]:
+    cleaned = metric.strip().lower()
+    cleaned = cleaned.replace(" ", "_")
+
+    lookback_hint = rule.lookback_days or rule.lookback
+    for sep in (":", "@", "/", "-"):
+        if sep in cleaned:
+            head, tail = cleaned.rsplit(sep, 1)
+            if tail.isdigit():
+                lookback_hint = int(tail)
+                cleaned = head
+                break
+
+    if lookback_hint is None:
+        parts = cleaned.split("_")
+        if parts and parts[-1].isdigit():
+            lookback_hint = int(parts[-1])
+            cleaned = "_".join(parts[:-1])
+
+    if lookback_hint is None:
+        lookback_hint = 252
+
+    if cleaned not in ALLOWED_SCORE_METRICS:
+        raise HTTPException(400, f"Nieznana metryka score: {metric}")
+
+    return cleaned, lookback_hint
+
+
+def _build_components_from_rules(rules: List[ScoreRulePayload]) -> List[ScoreComponent]:
+    components: List[ScoreComponent] = []
+    for rule in rules:
+        metric_name, lookback = _parse_metric_identifier(rule.metric, rule)
+        weight = float(rule.weight or 1.0)
+        direction = rule.direction or "desc"
+        try:
+            component = ScoreComponent(
+                metric=metric_name,
+                lookback_days=lookback,
+                weight=weight,
+                direction=direction,
+            )
+        except ValidationError as exc:
+            raise HTTPException(400, exc.errors()) from exc
+        components.append(component)
+    if not components:
+        raise HTTPException(400, "Lista reguł score nie może być pusta")
+    return components
+
+
+def _build_auto_config_from_preview(req: ScorePreviewRequest) -> AutoSelectionConfig:
+    components = _build_components_from_rules(req.rules)
+    top_n = req.limit or len(components)
+    filters = None
+    if req.universe:
+        filters = UniverseFilters(include=req.universe)
+    return AutoSelectionConfig(
+        top_n=top_n,
+        components=components,
+        filters=filters,
+        weighting="equal",
+    )
 
 
 def _rebalance_dates(dates: List[str], freq: str) -> List[str]:
@@ -863,6 +1050,77 @@ def _compute_portfolio_score(req: PortfolioScoreRequest) -> List[PortfolioScoreI
         PortfolioScoreItem(symbol=pretty_symbol(sym), raw=sym, score=score)
         for sym, score in top
     ]
+
+
+def _run_score_preview(req: ScorePreviewRequest) -> ScorePreviewResponse:
+    auto_config = _build_auto_config_from_preview(req)
+    ch = get_ch()
+
+    candidates = _list_candidate_symbols(ch, auto_config.filters)
+    if not candidates:
+        raise HTTPException(404, "Brak symboli do oceny")
+
+    ranked = _rank_symbols_by_score(
+        ch, candidates, auto_config.components, include_metrics=True
+    )
+    if not ranked:
+        raise HTTPException(404, "Brak symboli ze wszystkimi wymaganymi danymi")
+
+    prepared: List[Dict[str, object]] = []
+    for sym, score, metrics in ranked:  # type: ignore[misc]
+        prepared.append(
+            {
+                "symbol": pretty_symbol(sym),
+                "raw": sym,
+                "score": score,
+                "metrics": metrics,
+            }
+        )
+
+    if req.sort == "asc":
+        prepared.sort(key=lambda item: item["score"])  # type: ignore[index]
+    else:
+        prepared.sort(key=lambda item: item["score"], reverse=True)  # type: ignore[index]
+
+    limit = req.limit or auto_config.top_n
+    if limit:
+        prepared = prepared[:limit]
+
+    rows = [
+        ScorePreviewRow(
+            symbol=item["symbol"],
+            raw=item["raw"],
+            score=float(item["score"]),
+            metrics=dict(item["metrics"]),
+            rank=idx + 1,
+        )
+        for idx, item in enumerate(prepared)
+    ]
+
+    as_of = date.today().isoformat()
+    meta: Dict[str, object] = {
+        "name": req.name,
+        "as_of": as_of,
+        "universe_count": len(candidates),
+    }
+
+    return ScorePreviewResponse(
+        name=req.name,
+        as_of=as_of,
+        universe_count=len(candidates),
+        rows=rows,
+        meta=meta,
+    )
+
+
+@app.post("/score/preview", response_model=ScorePreviewResponse)
+def score_preview(req: ScorePreviewRequest):
+    return _run_score_preview(req)
+
+
+@app.post("/scores/preview", response_model=ScorePreviewResponse)
+def scores_preview(req: ScorePreviewRequest):
+    return _run_score_preview(req)
 
 
 def _parse_backtest_get(

@@ -161,3 +161,42 @@ def test_portfolio_score_returns_top_n(monkeypatch):
 
     assert [item.raw for item in result] == ["CCC", "AAA"]
     assert all(item.symbol.endswith(".WA") or item.symbol == item.raw for item in result)
+
+
+def test_score_preview_returns_metrics(monkeypatch):
+    data = {
+        "AAA": [
+            ("2023-01-01", 100.0),
+            ("2023-01-02", 110.0),
+            ("2023-01-03", 120.0),
+            ("2023-01-04", 140.0),
+            ("2023-01-05", 160.0),
+        ],
+        "BBB": [
+            ("2023-01-01", 50.0),
+            ("2023-01-02", 55.0),
+            ("2023-01-03", 60.0),
+            ("2023-01-04", 62.0),
+            ("2023-01-05", 63.0),
+        ],
+    }
+
+    fake = FakeClickHouse(data)
+    monkeypatch.setattr(main, "get_ch", lambda: fake)
+
+    request = main.ScorePreviewRequest(
+        name="demo",
+        rules=[
+            main.ScoreRulePayload(metric="total_return_4", weight=2, direction="desc"),
+            main.ScoreRulePayload(metric="volatility_4", weight=1, direction="asc"),
+        ],
+        limit=1,
+    )
+
+    response = main.score_preview(request)
+
+    assert response.meta["universe_count"] == 2
+    assert len(response.rows) == 1
+    row = response.rows[0]
+    assert "total_return_4" in row.metrics
+    assert "volatility_4" in row.metrics

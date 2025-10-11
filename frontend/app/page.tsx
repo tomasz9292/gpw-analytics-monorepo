@@ -24,27 +24,119 @@ const removeUndefined = (obj: Record<string, unknown>) =>
         Object.entries(obj).filter(([, value]) => value !== undefined && value !== null)
     );
 
+const findScoreMetric = (value: string): ScoreMetricOption | undefined =>
+    SCORE_METRIC_OPTIONS.find((option) => option.value === value);
+
+type ScoreComponentRequest = {
+    metric: ScoreMetricOption["backendMetric"];
+    lookback_days: number;
+    weight: number;
+    direction: "asc" | "desc";
+    label?: string;
+};
+
+const buildScoreComponents = (rules: ScoreBuilderRule[]): ScoreComponentRequest[] =>
+    rules.reduce<ScoreComponentRequest[]>((acc, rule) => {
+        const option = findScoreMetric(rule.metric);
+        if (!option) return acc;
+
+        const weightNumeric = Number(rule.weight);
+        if (!Number.isFinite(weightNumeric) || weightNumeric <= 0) return acc;
+
+        const direction = rule.direction === "asc" || rule.direction === "desc"
+            ? rule.direction
+            : option.defaultDirection;
+
+        acc.push({
+            metric: option.backendMetric,
+            lookback_days: option.lookback,
+            weight: Number(weightNumeric),
+            direction,
+            label: option.label,
+        });
+        return acc;
+    }, []);
+
 const createRuleId = () =>
     `rule-${Math.random().toString(36).slice(2, 8)}-${Date.now().toString(36)}`;
 
-const SCORE_METRIC_OPTIONS: { value: string; label: string; defaultDirection: "asc" | "desc" }[] = [
-    { value: "roic", label: "ROIC", defaultDirection: "desc" },
-    { value: "gross_margin", label: "Marża brutto", defaultDirection: "desc" },
-    { value: "net_margin", label: "Marża netto", defaultDirection: "desc" },
-    { value: "pe_ratio_ttm", label: "P/E (TTM)", defaultDirection: "asc" },
-    { value: "debt_to_equity", label: "Dług/kapitał", defaultDirection: "asc" },
-    { value: "revenue_growth_3y", label: "Wzrost przychodów 3Y", defaultDirection: "desc" },
-    { value: "ebitda_margin", label: "Marża EBITDA", defaultDirection: "desc" },
-    { value: "free_cash_flow_yield", label: "FCF Yield", defaultDirection: "desc" },
-    { value: "dividend_yield", label: "DY", defaultDirection: "desc" },
+type ScoreMetricOption = {
+    value: string;
+    label: string;
+    backendMetric: "total_return" | "volatility" | "max_drawdown" | "sharpe";
+    lookback: number;
+    defaultDirection: "asc" | "desc";
+    description?: string;
+};
+
+const SCORE_METRIC_OPTIONS: ScoreMetricOption[] = [
+    {
+        value: "total_return_63",
+        label: "Zwrot 3M (63 dni)",
+        backendMetric: "total_return",
+        lookback: 63,
+        defaultDirection: "desc",
+        description: "Zmiana ceny za ostatnie ~3 miesiące.",
+    },
+    {
+        value: "total_return_126",
+        label: "Zwrot 6M (126 dni)",
+        backendMetric: "total_return",
+        lookback: 126,
+        defaultDirection: "desc",
+        description: "Momentum półroczne na kursie zamknięcia.",
+    },
+    {
+        value: "total_return_252",
+        label: "Zwrot 12M (252 dni)",
+        backendMetric: "total_return",
+        lookback: 252,
+        defaultDirection: "desc",
+        description: "Roczna stopa zwrotu liczona na bazie kursów zamknięcia.",
+    },
+    {
+        value: "max_drawdown_252",
+        label: "Maksymalne obsunięcie 12M",
+        backendMetric: "max_drawdown",
+        lookback: 252,
+        defaultDirection: "asc",
+        description: "Najgłębsze obsunięcie kapitału w ostatnim roku (im mniejsze, tym lepiej).",
+    },
+    {
+        value: "volatility_63",
+        label: "Zmienność 3M",
+        backendMetric: "volatility",
+        lookback: 63,
+        defaultDirection: "asc",
+        description: "Odchylenie standardowe dziennych stóp zwrotu (~3 miesiące).",
+    },
+    {
+        value: "sharpe_252",
+        label: "Sharpe 12M",
+        backendMetric: "sharpe",
+        lookback: 252,
+        defaultDirection: "desc",
+        description: "Współczynnik Sharpe'a liczony na danych dziennych (ostatni rok).",
+    },
 ];
 
-const getDefaultScoreRules = (): ScoreBuilderRule[] => [
-    { id: createRuleId(), metric: "roic", weight: 35, direction: "desc", transform: "raw" },
-    { id: createRuleId(), metric: "net_margin", weight: 25, direction: "desc", transform: "raw" },
-    { id: createRuleId(), metric: "debt_to_equity", weight: 20, direction: "asc", transform: "raw" },
-    { id: createRuleId(), metric: "revenue_growth_3y", weight: 20, direction: "desc", transform: "raw" },
-];
+const getDefaultScoreRules = (): ScoreBuilderRule[] => {
+    const picks: { option: ScoreMetricOption; weight: number }[] = [
+        { option: SCORE_METRIC_OPTIONS[2], weight: 40 },
+        { option: SCORE_METRIC_OPTIONS[1], weight: 25 },
+        { option: SCORE_METRIC_OPTIONS[3], weight: 20 },
+        { option: SCORE_METRIC_OPTIONS[4], weight: 15 },
+    ].filter((item) => item.option);
+
+    return picks.map(({ option, weight }) => ({
+        id: createRuleId(),
+        metric: option.value,
+        label: option.label,
+        weight,
+        direction: option.defaultDirection,
+        transform: "raw",
+    }));
+};
 
 /** =========================
  *  Typy danych
@@ -98,11 +190,9 @@ type ScoreBuilderRule = {
 
 type ScorePreviewRulePayload = {
     metric: string;
-    weight?: number;
-    direction?: "asc" | "desc";
-    min?: number | null;
-    max?: number | null;
-    transform?: string | null;
+    weight: number;
+    direction: "asc" | "desc";
+    label?: string;
 };
 
 type ScorePreviewRequest = {
@@ -112,8 +202,6 @@ type ScorePreviewRequest = {
     limit?: number;
     universe?: string | string[] | null;
     sort?: "asc" | "desc" | null;
-    filters?: Record<string, number | string | boolean | null | undefined>;
-    asOf?: string | null;
 };
 
 type ScorePreviewRow = {
@@ -210,7 +298,7 @@ async function backtestPortfolio(
     weightsPct: number[],
     options: BacktestOptions
 ): Promise<PortfolioResp> {
-    const { start, end, rebalance, initialCapital, feePct, thresholdPct, benchmark } = options;
+    const { start, rebalance } = options;
 
     const prepared = symbols
         .map((symbol, idx) => ({
@@ -225,222 +313,49 @@ async function backtestPortfolio(
         );
     }
 
-    const rawWeights = prepared.map((row) => (Number(row.weight) > 0 ? (row.weight as number) : 0));
+    const rawWeights = prepared.map((row) =>
+        Number(row.weight) > 0 ? (row.weight as number) : 0
+    );
     const totalWeight = rawWeights.reduce((sum, weight) => sum + (Number(weight) || 0), 0);
     const safeTotal = totalWeight === 0 ? 1 : totalWeight;
-    const weightsRatio = prepared.map((_, idx) => {
-        const rawWeight = rawWeights[idx] ?? 0;
-        return (Number(rawWeight) || 0) / safeTotal;
-    });
-    const normalizedPercent = weightsRatio.map((ratio) => Number((ratio * 100).toFixed(6)));
+    const weightsRatio = rawWeights.map((weight) => (Number(weight) || 0) / safeTotal);
 
-    const positions = prepared.map((row, idx) => {
-        const weightRatio = weightsRatio[idx] ?? 0;
-        const weightPct = normalizedPercent[idx] ?? 0;
-        const originalWeight = rawWeights[idx] ?? 0;
-
-        return {
-            symbol: row.symbol as string,
-            weight: weightRatio,
-            weight_ratio: weightRatio,
-            target_weight: weightRatio,
-            allocation: weightRatio,
-            share: weightRatio,
-            weight_pct: weightPct,
-            weight_percentage: weightPct,
-            weight_percent: weightPct,
-            percentage: weightPct,
-            target_weight_pct: weightPct,
-            target_weight_percentage: weightPct,
-            target_weight_percent: weightPct,
-            input_weight: originalWeight,
-            input_weight_pct: originalWeight,
-            input_weight_percentage: originalWeight,
-            original_weight: originalWeight,
-        };
-    });
-
-    const weightsPercent = normalizedPercent;
-
-    const modernPositions = prepared.map((row, idx) => ({
-        symbol: row.symbol as string,
-        weight: Number((weightsRatio[idx] ?? 0).toFixed(6)),
-    }));
-
-    const modernPayload: Record<string, unknown> = {
-        start_date: start,
-        symbols: modernPositions.map((position) => position.symbol),
-        weights: modernPositions.map((position) => position.weight),
-        positions: modernPositions,
-    };
-
-    const legacyPayload: Record<string, unknown> = {
-        start_date: start,
-        positions,
+    const manualPayload = removeUndefined({
+        symbols: prepared.map((row) => row.symbol as string),
         weights: weightsRatio,
-        weights_ratio: weightsRatio,
-        weights_pct: weightsPercent,
-        weights_percentage: weightsPercent,
-        weights_percent: weightsPercent,
-    };
-
-    if (rawWeights.some((weight) => weight)) {
-        legacyPayload.weights_input = rawWeights;
-        legacyPayload.weights_input_pct = rawWeights;
-        legacyPayload.weights_input_percentage = rawWeights;
-        legacyPayload.weights_original = rawWeights;
-    }
-
-    if (rebalance && rebalance !== "none") {
-        modernPayload.rebalance = rebalance;
-        legacyPayload.rebalance = rebalance;
-        legacyPayload.rebalance_frequency = rebalance;
-    }
-
-    if (end) {
-        modernPayload.end_date = end;
-        legacyPayload.end_date = end;
-        legacyPayload.end = end;
-    }
-
-    if (typeof initialCapital === "number" && !Number.isNaN(initialCapital)) {
-        modernPayload.initial_value = initialCapital;
-        legacyPayload.initial_value = initialCapital;
-        legacyPayload.initial_capital = initialCapital;
-        legacyPayload.initial_cash = initialCapital;
-    }
-
-    const rebalanceSettings: Record<string, unknown> = {};
-    if (rebalance && rebalance !== "none") {
-        rebalanceSettings.frequency = rebalance;
-    }
-    if (typeof thresholdPct === "number" && thresholdPct > 0) {
-        rebalanceSettings.threshold = thresholdPct;
-        modernPayload.threshold = thresholdPct;
-        legacyPayload.rebalance_threshold = thresholdPct;
-        legacyPayload.threshold = thresholdPct;
-        legacyPayload.rebalance_threshold_ratio = thresholdPct / 100;
-    }
-    if (Object.keys(rebalanceSettings).length) {
-        legacyPayload.rebalance_settings = rebalanceSettings;
-    }
-
-    if (typeof feePct === "number" && feePct > 0) {
-        modernPayload.transaction_cost = feePct;
-        legacyPayload.transaction_cost = feePct;
-        legacyPayload.fee = feePct;
-        legacyPayload.fees = { transaction: feePct, trading: feePct };
-        legacyPayload.commission = feePct;
-        legacyPayload.transaction_cost_ratio = feePct / 100;
-        legacyPayload.fee_ratio = feePct / 100;
-    }
-
-    if (benchmark) {
-        modernPayload.benchmark = benchmark;
-        legacyPayload.benchmark = benchmark;
-        legacyPayload.benchmark_symbol = benchmark;
-        legacyPayload.include_benchmark = true;
-        legacyPayload.benchmark_enabled = true;
-    }
-
-    const url = `/api/backtest/portfolio`;
-    const modernResponse = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-            Object.fromEntries(
-                Object.entries(modernPayload).filter(([, value]) => value !== undefined)
-            )
-        ),
     });
 
-    if (modernResponse.ok) {
-        const json = await modernResponse.json();
-        return normalizePortfolioResponse(json);
-    }
-
-    const legacyResponse = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(legacyPayload),
-    });
-
-    if (legacyResponse.ok) {
-        const json = await legacyResponse.json();
-        return normalizePortfolioResponse(json);
-    }
-
-    const qs = new URLSearchParams({
-        symbols: positions.map((p) => p.symbol).join(","),
-        weights: weightsRatio.map((weight) => weight.toString()).join(","),
+    const payload = removeUndefined({
         start,
+        rebalance,
+        manual: manualPayload,
     });
 
-    qs.set("start_date", start);
+    const response = await fetch(`/api/backtest/portfolio`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+    });
 
-    if (weightsRatio.some((weight) => weight)) {
-        qs.set("weights_ratio", weightsRatio.map((weight) => weight.toString()).join(","));
-    }
-
-    if (weightsPercent.some((weight) => weight)) {
-        const normalized = weightsPercent.map((weight) => weight.toString());
-        qs.set("weights_pct", normalized.join(","));
-        qs.set("weights_percentage", normalized.join(","));
-        qs.set("weights_percent", normalized.join(","));
-    }
-
-    if (rawWeights.some((weight) => weight)) {
-        const raw = rawWeights.map((weight) => weight.toString());
-        qs.set("weights_input", raw.join(","));
-        qs.set("weights_input_pct", raw.join(","));
-        qs.set("weights_input_percentage", raw.join(","));
-        qs.set("weights_original", raw.join(","));
+    if (!response.ok) {
+        let message = "";
+        try {
+            message = await response.text();
+        } catch (e) {
+            // ignore
+        }
+        throw new Error(message || `API /backtest/portfolio ${response.status}`);
     }
 
-    if (rebalance && rebalance !== "none") {
-        qs.set("rebalance", rebalance);
-        qs.set("rebalance_frequency", rebalance);
-    }
-
-    if (end) {
-        qs.set("end", end);
-        qs.set("end_date", end);
-    }
-    if (typeof initialCapital === "number" && !Number.isNaN(initialCapital)) {
-        qs.set("initial", String(initialCapital));
-        qs.set("initial_value", String(initialCapital));
-    }
-    if (typeof feePct === "number" && feePct > 0) {
-        qs.set("fee", String(feePct));
-        qs.set("transaction_cost", String(feePct));
-        qs.set("fee_ratio", String(feePct / 100));
-        qs.set("transaction_cost_ratio", String(feePct / 100));
-    }
-    if (typeof thresholdPct === "number" && thresholdPct > 0) {
-        qs.set("threshold", String(thresholdPct));
-        qs.set("threshold_ratio", String(thresholdPct / 100));
-        qs.set("rebalance_threshold", String(thresholdPct));
-    }
-    if (benchmark) {
-        qs.set("benchmark", benchmark);
-        qs.set("benchmark_enabled", "1");
-    }
-
-    if (modernPositions.length) {
-        qs.set("positions", JSON.stringify(modernPositions));
-    }
-
-    const fallback = await fetch(`${url}?${qs.toString()}`);
-    if (!fallback.ok) {
-        throw new Error(
-            `API /backtest/portfolio ${modernResponse.status} / ${legacyResponse.status} / ${fallback.status}`
-        );
-    }
-    const fallbackJson = await fallback.json();
-    return normalizePortfolioResponse(fallbackJson);
+    const json = await response.json();
+    return normalizePortfolioResponse(json);
 }
 
-async function backtestPortfolioByScore(options: ScorePortfolioOptions): Promise<PortfolioResp> {
+
+async function backtestPortfolioByScore(
+    options: ScorePortfolioOptions,
+    components: ScoreComponentRequest[]
+): Promise<PortfolioResp> {
     const {
         score,
         universe = null,
@@ -458,178 +373,83 @@ async function backtestPortfolioByScore(options: ScorePortfolioOptions): Promise
         benchmark,
     } = options;
 
-    const trimmedScore = score?.trim();
-    if (!trimmedScore) {
-        throw new Error("Podaj nazwę score, aby uruchomić symulację.");
+    if (!components.length) {
+        throw new Error("Skonfiguruj ranking score, aby uruchomić symulację.");
     }
 
-    const normalizedLimit =
+    const limitCandidate =
         typeof limit === "number" && Number.isFinite(limit) && limit > 0
             ? Math.floor(limit)
             : undefined;
 
-    const normalizedWeighting =
-        typeof weighting === "string" && weighting.trim() ? weighting.trim() : undefined;
+    const previewRules: ScorePreviewRulePayload[] = components.map((component) => ({
+        metric: `${component.metric}_${component.lookback_days}`,
+        weight: component.weight,
+        direction: component.direction,
+        label: component.label,
+    }));
 
-    const normalizedDirection = direction === "asc" ? "asc" : direction === "desc" ? "desc" : undefined;
-
-    const normalizedMinScore =
-        typeof minScore === "number" && Number.isFinite(minScore) ? minScore : undefined;
-    const normalizedMaxScore =
-        typeof maxScore === "number" && Number.isFinite(maxScore) ? maxScore : undefined;
-
-    const payload: Record<string, unknown> = {
-        mode: "score",
-        start_date: start,
-        start,
-        from: start,
-        score: trimmedScore,
-        score_name: trimmedScore,
-        ranking: trimmedScore,
-        metric: trimmedScore,
+    const previewPayload: ScorePreviewRequest = {
+        name: score && score.trim() ? score.trim() : undefined,
+        rules: previewRules,
+        limit: limitCandidate,
+        universe,
+        sort: direction ?? undefined,
     };
 
-    const qs = new URLSearchParams({
-        mode: "score",
-        score: trimmedScore,
+    const preview = await previewScoreRanking(previewPayload);
+
+    let rows = preview.rows.slice();
+    if (typeof minScore === "number") {
+        rows = rows.filter((row) => row.score === undefined || row.score >= minScore);
+    }
+    if (typeof maxScore === "number") {
+        rows = rows.filter((row) => row.score === undefined || row.score <= maxScore);
+    }
+
+    const overallDirection = direction === "asc" ? "asc" : "desc";
+    rows.sort((a, b) => {
+        const aScore = a.score ?? 0;
+        const bScore = b.score ?? 0;
+        return overallDirection === "asc" ? aScore - bScore : bScore - aScore;
+    });
+
+    const finalLimit = limitCandidate ?? rows.length;
+    const topRows = rows.slice(0, finalLimit);
+    if (!topRows.length) {
+        throw new Error("Brak spółek spełniających kryteria score.");
+    }
+
+    const rawWeights =
+        weighting === "score"
+            ? topRows.map((row) => Math.max(row.score ?? 0, 0))
+            : topRows.map(() => 1);
+
+    const totalWeight = rawWeights.reduce(
+        (acc, value) => acc + (Number.isFinite(value) ? (value as number) : 0),
+        0
+    );
+
+    const normalizedWeights =
+        totalWeight > 0
+            ? rawWeights.map((value) =>
+                  Number.isFinite(value) ? ((value as number) / totalWeight) || 0 : 0
+              )
+            : topRows.map(() => 1 / topRows.length);
+
+    const symbols = topRows.map((row) => row.symbol);
+
+    return backtestPortfolio(symbols, normalizedWeights, {
         start,
-        start_date: start,
-        from: start,
+        end,
+        rebalance,
+        initialCapital,
+        feePct,
+        thresholdPct,
+        benchmark,
     });
-
-    if (normalizedLimit !== undefined) {
-        payload.top_n = normalizedLimit;
-        payload.limit = normalizedLimit;
-        payload.count = normalizedLimit;
-        payload.size = normalizedLimit;
-        qs.set("top_n", String(normalizedLimit));
-        qs.set("limit", String(normalizedLimit));
-        qs.set("count", String(normalizedLimit));
-    }
-
-    if (normalizedWeighting) {
-        payload.weighting = normalizedWeighting;
-        payload.weighting_method = normalizedWeighting;
-        payload.weight_method = normalizedWeighting;
-        qs.set("weighting", normalizedWeighting);
-        qs.set("weight_method", normalizedWeighting);
-    }
-
-    if (normalizedDirection) {
-        payload.direction = normalizedDirection;
-        payload.order = normalizedDirection;
-        payload.sort_direction = normalizedDirection;
-        qs.set("direction", normalizedDirection);
-    }
-
-    if (normalizedMinScore !== undefined) {
-        payload.min_score = normalizedMinScore;
-        payload.score_min = normalizedMinScore;
-        payload.min = normalizedMinScore;
-        qs.set("min_score", String(normalizedMinScore));
-    }
-
-    if (normalizedMaxScore !== undefined) {
-        payload.max_score = normalizedMaxScore;
-        payload.score_max = normalizedMaxScore;
-        payload.max = normalizedMaxScore;
-        qs.set("max_score", String(normalizedMaxScore));
-    }
-
-    if (Array.isArray(universe)) {
-        const cleaned = universe.map((item) => item?.trim()).filter(Boolean) as string[];
-        if (cleaned.length) {
-            payload.universe = cleaned;
-            payload.universe_list = cleaned;
-            payload.symbols = cleaned;
-            payload.assets = cleaned;
-            qs.set("universe", cleaned.join(","));
-            qs.set("symbols", cleaned.join(","));
-        }
-    } else if (typeof universe === "string" && universe.trim()) {
-        const trimmedUniverse = universe.trim();
-        payload.universe = trimmedUniverse;
-        payload.universe_name = trimmedUniverse;
-        payload.market = trimmedUniverse;
-        payload.category = trimmedUniverse;
-        qs.set("universe", trimmedUniverse);
-    }
-
-    if (end) {
-        payload.end_date = end;
-        payload.end = end;
-        payload.to = end;
-        qs.set("end", end);
-        qs.set("end_date", end);
-        qs.set("to", end);
-    }
-
-    if (rebalance && rebalance !== "none") {
-        payload.rebalance = rebalance;
-        payload.rebalance_frequency = rebalance;
-        payload.frequency = rebalance;
-        qs.set("rebalance", rebalance);
-        qs.set("rebalance_frequency", rebalance);
-    }
-
-    if (typeof thresholdPct === "number" && thresholdPct > 0) {
-        payload.rebalance_threshold = thresholdPct;
-        payload.threshold = thresholdPct;
-        payload.threshold_ratio = thresholdPct / 100;
-        payload.rebalance_threshold_ratio = thresholdPct / 100;
-        qs.set("threshold", String(thresholdPct));
-        qs.set("threshold_ratio", String(thresholdPct / 100));
-    }
-
-    if (typeof initialCapital === "number" && !Number.isNaN(initialCapital)) {
-        payload.initial_value = initialCapital;
-        payload.initial_capital = initialCapital;
-        payload.initial_cash = initialCapital;
-        qs.set("initial", String(initialCapital));
-        qs.set("initial_value", String(initialCapital));
-        qs.set("initial_capital", String(initialCapital));
-    }
-
-    if (typeof feePct === "number" && feePct > 0) {
-        payload.transaction_cost = feePct;
-        payload.fee = feePct;
-        payload.fee_ratio = feePct / 100;
-        payload.transaction_cost_ratio = feePct / 100;
-        payload.commission = feePct;
-        qs.set("fee", String(feePct));
-        qs.set("fee_ratio", String(feePct / 100));
-        qs.set("transaction_cost", String(feePct));
-    }
-
-    if (benchmark) {
-        payload.benchmark = benchmark;
-        payload.benchmark_symbol = benchmark;
-        payload.include_benchmark = true;
-        payload.benchmark_enabled = true;
-        qs.set("benchmark", benchmark);
-        qs.set("benchmark_enabled", "1");
-        qs.set("include_benchmark", "1");
-    }
-
-    const url = `/api/backtest/portfolio`;
-    const primary = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-    });
-
-    if (primary.ok) {
-        const json = await primary.json();
-        return normalizePortfolioResponse(json);
-    }
-
-    const fallback = await fetch(`${url}?${qs.toString()}`);
-    if (!fallback.ok) {
-        throw new Error(`API /backtest/portfolio/score ${primary.status} / ${fallback.status}`);
-    }
-    const fallbackJson = await fallback.json();
-    return normalizePortfolioResponse(fallbackJson);
 }
+
 
 const parseNumber = (value: unknown): number | undefined => {
     if (value === null || value === undefined) return undefined;
@@ -1087,164 +907,38 @@ const normalizeScoreRankingResponse = (raw: unknown): ScorePreviewResult => {
 };
 
 async function previewScoreRanking(payload: ScorePreviewRequest): Promise<ScorePreviewResult> {
-    const rulePayload = payload.rules
-        .filter((rule) => rule.metric && rule.metric.trim())
-        .map((rule) => {
-            const normalized: Record<string, unknown> = {
-                metric: rule.metric.trim(),
-                field: rule.metric.trim(),
-                key: rule.metric.trim(),
-            };
-
-            if (rule.weight !== undefined && Number.isFinite(rule.weight)) {
-                normalized.weight = rule.weight;
-                normalized.score_weight = rule.weight;
-                normalized.importance = rule.weight;
-            }
-
-            if (rule.direction) {
-                normalized.direction = rule.direction;
-                normalized.order = rule.direction;
-                normalized.sort = rule.direction;
-            }
-
-            if (rule.min !== null && rule.min !== undefined) {
-                normalized.min = rule.min;
-                normalized.floor = rule.min;
-            }
-
-            if (rule.max !== null && rule.max !== undefined) {
-                normalized.max = rule.max;
-                normalized.ceiling = rule.max;
-            }
-
-            if (rule.transform && rule.transform !== "raw") {
-                normalized.transform = rule.transform;
-                normalized.method = rule.transform;
-            }
-
-            return removeUndefined(normalized);
-        });
-
-    if (!rulePayload.length) {
+    if (!payload.rules.length) {
         throw new Error("Dodaj co najmniej jedną metrykę scoringową.");
     }
 
-    const filters = payload.filters
-        ? Object.fromEntries(
-              Object.entries(payload.filters).filter(([, value]) =>
-                  value === 0 ? true : Boolean(value)
-              )
-          )
-        : undefined;
-
     const prepared = removeUndefined({
         name: payload.name,
-        title: payload.name,
-        score_name: payload.name,
         description: payload.description,
-        rules: rulePayload,
+        rules: payload.rules.map((rule) => ({
+            metric: rule.metric,
+            weight: rule.weight,
+            direction: rule.direction,
+            label: rule.label,
+        })),
         limit: payload.limit,
-        top_n: payload.limit,
-        top: payload.limit,
-        count: payload.limit,
-        size: payload.limit,
+        universe: payload.universe ?? undefined,
         sort: payload.sort ?? undefined,
-        direction: payload.sort ?? undefined,
-        order: payload.sort ?? undefined,
-        universe: payload.universe,
-        universe_filter: payload.universe,
-        filter: payload.universe,
-        as_of: payload.asOf ?? undefined,
-        date: payload.asOf ?? undefined,
-        filters,
-        constraints: filters,
     });
 
-    const endpoints = [
-        "/api/scores/preview",
-        "/api/score/preview",
-        "/api/scores/run",
-        "/api/score/run",
-        "/api/scores",
-        "/api/score",
-        "/api/rules/preview",
-        "/api/rules/run",
-    ];
+    const response = await fetch("/api/score/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(prepared),
+    });
 
-    const errors: string[] = [];
-
-    for (const endpoint of endpoints) {
-        try {
-            const response = await fetch(endpoint, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(prepared),
-            });
-
-            if (response.ok) {
-                const json = await response.json();
-                return normalizeScoreRankingResponse(json);
-            }
-
-            errors.push(`${endpoint}: ${response.status}`);
-        } catch (e: unknown) {
-            errors.push(`${endpoint}: ${e instanceof Error ? e.message : String(e)}`);
-        }
+    if (!response.ok) {
+        throw new Error(`API /score/preview ${response.status}`);
     }
 
-    const qs = new URLSearchParams();
-    if (payload.name && payload.name.trim()) {
-        ["name", "score", "score_name", "rule", "rule_name"].forEach((key) =>
-            qs.set(key, payload.name as string)
-        );
-    }
-    if (payload.limit && Number.isFinite(payload.limit)) {
-        const limitString = String(payload.limit);
-        ["limit", "top", "top_n", "count", "size"].forEach((key) =>
-            qs.set(key, limitString)
-        );
-    }
-    if (payload.sort) {
-        ["sort", "direction", "order"].forEach((key) => qs.set(key, payload.sort as string));
-    }
-    if (payload.universe) {
-        const universeValue = Array.isArray(payload.universe)
-            ? payload.universe.join(",")
-            : payload.universe;
-        ["universe", "filter", "universe_filter"].forEach((key) =>
-            qs.set(key, universeValue as string)
-        );
-    }
-    if (payload.asOf) {
-        ["as_of", "date"].forEach((key) => qs.set(key, payload.asOf as string));
-    }
-    if (filters) {
-        Object.entries(filters).forEach(([key, value]) => {
-            if (value === undefined || value === null || value === "") return;
-            qs.set(key, String(value));
-        });
-    }
-
-    const queryString = qs.toString();
-    const getEndpoints = ["/api/scores/preview", "/api/score/preview", "/api/scores", "/api/score"];
-    for (const endpoint of getEndpoints) {
-        try {
-            const url = queryString ? `${endpoint}?${queryString}` : endpoint;
-            const response = await fetch(url);
-            if (response.ok) {
-                const json = await response.json();
-                return normalizeScoreRankingResponse(json);
-            }
-            errors.push(`${url}: ${response.status}`);
-        } catch (e: unknown) {
-            const url = queryString ? `${endpoint}?${queryString}` : endpoint;
-            errors.push(`${url}: ${e instanceof Error ? e.message : String(e)}`);
-        }
-    }
-
-    throw new Error(`API score preview niedostępne (${errors.join(" | ")})`);
+    const json = await response.json();
+    return normalizeScoreRankingResponse(json);
 }
+
 
 /** =========================
  *  Obliczenia: SMA / RSI
@@ -1912,15 +1606,10 @@ export default function Page() {
     const [scoreLoading, setScoreLoading] = useState(false);
     const [scoreError, setScoreError] = useState("");
 
-    const scoreValidRules = scoreRules.filter(
-        (rule) => rule.metric.trim() && Number.isFinite(rule.weight) && Number(rule.weight) !== 0
-    );
-    const scoreTotalWeight = scoreValidRules.reduce(
-        (acc, rule) => acc + (Number(rule.weight) || 0),
-        0
-    );
+    const scoreComponents = useMemo(() => buildScoreComponents(scoreRules), [scoreRules]);
+    const scoreTotalWeight = scoreComponents.reduce((acc, component) => acc + component.weight, 0);
     const scoreLimitInvalid = !Number.isFinite(scoreLimit) || scoreLimit <= 0;
-    const scoreDisabled = scoreLoading || scoreLimitInvalid || !scoreValidRules.length;
+    const scoreDisabled = scoreLoading || scoreLimitInvalid || !scoreComponents.length;
 
     // Portfel
     const [pfMode, setPfMode] = useState<"manual" | "score">("manual");
@@ -2068,9 +1757,17 @@ export default function Page() {
     };
 
     const addScoreRule = () => {
+        const defaultOption = SCORE_METRIC_OPTIONS[0];
         setScoreRules((prev) => [
             ...prev,
-            { id: createRuleId(), metric: "", weight: 10, direction: "desc", transform: "raw" },
+            {
+                id: createRuleId(),
+                metric: defaultOption?.value ?? "",
+                weight: 10,
+                direction: defaultOption?.defaultDirection ?? "desc",
+                transform: "raw",
+                label: defaultOption?.label,
+            },
         ]);
     };
 
@@ -2098,43 +1795,17 @@ export default function Page() {
             setScoreLoading(true);
             setScoreResults(null);
 
-            const rulePayload = scoreRules.reduce<ScorePreviewRulePayload[]>((acc, rule) => {
-                const metric = rule.metric.trim();
-                if (!metric) return acc;
-
-                const weightNumeric = Number(rule.weight);
-                const min = parseScoreBound(rule.min);
-                const max = parseScoreBound(rule.max);
-
-                const payload: ScorePreviewRulePayload = {
-                    metric,
-                    direction: rule.direction,
-                    min,
-                    max,
-                    transform:
-                        rule.transform && rule.transform !== "raw"
-                            ? rule.transform
-                            : null,
-                };
-
-                if (Number.isFinite(weightNumeric)) {
-                    payload.weight = weightNumeric;
-                }
-
-                acc.push(payload);
-                return acc;
-            }, []);
-
-            const filters: Record<string, number> = {};
-            const minMcap = parseScoreBound(scoreMinMcap);
-            if (minMcap !== null) {
-                filters.min_market_cap = minMcap;
+            const componentsForRequest = scoreComponents;
+            if (!componentsForRequest.length) {
+                throw new Error("Dodaj co najmniej jedną metrykę score z dodatnią wagą.");
             }
-            const minTurnover = parseScoreBound(scoreMinTurnover);
-            if (minTurnover !== null) {
-                filters.min_turnover = minTurnover;
-                filters.min_liquidity = minTurnover;
-            }
+
+            const rulePayload: ScorePreviewRulePayload[] = componentsForRequest.map((component) => ({
+                metric: `${component.metric}_${component.lookback_days}`,
+                weight: component.weight,
+                direction: component.direction,
+                label: component.label,
+            }));
 
             const limitValue = !scoreLimitInvalid && Number.isFinite(scoreLimit)
                 ? Math.floor(Number(scoreLimit))
@@ -2147,8 +1818,6 @@ export default function Page() {
                 limit: limitValue,
                 universe: parseUniverseValue(scoreUniverse),
                 sort: scoreSort,
-                filters: Object.keys(filters).length ? filters : undefined,
-                asOf: scoreAsOf && scoreAsOf.trim() ? scoreAsOf : undefined,
             };
 
             const result = await previewScoreRanking(payload);
@@ -2198,22 +1867,30 @@ export default function Page() {
                         ? universeCandidates[0]
                         : universeCandidates;
 
-                const res = await backtestPortfolioByScore({
-                    score: pfScoreName.trim(),
-                    limit: pfScoreLimitInvalid ? undefined : Math.floor(pfScoreLimit),
-                    weighting: pfScoreWeighting,
-                    direction: pfScoreDirection,
-                    universe: universeValue,
-                    minScore: parseOptionalNumber(pfScoreMin),
-                    maxScore: parseOptionalNumber(pfScoreMax),
-                    start: pfStart,
-                    end: pfEnd,
-                    rebalance: pfFreq,
-                    initialCapital: pfInitial,
-                    feePct: pfFee,
-                    thresholdPct: pfThreshold,
-                    benchmark: pfBenchmark,
-                });
+                const componentsForScore = scoreComponents;
+                if (!componentsForScore.length) {
+                    throw new Error("Skonfiguruj ranking score, aby uruchomić symulację.");
+                }
+
+                const res = await backtestPortfolioByScore(
+                    {
+                        score: pfScoreName.trim(),
+                        limit: pfScoreLimitInvalid ? undefined : Math.floor(pfScoreLimit),
+                        weighting: pfScoreWeighting,
+                        direction: pfScoreDirection,
+                        universe: universeValue,
+                        minScore: parseOptionalNumber(pfScoreMin),
+                        maxScore: parseOptionalNumber(pfScoreMax),
+                        start: pfStart,
+                        end: pfEnd,
+                        rebalance: pfFreq,
+                        initialCapital: pfInitial,
+                        feePct: pfFee,
+                        thresholdPct: pfThreshold,
+                        benchmark: pfBenchmark,
+                    },
+                    componentsForScore
+                );
                 setPfRes(res);
             }
 
@@ -2705,8 +2382,8 @@ export default function Page() {
                                                             </select>
                                                         </label>
                                                         <div className="text-xs text-subtle">
-                                                            Backend akceptuje dowolne nazwy metryk. Wagi są skalowane
-                                                            automatycznie.
+                                                            Metryki korzystają z danych cenowych (zwroty, zmienność,
+                                                            Sharpe). Wagi są skalowane automatycznie.
                                                         </div>
                                                     </div>
                                                 </div>
@@ -2739,7 +2416,7 @@ export default function Page() {
                                 >
                                     Resetuj
                                 </button>
-                                {!scoreValidRules.length && !scoreLoading && (
+                                {!scoreComponents.length && !scoreLoading && (
                                     <div className="text-xs text-negative">
                                         Dodaj co najmniej jedną metrykę z wagą różną od zera.
                                     </div>
