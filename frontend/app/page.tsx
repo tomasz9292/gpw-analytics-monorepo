@@ -1297,10 +1297,10 @@ const Card = ({
     right?: React.ReactNode;
     children: React.ReactNode;
 }) => (
-    <div className="bg-white rounded-2xl shadow-sm border border-gray-100">
+    <div className="bg-surface rounded-2xl shadow-sm border border-soft">
         {(title || right) && (
-            <div className="px-4 md:px-6 py-3 border-b border-gray-100 flex items-center justify-between">
-                <div className="font-semibold text-gray-900">{title}</div>
+            <div className="px-4 md:px-6 py-3 border-b border-soft flex items-center justify-between">
+                <div className="font-semibold text-primary">{title}</div>
                 <div>{right}</div>
             </div>
         )}
@@ -1327,14 +1327,14 @@ const Section = ({
         <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
             <div className="space-y-2">
                 {kicker && (
-                    <span className="text-xs uppercase tracking-[0.35em] text-gray-400">
+                    <span className="text-xs uppercase tracking-[0.35em] text-subtle">
                         {kicker}
                     </span>
                 )}
                 <div className="space-y-1">
-                    <h2 className="text-2xl md:text-3xl font-semibold text-gray-900">{title}</h2>
+                    <h2 className="text-2xl md:text-3xl font-semibold text-primary">{title}</h2>
                     {description && (
-                        <p className="text-sm text-gray-600 max-w-2xl">{description}</p>
+                        <p className="text-sm text-muted max-w-2xl">{description}</p>
                     )}
                 </div>
             </div>
@@ -1356,7 +1356,7 @@ const SectionNav = ({
                 <a
                     key={item.href}
                     href={item.href}
-                    className="px-3 py-1 rounded-full border border-gray-200 bg-white text-gray-600 hover:text-gray-900 hover:border-gray-300 transition"
+                    className="px-3 py-1 rounded-full border border-white/20 bg-white/10 text-white/80 hover:text-white hover:border-white/40 transition"
                 >
                     {item.label}
                 </a>
@@ -1376,14 +1376,17 @@ const Chip = ({
 }) => (
     <button
         onClick={onClick}
-        className={`rounded-full px-3 py-1 text-sm border ${active
-                ? "bg-black text-white border-black"
-                : "bg-white text-gray-700 border-gray-300 hover:border-gray-400"
+        className={`rounded-full px-3 py-1 text-sm border transition ${active
+                ? "bg-primary text-white border-[var(--color-primary)]"
+                : "bg-surface text-muted border-soft hover:border-[var(--color-primary)] hover:text-primary"
             }`}
     >
         {children}
     </button>
 );
+
+const inputBaseClasses =
+    "rounded-xl border border-soft bg-surface px-3 py-2 text-neutral focus:outline-none focus:border-[var(--color-tech)] focus:ring-2 focus:ring-[rgba(52,152,219,0.15)]";
 
 const toRatio = (value: number) => {
     const abs = Math.abs(value);
@@ -1430,7 +1433,7 @@ function PortfolioStatsGrid({ stats }: { stats: PortfolioStats }) {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
             {items.map((item) => (
                 <div key={item.label}>
-                    <div className="text-gray-500">{item.label}</div>
+                    <div className="text-subtle">{item.label}</div>
                     <div className="text-lg font-semibold">{item.display}</div>
                 </div>
             ))}
@@ -1443,11 +1446,11 @@ function AllocationTable({ allocations }: { allocations: PortfolioAllocation[] }
 
     return (
         <div className="space-y-2">
-            <div className="text-sm text-gray-600 font-medium">Podsumowanie pozycji</div>
+            <div className="text-sm text-muted font-medium">Podsumowanie pozycji</div>
             <div className="overflow-x-auto">
                 <table className="min-w-full text-sm">
-                    <thead className="text-left text-gray-500">
-                        <tr className="border-b border-gray-200">
+                    <thead className="text-left text-subtle">
+                        <tr className="border-b border-soft">
                             <th className="py-2 pr-4 font-medium">Symbol</th>
                             <th className="py-2 pr-4 font-medium">Waga docelowa</th>
                             <th className="py-2 pr-4 font-medium">Śr. waga</th>
@@ -1458,8 +1461,8 @@ function AllocationTable({ allocations }: { allocations: PortfolioAllocation[] }
                     </thead>
                     <tbody>
                         {allocations.map((row, idx) => (
-                            <tr key={`${row.symbol}-${idx}`} className="border-b border-gray-100">
-                                <td className="py-2 pr-4 font-medium text-gray-900">{row.symbol}</td>
+                            <tr key={`${row.symbol}-${idx}`} className="border-b border-soft">
+                                <td className="py-2 pr-4 font-medium text-primary">{row.symbol}</td>
                                 <td className="py-2 pr-4">{formatPercent(row.target_weight)}</td>
                                 <td className="py-2 pr-4">
                                     {typeof row.realized_weight === "number"
@@ -1493,13 +1496,13 @@ function RebalanceTimeline({ events }: { events: PortfolioRebalanceEvent[] }) {
 
     return (
         <div className="space-y-3">
-            <div className="text-sm text-gray-600 font-medium">Harmonogram rebalansingu</div>
+            <div className="text-sm text-muted font-medium">Harmonogram rebalansingu</div>
             <div className="space-y-3">
                 {events.map((event, idx) => (
-                    <div key={`${event.date}-${idx}`} className="rounded-xl border border-gray-200 bg-gray-50/70 p-4">
+                    <div key={`${event.date}-${idx}`} className="rounded-xl border border-soft bg-soft-surface p-4">
                         <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div className="text-sm font-semibold text-gray-900">{event.date}</div>
-                            <div className="text-xs text-gray-500">
+                            <div className="text-sm font-semibold text-primary">{event.date}</div>
+                            <div className="text-xs text-subtle">
                                 {event.reason || "Planowy rebalansing"}
                                 {typeof event.turnover === "number"
                                     ? ` • obrót ${formatPercent(event.turnover, 1)}`
@@ -1509,7 +1512,7 @@ function RebalanceTimeline({ events }: { events: PortfolioRebalanceEvent[] }) {
                         {event.trades && event.trades.length > 0 && (
                             <div className="mt-3 overflow-x-auto">
                                 <table className="min-w-full text-xs md:text-sm">
-                                    <thead className="text-left text-gray-500">
+                                    <thead className="text-left text-subtle">
                                         <tr>
                                             <th className="py-1 pr-3 font-medium">Spółka</th>
                                             <th className="py-1 pr-3 font-medium">Akcja</th>
@@ -1520,8 +1523,8 @@ function RebalanceTimeline({ events }: { events: PortfolioRebalanceEvent[] }) {
                                     </thead>
                                     <tbody>
                                         {event.trades.map((trade, tradeIdx) => (
-                                            <tr key={`${trade.symbol}-${tradeIdx}`} className="border-t border-gray-100">
-                                                <td className="py-1 pr-3 font-medium text-gray-900">{trade.symbol}</td>
+                                            <tr key={`${trade.symbol}-${tradeIdx}`} className="border-t border-soft">
+                                                <td className="py-1 pr-3 font-medium text-primary">{trade.symbol}</td>
                                                 <td className="py-1 pr-3 capitalize">{trade.action ?? "—"}</td>
                                                 <td className="py-1 pr-3">
                                                     {typeof trade.weight_change === "number"
@@ -1561,8 +1564,8 @@ function ScoreRankingTable({ rows }: { rows: ScorePreviewRow[] }) {
     return (
         <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
-                <thead className="text-left text-gray-500">
-                    <tr className="border-b border-gray-200">
+                <thead className="text-left text-subtle">
+                    <tr className="border-b border-soft">
                         <th className="py-2 pr-4 font-medium">Pozycja</th>
                         <th className="py-2 pr-4 font-medium">Spółka</th>
                         <th className="py-2 pr-4 font-medium">Score</th>
@@ -1576,11 +1579,11 @@ function ScoreRankingTable({ rows }: { rows: ScorePreviewRow[] }) {
                 </thead>
                 <tbody>
                     {rows.map((row, idx) => (
-                        <tr key={`${row.symbol}-${idx}`} className="border-b border-gray-100">
-                            <td className="py-2 pr-4 font-medium text-gray-500">#{row.rank ?? idx + 1}</td>
+                        <tr key={`${row.symbol}-${idx}`} className="border-b border-soft">
+                            <td className="py-2 pr-4 font-medium text-subtle">#{row.rank ?? idx + 1}</td>
                             <td className="py-2 pr-4">
-                                <div className="font-semibold text-gray-900">{row.symbol}</div>
-                                {row.name && <div className="text-xs text-gray-500">{row.name}</div>}
+                                <div className="font-semibold text-primary">{row.symbol}</div>
+                                {row.name && <div className="text-xs text-subtle">{row.name}</div>}
                             </td>
                             <td className="py-2 pr-4">
                                 {typeof row.score === "number" ? row.score.toFixed(2) : "—"}
@@ -1616,7 +1619,7 @@ function Watchlist({
 }) {
     if (!items.length) {
         return (
-            <div className="text-sm text-gray-500">
+            <div className="text-sm text-subtle">
                 Dodaj spółkę powyżej, aby zbudować własną listę obserwacyjną.
             </div>
         );
@@ -1635,7 +1638,7 @@ function Watchlist({
                         className={[
                             "opacity-0 transition-opacity",
                             "group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100",
-                            "text-xl leading-none text-gray-400 hover:text-rose-600 focus-visible:text-rose-600",
+                            "text-xl leading-none text-subtle hover:text-negative focus-visible:text-negative",
                             "px-1",
                         ].join(" ")}
                         aria-label={`Usuń ${s} z listy`}
@@ -1659,24 +1662,24 @@ function Stats({ data }: { data: Row[] }) {
     return (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
             <div>
-                <div className="text-gray-500">Kurs</div>
+                <div className="text-subtle">Kurs</div>
                 <div className="text-xl font-semibold">{close.toFixed(2)}</div>
             </div>
             <div>
-                <div className="text-gray-500">Zmiana (okres)</div>
+                <div className="text-subtle">Zmiana (okres)</div>
                 <div
-                    className={`text-xl font-semibold ${ch >= 0 ? "text-emerald-600" : "text-rose-600"
+                    className={`text-xl font-semibold ${ch >= 0 ? "text-accent" : "text-negative"
                         }`}
                 >
                     {ch.toFixed(2)} ({chPct.toFixed(1)}%)
                 </div>
             </div>
             <div>
-                <div className="text-gray-500">Max</div>
+                <div className="text-subtle">Max</div>
                 <div className="text-xl font-semibold">{max.toFixed(2)}</div>
             </div>
             <div>
-                <div className="text-gray-500">Min</div>
+                <div className="text-subtle">Min</div>
                 <div className="text-xl font-semibold">{min.toFixed(2)}</div>
             </div>
         </div>
@@ -1756,19 +1759,19 @@ function TickerAutosuggest({
                 onKeyDown={onKeyDown}
                 placeholder={placeholder}
                 className={[
-                    "px-3 py-2 rounded-xl border bg-white",
+                    inputBaseClasses,
                     inputClassName || "w-56",
                 ]
                     .filter(Boolean)
                     .join(" ")}
             />
             {open && (
-                <div className="absolute z-20 mt-1 w-full rounded-xl border bg-white shadow-lg max-h-72 overflow-auto">
+                <div className="absolute z-20 mt-1 w-full rounded-xl border border-soft bg-surface shadow-lg max-h-72 overflow-auto">
                     {loading && (
-                        <div className="px-3 py-2 text-sm text-gray-500">Szukam…</div>
+                        <div className="px-3 py-2 text-sm text-subtle">Szukam…</div>
                     )}
                     {!loading && list.length === 0 && (
-                        <div className="px-3 py-2 text-sm text-gray-500">Brak wyników</div>
+                        <div className="px-3 py-2 text-sm text-subtle">Brak wyników</div>
                     )}
                     {!loading &&
                         list.map((row, i) => (
@@ -1778,12 +1781,12 @@ function TickerAutosuggest({
                                     e.preventDefault();
                                     choose(row.symbol);
                                 }}
-                                className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 ${i === idx ? "bg-gray-100" : ""
+                                className={`w-full text-left px-3 py-2 text-sm hover:bg-[#EEF3F7] ${i === idx ? "bg-[#E3ECF5]" : ""
                                     }`}
                             >
                                 <div className="flex items-center justify-between">
                                     <span className="font-medium">{row.symbol}</span>
-                                    <span className="text-gray-500">{row.name}</span>
+                                    <span className="text-subtle">{row.name}</span>
                                 </div>
                             </button>
                         ))}
@@ -1812,18 +1815,18 @@ function PriceChart({
                     <AreaChart data={rows}>
                         <defs>
                             <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.25} />
-                                <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+                                <stop offset="5%" stopColor="#3498DB" stopOpacity={0.3} />
+                                <stop offset="95%" stopColor="#3498DB" stopOpacity={0} />
                             </linearGradient>
                         </defs>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
+                        <CartesianGrid strokeDasharray="3 3" stroke="#BDC3C7" />
                         <XAxis dataKey="date" tick={{ fontSize: 12 }} tickMargin={8} />
                         <YAxis tick={{ fontSize: 12 }} width={60} />
                         <Tooltip />
                         <Area
                             type="monotone"
                             dataKey="close"
-                            stroke="#2563eb"
+                            stroke="#3498DB"
                             fill="url(#g)"
                             fillOpacity={1}
                         />
@@ -1831,7 +1834,7 @@ function PriceChart({
                             <Line
                                 type="monotone"
                                 dataKey="sma"
-                                stroke="#0ea5e9"
+                                stroke="#0A2342"
                                 dot={false}
                                 strokeDasharray="4 4"
                             />
@@ -1839,16 +1842,16 @@ function PriceChart({
                     </AreaChart>
                 ) : (
                     <LineChart data={rows}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
+                        <CartesianGrid strokeDasharray="3 3" stroke="#BDC3C7" />
                         <XAxis dataKey="date" tick={{ fontSize: 12 }} tickMargin={8} />
                         <YAxis tick={{ fontSize: 12 }} width={60} />
                         <Tooltip />
-                        <Line type="monotone" dataKey="close" stroke="#2563eb" dot={false} />
+                        <Line type="monotone" dataKey="close" stroke="#3498DB" dot={false} />
                         {showSMA && (
                             <Line
                                 type="monotone"
                                 dataKey="sma"
-                                stroke="#0ea5e9"
+                                stroke="#0A2342"
                                 dot={false}
                                 strokeDasharray="4 4"
                             />
@@ -1865,11 +1868,11 @@ function RsiChart({ rows }: { rows: RowRSI[] }) {
         <div className="h-40">
             <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={rows}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
+                    <CartesianGrid strokeDasharray="3 3" stroke="#BDC3C7" />
                     <XAxis dataKey="date" tick={{ fontSize: 12 }} tickMargin={8} />
                     <YAxis domain={[0, 100]} tick={{ fontSize: 12 }} width={40} />
                     <Tooltip />
-                    <Line type="monotone" dataKey="rsi" stroke="#111827" dot={false} />
+                    <Line type="monotone" dataKey="rsi" stroke="#0A2342" dot={false} />
                 </LineChart>
             </ResponsiveContainer>
         </div>
@@ -2232,23 +2235,23 @@ export default function Page() {
     };
 
     return (
-        <div className="min-h-screen bg-gray-50 text-gray-900">
-            <header className="border-b bg-white/80 backdrop-blur">
+        <div className="min-h-screen bg-page text-neutral">
+            <header className="border-b border-soft bg-primary text-white">
                 <div className="max-w-6xl mx-auto px-4 md:px-8 py-10 space-y-8">
                     <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
                         <div className="space-y-3">
-                            <span className="text-xs uppercase tracking-[0.35em] text-gray-400">Panel demo</span>
-                            <h1 className="text-3xl md:text-4xl font-bold">Analityka Rynków</h1>
-                            <p className="text-gray-600 max-w-2xl">
+                            <span className="text-xs uppercase tracking-[0.35em] text-white/70">Panel demo</span>
+                            <h1 className="text-3xl md:text-4xl font-bold text-white">Analityka Rynków</h1>
+                            <p className="max-w-2xl text-white/80">
                                 Zbieraj notowania, konfiguruj score i sprawdzaj portfel w jednym miejscu połączonym z
                                 backendem.
                             </p>
                         </div>
                         <div className="flex items-center gap-3 self-start md:self-auto">
-                            <button className="px-4 py-2 rounded-xl border border-gray-300 text-gray-700 hover:border-gray-400">
+                            <button className="px-4 py-2 rounded-xl border border-white/40 text-white hover:bg-white/10">
                                 Zaloguj
                             </button>
-                            <button className="px-4 py-2 rounded-xl bg-black text-white hover:bg-gray-900">
+                            <button className="px-4 py-2 rounded-xl bg-accent text-primary transition hover:bg-[#27AE60]">
                                 Utwórz konto
                             </button>
                         </div>
@@ -2274,7 +2277,7 @@ export default function Page() {
                 >
                     <Card>
                         <div className="space-y-4">
-                            <p className="text-sm text-gray-600">
+                            <p className="text-sm text-muted">
                                 Kliknij na ticker, aby przełączyć moduły poniżej. Usuń zbędne pozycje przyciskiem ×.
                             </p>
                             <Watchlist
@@ -2318,11 +2321,11 @@ export default function Page() {
                                 }
                             >
                                 {!symbol ? (
-                                    <div className="p-6 text-sm text-gray-500">
+                                    <div className="p-6 text-sm text-subtle">
                                         Dodaj spółkę do listy obserwacyjnej, aby zobaczyć wykres.
                                     </div>
                                 ) : loading ? (
-                                    <div className="p-6 text-sm text-gray-500">
+                                    <div className="p-6 text-sm text-subtle">
                                         Ładowanie danych z API…
                                     </div>
                                 ) : rows.length ? (
@@ -2332,18 +2335,18 @@ export default function Page() {
                                         <PriceChart rows={withSma} showArea={area} showSMA={smaOn} />
                                     </>
                                 ) : (
-                                    <div className="p-6 text-sm text-gray-500">
+                                    <div className="p-6 text-sm text-subtle">
                                         Brak danych do wyświetlenia
                                     </div>
                                 )}
                                 {err && symbol && (
-                                    <div className="mt-3 text-sm text-rose-600">Błąd: {err}</div>
+                                    <div className="mt-3 text-sm text-negative">Błąd: {err}</div>
                                 )}
                             </Card>
 
                             <Card title="RSI (14)">
                                 {!symbol ? (
-                                    <div className="p-6 text-sm text-gray-500">
+                                    <div className="p-6 text-sm text-subtle">
                                         Dodaj spółkę, aby zobaczyć wskaźnik RSI.
                                     </div>
                                 ) : (
@@ -2354,20 +2357,20 @@ export default function Page() {
 
                         <div className="space-y-6">
                             <Card title={`Fundamenty – ${symbolLabel}`}>
-                                <div className="text-sm text-gray-500">
+                                <div className="text-sm text-subtle">
                                     {symbol
                                         ? "Dane przykładowe — podłączymy realne API fundamentów w kolejnym kroku."
                                         : "Dodaj spółkę, aby zobaczyć sekcję fundamentów."}
                                 </div>
                                 {symbol && (
                                     <div className="mt-4 grid grid-cols-2 gap-y-2 text-sm">
-                                        <div className="text-gray-500">Kapitalizacja</div>
+                                        <div className="text-subtle">Kapitalizacja</div>
                                         <div>$—</div>
-                                        <div className="text-gray-500">P/E (TTM)</div>
+                                        <div className="text-subtle">P/E (TTM)</div>
                                         <div>—</div>
-                                        <div className="text-gray-500">Przychody</div>
+                                        <div className="text-subtle">Przychody</div>
                                         <div>—</div>
-                                        <div className="text-gray-500">Marża netto</div>
+                                        <div className="text-subtle">Marża netto</div>
                                         <div>—</div>
                                     </div>
                                 )}
@@ -2380,7 +2383,7 @@ export default function Page() {
                                     <li>Przebicie SMA50 od dołu</li>
                                     <li>Nowe 52-tygodniowe maksimum</li>
                                 </ul>
-                                <p className="text-xs text-gray-500 mt-3">
+                                <p className="text-xs text-subtle mt-3">
                                     Podmienimy na realny backend skanera.
                                 </p>
                             </Card>
@@ -2398,45 +2401,45 @@ export default function Page() {
                         <div className="space-y-5 text-sm">
                             <div className="grid gap-4 md:grid-cols-2">
                                 <label className="flex flex-col gap-2">
-                                    <span className="text-gray-600 text-xs uppercase tracking-wide">
+                                    <span className="text-muted text-xs uppercase tracking-wide">
                                         Nazwa score
                                     </span>
                                     <input
                                         type="text"
                                         value={scoreNameInput}
                                         onChange={(e) => setScoreNameInput(e.target.value)}
-                                        className="rounded-xl border px-3 py-2"
+                                        className={inputBaseClasses}
                                         placeholder="np. custom_quality"
                                     />
                                 </label>
                                 <label className="flex flex-col gap-2">
-                                    <span className="text-gray-600 text-xs uppercase tracking-wide">
+                                    <span className="text-muted text-xs uppercase tracking-wide">
                                         Opis (opcjonalnie)
                                     </span>
                                     <input
                                         type="text"
                                         value={scoreDescription}
                                         onChange={(e) => setScoreDescription(e.target.value)}
-                                        className="rounded-xl border px-3 py-2"
+                                        className={inputBaseClasses}
                                         placeholder="Krótka nazwa w raporcie"
                                     />
                                 </label>
                             </div>
                             <div className="grid gap-4 md:grid-cols-2">
                                 <label className="flex flex-col gap-2">
-                                    <span className="text-gray-600 text-xs uppercase tracking-wide">
+                                    <span className="text-muted text-xs uppercase tracking-wide">
                                         Universe / filtr
                                     </span>
                                     <input
                                         type="text"
                                         value={scoreUniverse}
                                         onChange={(e) => setScoreUniverse(e.target.value)}
-                                        className="rounded-xl border px-3 py-2"
+                                        className={inputBaseClasses}
                                         placeholder="np. WIG20.WA, WIG40.WA"
                                     />
                                 </label>
                                 <label className="flex flex-col gap-2">
-                                    <span className="text-gray-600 text-xs uppercase tracking-wide">
+                                    <span className="text-muted text-xs uppercase tracking-wide">
                                         Liczba spółek
                                     </span>
                                     <input
@@ -2445,13 +2448,13 @@ export default function Page() {
                                         step={1}
                                         value={scoreLimit}
                                         onChange={(e) => setScoreLimit(Number(e.target.value))}
-                                        className="rounded-xl border px-3 py-2"
+                                        className={inputBaseClasses}
                                     />
                                 </label>
                             </div>
                             <div className="grid gap-4 md:grid-cols-2">
                                 <label className="flex flex-col gap-2">
-                                    <span className="text-gray-600 text-xs uppercase tracking-wide">
+                                    <span className="text-muted text-xs uppercase tracking-wide">
                                         Sortowanie
                                     </span>
                                     <div className="flex gap-2">
@@ -2464,46 +2467,46 @@ export default function Page() {
                                     </div>
                                 </label>
                                 <label className="flex flex-col gap-2">
-                                    <span className="text-gray-600 text-xs uppercase tracking-wide">
+                                    <span className="text-muted text-xs uppercase tracking-wide">
                                         Data (as of)
                                     </span>
                                     <input
                                         type="date"
                                         value={scoreAsOf}
                                         onChange={(e) => setScoreAsOf(e.target.value)}
-                                        className="rounded-xl border px-3 py-2"
+                                        className={inputBaseClasses}
                                     />
                                 </label>
                             </div>
                             <div className="grid gap-4 md:grid-cols-2">
                                 <label className="flex flex-col gap-2">
-                                    <span className="text-gray-600 text-xs uppercase tracking-wide">
+                                    <span className="text-muted text-xs uppercase tracking-wide">
                                         Min kapitalizacja (mln)
                                     </span>
                                     <input
                                         type="number"
                                         value={scoreMinMcap}
                                         onChange={(e) => setScoreMinMcap(e.target.value)}
-                                        className="rounded-xl border px-3 py-2"
+                                        className={inputBaseClasses}
                                     />
                                 </label>
                                 <label className="flex flex-col gap-2">
-                                    <span className="text-gray-600 text-xs uppercase tracking-wide">
+                                    <span className="text-muted text-xs uppercase tracking-wide">
                                         Min obrót (mln)
                                     </span>
                                     <input
                                         type="number"
                                         value={scoreMinTurnover}
                                         onChange={(e) => setScoreMinTurnover(e.target.value)}
-                                        className="rounded-xl border px-3 py-2"
+                                        className={inputBaseClasses}
                                     />
                                 </label>
                             </div>
                             <div className="space-y-4">
                                 <div className="flex items-center justify-between flex-wrap gap-3">
                                     <div>
-                                        <div className="text-sm font-medium text-gray-900">Zasady rankingu</div>
-                                        <div className="text-xs text-gray-500">
+                                        <div className="text-sm font-medium text-primary">Zasady rankingu</div>
+                                        <div className="text-xs text-subtle">
                                             Dobierz metryki, kierunek i wagi. Każde kliknięcie od razu aktualizuje payload
                                             wysyłany do backendu.
                                         </div>
@@ -2511,7 +2514,7 @@ export default function Page() {
                                     <button
                                         type="button"
                                         onClick={addScoreRule}
-                                        className="px-3 py-2 rounded-xl border border-dashed text-sm"
+                                        className="px-3 py-2 rounded-xl border border-dashed border-soft text-sm text-muted transition hover:border-[var(--color-primary)] hover:text-primary"
                                     >
                                         Dodaj metrykę
                                     </button>
@@ -2520,13 +2523,13 @@ export default function Page() {
                                     {scoreRules.map((rule, idx) => (
                                         <div
                                             key={rule.id}
-                                            className="rounded-2xl border border-gray-200 bg-gray-50/60 p-4"
+                                            className="rounded-2xl border border-soft bg-soft-surface p-4"
                                         >
                                             <div className="flex items-start justify-between gap-4">
                                                 <div className="space-y-3 flex-1">
                                                     <div className="grid gap-3 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
                                                         <label className="flex flex-col gap-2">
-                                                            <span className="text-xs uppercase tracking-wide text-gray-600">
+                                                            <span className="text-xs uppercase tracking-wide text-muted">
                                                                 Metryka
                                                             </span>
                                                             <select
@@ -2556,7 +2559,7 @@ export default function Page() {
                                                                         )
                                                                     )
                                                                 }
-                                                                className="rounded-xl border px-3 py-2"
+                                                                className={inputBaseClasses}
                                                             >
                                                                 <option value="">Wybierz…</option>
                                                                 {SCORE_METRIC_OPTIONS.map((option) => (
@@ -2567,7 +2570,7 @@ export default function Page() {
                                                             </select>
                                                         </label>
                                                         <label className="flex flex-col gap-2">
-                                                            <span className="text-xs uppercase tracking-wide text-gray-600">
+                                                            <span className="text-xs uppercase tracking-wide text-muted">
                                                                 Waga
                                                             </span>
                                                             <input
@@ -2582,13 +2585,13 @@ export default function Page() {
                                                                         )
                                                                     )
                                                                 }
-                                                                className="rounded-xl border px-3 py-2"
+                                                                className={inputBaseClasses}
                                                             />
                                                         </label>
                                                     </div>
                                                     <div className="grid gap-3 md:grid-cols-3">
                                                         <div>
-                                                            <span className="text-xs uppercase tracking-wide text-gray-600">
+                                                            <span className="text-xs uppercase tracking-wide text-muted">
                                                                 Kierunek
                                                             </span>
                                                             <div className="mt-1 flex flex-wrap gap-2">
@@ -2623,7 +2626,7 @@ export default function Page() {
                                                             </div>
                                                         </div>
                                                         <label className="flex flex-col gap-2">
-                                                            <span className="text-xs uppercase tracking-wide text-gray-600">
+                                                            <span className="text-xs uppercase tracking-wide text-muted">
                                                                 Minimalna wartość
                                                             </span>
                                                             <input
@@ -2638,11 +2641,11 @@ export default function Page() {
                                                                         )
                                                                     )
                                                                 }
-                                                                className="rounded-xl border px-3 py-2"
+                                                                className={inputBaseClasses}
                                                             />
                                                         </label>
                                                         <label className="flex flex-col gap-2">
-                                                            <span className="text-xs uppercase tracking-wide text-gray-600">
+                                                            <span className="text-xs uppercase tracking-wide text-muted">
                                                                 Maksymalna wartość
                                                             </span>
                                                             <input
@@ -2657,13 +2660,13 @@ export default function Page() {
                                                                         )
                                                                     )
                                                                 }
-                                                                className="rounded-xl border px-3 py-2"
+                                                                className={inputBaseClasses}
                                                             />
                                                         </label>
                                                     </div>
                                                     <div className="grid gap-3 md:grid-cols-2">
                                                         <label className="flex flex-col gap-2">
-                                                            <span className="text-xs uppercase tracking-wide text-gray-600">
+                                                            <span className="text-xs uppercase tracking-wide text-muted">
                                                                 Normalizacja
                                                             </span>
                                                             <select
@@ -2681,14 +2684,14 @@ export default function Page() {
                                                                         )
                                                                     )
                                                                 }
-                                                                className="rounded-xl border px-3 py-2"
+                                                                className={inputBaseClasses}
                                                             >
                                                                 <option value="raw">Bez zmian</option>
                                                                 <option value="zscore">Z-score</option>
                                                                 <option value="percentile">Percentyl</option>
                                                             </select>
                                                         </label>
-                                                        <div className="text-xs text-gray-500">
+                                                        <div className="text-xs text-subtle">
                                                             Backend akceptuje dowolne nazwy metryk. Wagi są skalowane
                                                             automatycznie.
                                                         </div>
@@ -2697,20 +2700,20 @@ export default function Page() {
                                                 <button
                                                     type="button"
                                                     onClick={() => removeScoreRule(rule.id)}
-                                                    className="px-2 py-1 text-xs rounded-lg border"
+                                                    className="px-2 py-1 text-xs rounded-lg border border-soft text-muted transition hover:border-[var(--color-primary)] hover:text-primary"
                                                 >
                                                     Usuń
                                                 </button>
                                             </div>
                                             {idx === scoreRules.length - 1 && (
-                                                <div className="mt-3 text-xs text-gray-400">
+                                                <div className="mt-3 text-xs text-subtle">
                                                     Zmieniaj wagi i parametry, aby zobaczyć wpływ na ranking.
                                                 </div>
                                             )}
                                         </div>
                                     ))}
                                 </div>
-                                <div className="text-xs text-gray-500">
+                                <div className="text-xs text-subtle">
                                     Suma wag: <b>{scoreTotalWeight.toFixed(1)}</b>. Wartość względna — backend normalizuje
                                     je przy obliczeniach.
                                 </div>
@@ -2720,30 +2723,30 @@ export default function Page() {
                                     type="button"
                                     onClick={handleScorePreview}
                                     disabled={scoreDisabled}
-                                    className="px-4 py-2 rounded-xl bg-black text-white disabled:opacity-50"
+                                    className="px-4 py-2 rounded-xl bg-accent text-primary transition hover:bg-[#27AE60] disabled:opacity-50"
                                 >
                                     {scoreLoading ? "Łączenie…" : "Przelicz ranking"}
                                 </button>
                                 <button
                                     type="button"
                                     onClick={resetScoreBuilder}
-                                    className="px-4 py-2 rounded-xl border border-gray-300"
+                                    className="px-4 py-2 rounded-xl border border-soft text-muted transition hover:border-[var(--color-primary)] hover:text-primary"
                                 >
                                     Resetuj
                                 </button>
                                 {!scoreValidRules.length && !scoreLoading && (
-                                    <div className="text-xs text-rose-600">
+                                    <div className="text-xs text-negative">
                                         Dodaj co najmniej jedną metrykę z wagą różną od zera.
                                     </div>
                                 )}
                                 {scoreLimitInvalid && !scoreLoading && (
-                                    <div className="text-xs text-rose-600">Liczba spółek musi być dodatnia.</div>
+                                    <div className="text-xs text-negative">Liczba spółek musi być dodatnia.</div>
                                 )}
                             </div>
-                            {scoreError && <div className="text-sm text-rose-600">Błąd: {scoreError}</div>}
+                            {scoreError && <div className="text-sm text-negative">Błąd: {scoreError}</div>}
                             {scoreResults ? (
                                 <div className="space-y-4">
-                                    <div className="text-xs text-gray-500">
+                                    <div className="text-xs text-subtle">
                                         {[
                                             scoreResults.meta.name ? `Score: ${scoreResults.meta.name}` : null,
                                             scoreResults.meta.asOf ? `Stan na ${scoreResults.meta.asOf}` : null,
@@ -2759,7 +2762,7 @@ export default function Page() {
                                     <ScoreRankingTable rows={scoreResults.rows} />
                                 </div>
                             ) : (
-                                <div className="text-xs text-gray-500">
+                                <div className="text-xs text-subtle">
                                     {scoreLoading
                                         ? "Łączenie z backendem…"
                                         : "Zdefiniuj zasady i kliknij \"Przelicz ranking\", aby pobrać wyniki."}
@@ -2786,7 +2789,7 @@ export default function Page() {
                                         Automatycznie wg score
                                     </Chip>
                                 </div>
-                                <p className="text-sm text-gray-600">
+                                <p className="text-sm text-muted">
                                     Wybierz tryb konfiguracji portfela. Wariant score wykorzysta parametry zdefiniowane
                                     powyżej lub dowolną istniejącą nazwę rankingu z backendu.
                                 </p>
@@ -2795,11 +2798,11 @@ export default function Page() {
                                 <div className="space-y-3">
                                     {pfMode === "manual" ? (
                                         <>
-                                            <div className="text-sm font-medium text-gray-700">Skład portfela</div>
+                                            <div className="text-sm font-medium text-neutral">Skład portfela</div>
                                             {pfRows.map((r, i) => (
                                                 <div
                                                     key={i}
-                                                    className="flex flex-wrap items-center gap-3 rounded-xl border border-gray-200 bg-gray-50/60 px-3 py-3"
+                                                    className="flex flex-wrap items-center gap-3 rounded-xl border border-soft bg-soft-surface px-3 py-3"
                                                 >
                                                     <div className="flex-1 min-w-[12rem]">
                                                         <TickerAutosuggest
@@ -2835,14 +2838,14 @@ export default function Page() {
                                                                     )
                                                                 )
                                                             }
-                                                            className="w-24 md:w-20 px-3 py-2 rounded-xl border"
+                                                            className={`${inputBaseClasses} w-24 md:w-20`}
                                                         />
-                                                        <span className="text-sm text-gray-500">%</span>
+                                                        <span className="text-sm text-subtle">%</span>
                                                         <button
                                                             onClick={() =>
                                                                 setPfRows((rows) => rows.filter((_, idx) => idx !== i))
                                                             }
-                                                            className="px-2 py-1 text-xs rounded-lg border"
+                                                            className="px-2 py-1 text-xs rounded-lg border border-soft text-muted transition hover:border-[var(--color-primary)] hover:text-primary"
                                                         >
                                                             Usuń
                                                         </button>
@@ -2856,11 +2859,11 @@ export default function Page() {
                                                         { symbol: "", weight: 0 },
                                                     ])
                                                 }
-                                                className="px-3 py-2 rounded-xl border border-dashed text-sm"
+                                                className="px-3 py-2 rounded-xl border border-dashed border-soft text-sm text-muted transition hover:border-[var(--color-primary)] hover:text-primary"
                                             >
                                                 Dodaj pozycję
                                             </button>
-                                            <div className="text-xs text-gray-500">
+                                            <div className="text-xs text-subtle">
                                                 Suma wag: {pfTotal.toFixed(1)}% (normalizujemy do 100%).
                                             </div>
                                         </>
@@ -2868,19 +2871,19 @@ export default function Page() {
                                         <div className="space-y-3">
                                             <div className="grid gap-3 md:grid-cols-2">
                                                 <label className="flex flex-col gap-2">
-                                                    <span className="text-xs uppercase tracking-wide text-gray-600">
+                                                    <span className="text-xs uppercase tracking-wide text-muted">
                                                         Score
                                                     </span>
                                                     <input
                                                         type="text"
                                                         value={pfScoreName}
                                                         onChange={(e) => setPfScoreName(e.target.value)}
-                                                        className="rounded-xl border px-3 py-2"
+                                                        className={inputBaseClasses}
                                                         placeholder="np. quality_score"
                                                     />
                                                 </label>
                                                 <label className="flex flex-col gap-2">
-                                                    <span className="text-xs uppercase tracking-wide text-gray-600">
+                                                    <span className="text-xs uppercase tracking-wide text-muted">
                                                         Limit spółek
                                                     </span>
                                                     <input
@@ -2889,19 +2892,19 @@ export default function Page() {
                                                         step={1}
                                                         value={pfScoreLimit}
                                                         onChange={(e) => setPfScoreLimit(Number(e.target.value))}
-                                                        className="rounded-xl border px-3 py-2"
+                                                        className={inputBaseClasses}
                                                     />
                                                 </label>
                                             </div>
                                             <div className="grid gap-3 md:grid-cols-3">
                                                 <label className="flex flex-col gap-2">
-                                                    <span className="text-xs uppercase tracking-wide text-gray-600">
+                                                    <span className="text-xs uppercase tracking-wide text-muted">
                                                         Wagi
                                                     </span>
                                                     <select
                                                         value={pfScoreWeighting}
                                                         onChange={(e) => setPfScoreWeighting(e.target.value)}
-                                                        className="rounded-xl border px-3 py-2"
+                                                        className={inputBaseClasses}
                                                     >
                                                         <option value="equal">Równe</option>
                                                         <option value="score">Proporcjonalne do score</option>
@@ -2909,7 +2912,7 @@ export default function Page() {
                                                     </select>
                                                 </label>
                                                 <div>
-                                                    <span className="text-xs uppercase tracking-wide text-gray-600">
+                                                    <span className="text-xs uppercase tracking-wide text-muted">
                                                         Kierunek
                                                     </span>
                                                     <div className="mt-1 flex flex-wrap gap-2">
@@ -2928,39 +2931,39 @@ export default function Page() {
                                                     </div>
                                                 </div>
                                                 <label className="flex flex-col gap-2">
-                                                    <span className="text-xs uppercase tracking-wide text-gray-600">
+                                                    <span className="text-xs uppercase tracking-wide text-muted">
                                                         Universe / filtr
                                                     </span>
                                                     <input
                                                         type="text"
                                                         value={pfScoreUniverse}
                                                         onChange={(e) => setPfScoreUniverse(e.target.value)}
-                                                        className="rounded-xl border px-3 py-2"
+                                                        className={inputBaseClasses}
                                                         placeholder="np. WIG20.WA"
                                                     />
                                                 </label>
                                             </div>
                                             <div className="grid gap-3 md:grid-cols-2">
                                                 <label className="flex flex-col gap-2">
-                                                    <span className="text-xs uppercase tracking-wide text-gray-600">
+                                                    <span className="text-xs uppercase tracking-wide text-muted">
                                                         Min score
                                                     </span>
                                                     <input
                                                         type="number"
                                                         value={pfScoreMin}
                                                         onChange={(e) => setPfScoreMin(e.target.value)}
-                                                        className="rounded-xl border px-3 py-2"
+                                                        className={inputBaseClasses}
                                                     />
                                                 </label>
                                                 <label className="flex flex-col gap-2">
-                                                    <span className="text-xs uppercase tracking-wide text-gray-600">
+                                                    <span className="text-xs uppercase tracking-wide text-muted">
                                                         Max score
                                                     </span>
                                                     <input
                                                         type="number"
                                                         value={pfScoreMax}
                                                         onChange={(e) => setPfScoreMax(e.target.value)}
-                                                        className="rounded-xl border px-3 py-2"
+                                                        className={inputBaseClasses}
                                                     />
                                                 </label>
                                             </div>
@@ -2969,30 +2972,30 @@ export default function Page() {
                                 </div>
                                 <div className="space-y-4">
                                     <div className="grid gap-3 md:grid-cols-2">
-                                        <label className="flex flex-col gap-2 rounded-2xl border border-gray-200 bg-white/80 px-4 py-3 shadow-sm">
-                                            <span className="text-gray-600">Data startu</span>
+                                        <label className="flex flex-col gap-2 rounded-2xl border border-soft bg-white/80 px-4 py-3 shadow-sm">
+                                            <span className="text-muted">Data startu</span>
                                             <input
                                                 type="date"
                                                 value={pfStart}
                                                 onChange={(e) => setPfStart(e.target.value)}
-                                                className="rounded-xl border px-3 py-2"
+                                                className={inputBaseClasses}
                                             />
                                         </label>
-                                        <label className="flex flex-col gap-2 rounded-2xl border border-gray-200 bg-white/80 px-4 py-3 shadow-sm">
-                                            <span className="text-gray-600">Data końca</span>
+                                        <label className="flex flex-col gap-2 rounded-2xl border border-soft bg-white/80 px-4 py-3 shadow-sm">
+                                            <span className="text-muted">Data końca</span>
                                             <input
                                                 type="date"
                                                 value={pfEnd}
                                                 onChange={(e) => setPfEnd(e.target.value)}
-                                                className="rounded-xl border px-3 py-2"
+                                                className={inputBaseClasses}
                                             />
                                         </label>
-                                        <label className="flex flex-col gap-2 rounded-2xl border border-gray-200 bg-white/80 px-4 py-3 shadow-sm">
-                                            <span className="text-gray-600">Rebalansing</span>
+                                        <label className="flex flex-col gap-2 rounded-2xl border border-soft bg-white/80 px-4 py-3 shadow-sm">
+                                            <span className="text-muted">Rebalansing</span>
                                             <select
                                                 value={pfFreq}
                                                 onChange={(e) => setPfFreq(e.target.value as Rebalance)}
-                                                className="rounded-xl border px-3 py-2"
+                                                className={inputBaseClasses}
                                             >
                                                 <option value="monthly">Miesięcznie</option>
                                                 <option value="quarterly">Kwartalnie</option>
@@ -3000,42 +3003,42 @@ export default function Page() {
                                                 <option value="none">Bez rebalansingu</option>
                                             </select>
                                         </label>
-                                        <label className="flex flex-col gap-2 rounded-2xl border border-gray-200 bg-white/80 px-4 py-3 shadow-sm">
-                                            <span className="text-gray-600">Kapitał początkowy</span>
+                                        <label className="flex flex-col gap-2 rounded-2xl border border-soft bg-white/80 px-4 py-3 shadow-sm">
+                                            <span className="text-muted">Kapitał początkowy</span>
                                             <input
                                                 type="number"
                                                 min={0}
                                                 step={100}
                                                 value={pfInitial}
                                                 onChange={(e) => setPfInitial(Number(e.target.value))}
-                                                className="rounded-xl border px-3 py-2"
+                                                className={inputBaseClasses}
                                             />
                                         </label>
-                                        <label className="flex flex-col gap-2 rounded-2xl border border-gray-200 bg-white/80 px-4 py-3 shadow-sm">
-                                            <span className="text-gray-600">Koszt transakcyjny (%)</span>
+                                        <label className="flex flex-col gap-2 rounded-2xl border border-soft bg-white/80 px-4 py-3 shadow-sm">
+                                            <span className="text-muted">Koszt transakcyjny (%)</span>
                                             <input
                                                 type="number"
                                                 min={0}
                                                 step={0.1}
                                                 value={pfFee}
                                                 onChange={(e) => setPfFee(Number(e.target.value))}
-                                                className="rounded-xl border px-3 py-2"
+                                                className={inputBaseClasses}
                                             />
                                         </label>
-                                        <label className="flex flex-col gap-2 rounded-2xl border border-gray-200 bg-white/80 px-4 py-3 shadow-sm">
-                                            <span className="text-gray-600">Próg rebalansingu (%)</span>
+                                        <label className="flex flex-col gap-2 rounded-2xl border border-soft bg-white/80 px-4 py-3 shadow-sm">
+                                            <span className="text-muted">Próg rebalansingu (%)</span>
                                             <input
                                                 type="number"
                                                 min={0}
                                                 step={0.1}
                                                 value={pfThreshold}
                                                 onChange={(e) => setPfThreshold(Number(e.target.value))}
-                                                className="rounded-xl border px-3 py-2"
+                                                className={inputBaseClasses}
                                             />
                                         </label>
                                     </div>
                                     <div className="space-y-2">
-                                        <span className="text-sm text-gray-600">Benchmark (opcjonalnie)</span>
+                                        <span className="text-sm text-muted">Benchmark (opcjonalnie)</span>
                                         <div className="flex flex-wrap items-center gap-2">
                                             <TickerAutosuggest
                                                 onPick={(sym) => setPfBenchmark(sym)}
@@ -3043,32 +3046,32 @@ export default function Page() {
                                                 inputClassName="w-60"
                                             />
                                             {pfBenchmark && (
-                                                <div className="flex items-center gap-2 text-sm text-gray-600">
-                                                    <span className="font-medium text-gray-900">{pfBenchmark}</span>
+                                                <div className="flex items-center gap-2 text-sm text-muted">
+                                                    <span className="font-medium text-primary">{pfBenchmark}</span>
                                                     <button
                                                         onClick={() => setPfBenchmark(null)}
-                                                        className="px-2 py-1 text-xs rounded-lg border"
+                                                        className="px-2 py-1 text-xs rounded-lg border border-soft text-muted transition hover:border-[var(--color-primary)] hover:text-primary"
                                                     >
                                                         Wyczyść
                                                     </button>
                                                 </div>
                                             )}
                                             {!pfBenchmark && (
-                                                <span className="text-xs text-gray-500">
+                                                <span className="text-xs text-subtle">
                                                     Wykres porówna portfel z wybranym benchmarkiem.
                                                 </span>
                                             )}
                                         </div>
                                     </div>
                                     {pfRangeInvalid && (
-                                        <div className="text-xs text-rose-600">
+                                        <div className="text-xs text-negative">
                                             Data końca musi być późniejsza niż data startu.
                                         </div>
                                     )}
                                     <button
                                         disabled={pfDisableSimulation}
                                         onClick={runPortfolioSimulation}
-                                        className="w-full md:w-auto px-4 py-2 rounded-xl bg-black text-white disabled:opacity-50"
+                                        className="w-full md:w-auto px-4 py-2 rounded-xl bg-accent text-primary transition hover:bg-[#27AE60] disabled:opacity-50"
                                     >
                                         {pfLoading
                                             ? "Liczenie…"
@@ -3079,19 +3082,19 @@ export default function Page() {
                                     {pfMode === "manual" ? (
                                         <>
                                             {pfHasInvalidWeights && (
-                                                <div className="text-xs text-rose-600">
+                                                <div className="text-xs text-negative">
                                                     Wagi muszą być liczbami większymi lub równymi zero.
                                                 </div>
                                             )}
                                             {pfHasMissingSymbols && (
-                                                <div className="text-xs text-rose-600">
+                                                <div className="text-xs text-negative">
                                                     Uzupełnij symbole dla pozycji z dodatnią wagą.
                                                 </div>
                                             )}
                                             {!pfHasValidPositions &&
                                                 !pfHasMissingSymbols &&
                                                 !pfHasInvalidWeights && (
-                                                    <div className="text-xs text-rose-600">
+                                                    <div className="text-xs text-negative">
                                                         Dodaj co najmniej jedną spółkę z wagą większą od zera.
                                                     </div>
                                                 )}
@@ -3099,26 +3102,26 @@ export default function Page() {
                                     ) : (
                                         <>
                                             {pfScoreNameInvalid && (
-                                                <div className="text-xs text-rose-600">
+                                                <div className="text-xs text-negative">
                                                     Podaj nazwę score, aby zbudować portfel.
                                                 </div>
                                             )}
                                             {pfScoreLimitInvalid && (
-                                                <div className="text-xs text-rose-600">
+                                                <div className="text-xs text-negative">
                                                     Wybierz dodatnią liczbę spółek w rankingu.
                                                 </div>
                                             )}
                                         </>
                                     )}
                                     {pfErr && (
-                                        <div className="text-sm text-rose-600">Błąd: {pfErr}</div>
+                                        <div className="text-sm text-negative">Błąd: {pfErr}</div>
                                     )}
                                 </div>
                             </div>
 
                             <div className="space-y-4">
                                 {!pfRes ? (
-                                    <div className="text-sm text-gray-600">
+                                    <div className="text-sm text-muted">
                                         {pfMode === "manual"
                                             ? "Skonfiguruj portfel (symbole + wagi), wybierz datę startu i rebalansing, potem uruchom symulację."
                                             : "Podaj score i parametry rankingu, ustaw zakres dat i uruchom symulację."}
@@ -3134,7 +3137,7 @@ export default function Page() {
                                         <div className="h-72">
                                             <ResponsiveContainer width="100%" height="100%">
                                                 <LineChart data={pfChartData}>
-                                                    <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
+                                                    <CartesianGrid strokeDasharray="3 3" stroke="#BDC3C7" />
                                                     <XAxis dataKey="date" tick={{ fontSize: 12 }} tickMargin={8} />
                                                     <YAxis tick={{ fontSize: 12 }} width={60} />
                                                     <Tooltip
@@ -3147,7 +3150,7 @@ export default function Page() {
                                                         type="monotone"
                                                         dataKey="portfolio"
                                                         name="Portfel"
-                                                        stroke="#111827"
+                                                        stroke="#0A2342"
                                                         dot={false}
                                                     />
                                                     {pfRes.benchmark && pfRes.benchmark.length > 0 && (
@@ -3155,7 +3158,7 @@ export default function Page() {
                                                             type="monotone"
                                                             dataKey="benchmark"
                                                             name="Benchmark"
-                                                            stroke="#6b7280"
+                                                            stroke="#3498DB"
                                                             strokeDasharray="4 2"
                                                             dot={false}
                                                         />
@@ -3168,7 +3171,7 @@ export default function Page() {
                                                 <RebalanceTimeline events={pfRes.rebalances} />
                                             </div>
                                         )}
-                                        <div className="text-xs text-gray-500 mt-2 space-y-1">
+                                        <div className="text-xs text-subtle mt-2 space-y-1">
                                             <div>
                                                 Zakres: {pfStart} → {pfEnd}. Rebalansing: {pfFreq}
                                                 {pfThreshold > 0 ? ` (próg ${pfThreshold.toFixed(1)}%)` : ""}.
@@ -3193,7 +3196,7 @@ export default function Page() {
                     </Card>
                 </Section>
 
-                <footer className="pt-6 text-center text-sm text-gray-500">
+                <footer className="pt-6 text-center text-sm text-subtle">
                     © {new Date().getFullYear()} Analityka Rynków • MVP
                 </footer>
             </main>
