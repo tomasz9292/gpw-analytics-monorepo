@@ -2104,7 +2104,7 @@ export default function Page() {
                         min,
                         max,
                         transform:
-                            rule.transform && rule.transform !== "raw" && rule.transform !== ""
+                            rule.transform && rule.transform !== "raw"
                                 ? rule.transform
                                 : null,
                     };
