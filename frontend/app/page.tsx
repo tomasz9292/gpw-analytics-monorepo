@@ -1299,9 +1299,11 @@ const Card = ({
 }) => (
     <div className="bg-surface rounded-2xl shadow-sm border border-soft">
         {(title || right) && (
-            <div className="px-4 md:px-6 py-3 border-b border-soft flex items-center justify-between">
-                <div className="font-semibold text-primary">{title}</div>
-                <div>{right}</div>
+            <div className="px-4 md:px-6 py-3 border-b border-soft flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                {title && <div className="font-semibold text-primary sm:flex-1">{title}</div>}
+                {right && (
+                    <div className="flex flex-wrap gap-2 w-full sm:w-auto sm:justify-end">{right}</div>
+                )}
             </div>
         )}
         <div className="p-4 md:p-6">{children}</div>
@@ -2301,7 +2303,7 @@ export default function Page() {
                             <Card
                                 title={symbol ? `${symbol} – wykres cenowy` : "Wykres cenowy"}
                                 right={
-                                    <div className="flex gap-2">
+                                    <>
                                         <Chip active={period === 90} onClick={() => setPeriod(90)}>
                                             3M
                                         </Chip>
@@ -2317,7 +2319,7 @@ export default function Page() {
                                         <Chip active={smaOn} onClick={() => setSmaOn(!smaOn)}>
                                             SMA 20
                                         </Chip>
-                                    </div>
+                                    </>
                                 }
                             >
                                 {!symbol ? (
@@ -2363,7 +2365,7 @@ export default function Page() {
                                         : "Dodaj spółkę, aby zobaczyć sekcję fundamentów."}
                                 </div>
                                 {symbol && (
-                                    <div className="mt-4 grid grid-cols-2 gap-y-2 text-sm">
+                                    <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-y-2 sm:gap-x-4 text-sm">
                                         <div className="text-subtle">Kapitalizacja</div>
                                         <div>$—</div>
                                         <div className="text-subtle">P/E (TTM)</div>
