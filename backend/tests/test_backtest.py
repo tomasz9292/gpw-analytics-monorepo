@@ -200,3 +200,23 @@ def test_score_preview_returns_metrics(monkeypatch):
     row = response.rows[0]
     assert "total_return_4" in row.metrics
     assert "volatility_4" in row.metrics
+
+
+def test_parse_backtest_get_accepts_comma_separated_values():
+    req = main._parse_backtest_get(
+        mode="manual",
+        start="2023-01-01",
+        rebalance="monthly",
+        symbols=["AAA,BBB"],
+        weights=["0.6,0.4"],
+        top_n=None,
+        weighting="equal",
+        components=None,
+        filters_include=None,
+        filters_exclude=None,
+        filters_prefixes=None,
+    )
+
+    assert req.manual is not None
+    assert req.manual.symbols == ["AAA", "BBB"]
+    assert req.manual.weights == [pytest.approx(0.6), pytest.approx(0.4)]

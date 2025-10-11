@@ -1140,7 +1140,7 @@ def _parse_backtest_get(
         default=None,
         description="Lista symboli GPW (powtarzalny parametr) dla trybu manual.",
     ),
-    weights: Optional[List[float]] = Query(
+    weights: Optional[List[str]] = Query(
         default=None,
         description="Lista wag odpowiadająca kolejności symboli (powtarzalny parametr).",
     ),
@@ -1179,13 +1179,31 @@ def _parse_backtest_get(
 
     payload: Dict[str, object] = {"start": start_dt, "rebalance": rebalance}
 
+    def _split_csv(values: Optional[List[str]]) -> List[str]:
+        if not values:
+            return []
+        collected: List[str] = []
+        for raw in values:
+            if raw is None:
+                continue
+            parts = [part.strip() for part in raw.split(",")]
+            for part in parts:
+                if part:
+                    collected.append(part)
+        return collected
+
     mode_normalized = mode.strip().lower()
     if mode_normalized == "manual":
-        if not symbols:
+        parsed_symbols = _split_csv(symbols)
+        if not parsed_symbols:
             raise HTTPException(400, "Tryb manual wymaga co najmniej jednego symbolu")
-        manual_payload: Dict[str, object] = {"symbols": list(symbols)}
-        if weights:
-            manual_payload["weights"] = list(weights)
+        manual_payload: Dict[str, object] = {"symbols": parsed_symbols}
+        parsed_weights = _split_csv(weights)
+        if parsed_weights:
+            try:
+                manual_payload["weights"] = [float(item) for item in parsed_weights]
+            except ValueError as exc:
+                raise HTTPException(400, "Wagi muszą być liczbami") from exc
         payload["manual"] = manual_payload
     elif mode_normalized == "auto":
         if top_n is None:
