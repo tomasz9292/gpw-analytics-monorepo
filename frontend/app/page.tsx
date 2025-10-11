@@ -1371,17 +1371,20 @@ const Chip = ({
     active,
     onClick,
     children,
+    className,
 }: {
     active?: boolean;
     onClick?: () => void;
     children: React.ReactNode;
+    className?: string;
 }) => (
     <button
         onClick={onClick}
-        className={`rounded-full px-3 py-1 text-sm border transition ${active
+        className={`inline-flex items-center justify-center rounded-full px-3 py-1 text-sm text-center border transition ${
+            active
                 ? "bg-primary text-white border-[var(--color-primary)]"
                 : "bg-surface text-muted border-soft hover:border-[var(--color-primary)] hover:text-primary"
-            }`}
+        } ${className ?? ""}`}
     >
         {children}
     </button>
@@ -2596,7 +2599,7 @@ export default function Page() {
                                                             <span className="text-xs uppercase tracking-wide text-muted">
                                                                 Kierunek
                                                             </span>
-                                                            <div className="mt-1 flex flex-wrap gap-2">
+                                                            <div className="mt-1 grid grid-cols-2 gap-2">
                                                                 <Chip
                                                                     active={rule.direction === "desc"}
                                                                     onClick={() =>
@@ -2608,6 +2611,7 @@ export default function Page() {
                                                                             )
                                                                         )
                                                                     }
+                                                                    className="w-full"
                                                                 >
                                                                     Więcej = lepiej
                                                                 </Chip>
@@ -2622,6 +2626,7 @@ export default function Page() {
                                                                             )
                                                                         )
                                                                     }
+                                                                    className="w-full"
                                                                 >
                                                                     Mniej = lepiej
                                                                 </Chip>
