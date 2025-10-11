@@ -1299,9 +1299,11 @@ const Card = ({
 }) => (
     <div className="bg-surface rounded-2xl shadow-sm border border-soft">
         {(title || right) && (
-            <div className="px-4 md:px-6 py-3 border-b border-soft flex items-center justify-between">
-                <div className="font-semibold text-primary">{title}</div>
-                <div>{right}</div>
+            <div className="px-4 md:px-6 py-3 border-b border-soft flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                {title && <div className="font-semibold text-primary sm:flex-1">{title}</div>}
+                {right && (
+                    <div className="flex flex-wrap gap-2 w-full sm:w-auto sm:justify-end">{right}</div>
+                )}
             </div>
         )}
         <div className="p-4 md:p-6">{children}</div>
@@ -1369,17 +1371,20 @@ const Chip = ({
     active,
     onClick,
     children,
+    className,
 }: {
     active?: boolean;
     onClick?: () => void;
     children: React.ReactNode;
+    className?: string;
 }) => (
     <button
         onClick={onClick}
-        className={`rounded-full px-3 py-1 text-sm border transition ${active
+        className={`inline-flex items-center justify-center rounded-full px-3 py-1 text-sm text-center border transition ${
+            active
                 ? "bg-primary text-white border-[var(--color-primary)]"
                 : "bg-surface text-muted border-soft hover:border-[var(--color-primary)] hover:text-primary"
-            }`}
+        } ${className ?? ""}`}
     >
         {children}
     </button>
@@ -2301,7 +2306,7 @@ export default function Page() {
                             <Card
                                 title={symbol ? `${symbol} – wykres cenowy` : "Wykres cenowy"}
                                 right={
-                                    <div className="flex gap-2">
+                                    <>
                                         <Chip active={period === 90} onClick={() => setPeriod(90)}>
                                             3M
                                         </Chip>
@@ -2317,7 +2322,7 @@ export default function Page() {
                                         <Chip active={smaOn} onClick={() => setSmaOn(!smaOn)}>
                                             SMA 20
                                         </Chip>
-                                    </div>
+                                    </>
                                 }
                             >
                                 {!symbol ? (
@@ -2363,7 +2368,7 @@ export default function Page() {
                                         : "Dodaj spółkę, aby zobaczyć sekcję fundamentów."}
                                 </div>
                                 {symbol && (
-                                    <div className="mt-4 grid grid-cols-2 gap-y-2 text-sm">
+                                    <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-y-2 sm:gap-x-4 text-sm">
                                         <div className="text-subtle">Kapitalizacja</div>
                                         <div>$—</div>
                                         <div className="text-subtle">P/E (TTM)</div>
@@ -2523,11 +2528,17 @@ export default function Page() {
                                     {scoreRules.map((rule, idx) => (
                                         <div
                                             key={rule.id}
-                                            className="rounded-2xl border border-soft bg-soft-surface p-4"
+                                            className="relative rounded-2xl border border-soft bg-soft-surface p-4"
                                         >
-                                            <div className="flex items-start justify-between gap-4">
-                                                <div className="space-y-3 flex-1">
-                                                    <div className="grid gap-3 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+                                            <button
+                                                type="button"
+                                                onClick={() => removeScoreRule(rule.id)}
+                                                className="absolute right-4 top-4 inline-flex items-center justify-center rounded-lg border border-soft px-2 py-1 text-xs text-muted transition hover:border-[var(--color-primary)] hover:text-primary"
+                                            >
+                                                Usuń
+                                            </button>
+                                            <div className="space-y-3 pt-8 md:pt-3">
+                                                <div className="grid gap-3 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
                                                         <label className="flex flex-col gap-2">
                                                             <span className="text-xs uppercase tracking-wide text-muted">
                                                                 Metryka
@@ -2594,7 +2605,7 @@ export default function Page() {
                                                             <span className="text-xs uppercase tracking-wide text-muted">
                                                                 Kierunek
                                                             </span>
-                                                            <div className="mt-1 flex flex-wrap gap-2">
+                                                            <div className="mt-1 grid grid-cols-2 gap-2">
                                                                 <Chip
                                                                     active={rule.direction === "desc"}
                                                                     onClick={() =>
@@ -2606,6 +2617,7 @@ export default function Page() {
                                                                             )
                                                                         )
                                                                     }
+                                                                    className="w-full"
                                                                 >
                                                                     Więcej = lepiej
                                                                 </Chip>
@@ -2620,6 +2632,7 @@ export default function Page() {
                                                                             )
                                                                         )
                                                                     }
+                                                                    className="w-full"
                                                                 >
                                                                     Mniej = lepiej
                                                                 </Chip>
@@ -2697,14 +2710,6 @@ export default function Page() {
                                                         </div>
                                                     </div>
                                                 </div>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => removeScoreRule(rule.id)}
-                                                    className="px-2 py-1 text-xs rounded-lg border border-soft text-muted transition hover:border-[var(--color-primary)] hover:text-primary"
-                                                >
-                                                    Usuń
-                                                </button>
-                                            </div>
                                             {idx === scoreRules.length - 1 && (
                                                 <div className="mt-3 text-xs text-subtle">
                                                     Zmieniaj wagi i parametry, aby zobaczyć wpływ na ranking.
