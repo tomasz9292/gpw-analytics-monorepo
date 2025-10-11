@@ -2090,26 +2090,32 @@ export default function Page() {
             setScoreLoading(true);
             setScoreResults(null);
 
-            const rulePayload = scoreRules
-                .map((rule) => {
-                    const metric = rule.metric.trim();
-                    if (!metric) return null;
-                    const weightNumeric = Number(rule.weight);
-                    const min = parseScoreBound(rule.min);
-                    const max = parseScoreBound(rule.max);
-                    return {
-                        metric,
-                        weight: Number.isFinite(weightNumeric) ? weightNumeric : undefined,
-                        direction: rule.direction,
-                        min,
-                        max,
-                        transform:
-                            rule.transform && rule.transform !== "raw"
-                                ? rule.transform
-                                : null,
-                    };
-                })
-                .filter((item): item is ScorePreviewRulePayload => Boolean(item));
+            const rulePayload = scoreRules.reduce<ScorePreviewRulePayload[]>((acc, rule) => {
+                const metric = rule.metric.trim();
+                if (!metric) return acc;
+
+                const weightNumeric = Number(rule.weight);
+                const min = parseScoreBound(rule.min);
+                const max = parseScoreBound(rule.max);
+
+                const payload: ScorePreviewRulePayload = {
+                    metric,
+                    direction: rule.direction,
+                    min,
+                    max,
+                    transform:
+                        rule.transform && rule.transform !== "raw"
+                            ? rule.transform
+                            : null,
+                };
+
+                if (Number.isFinite(weightNumeric)) {
+                    payload.weight = weightNumeric;
+                }
+
+                acc.push(payload);
+                return acc;
+            }, []);
 
             const filters: Record<string, number> = {};
             const minMcap = parseScoreBound(scoreMinMcap);
