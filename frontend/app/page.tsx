@@ -376,7 +376,8 @@ async function backtestPortfolio(
     weightsPct: number[],
     options: BacktestOptions
 ): Promise<PortfolioResp> {
-    const { start, rebalance } = options;
+    const { start, end, rebalance, initialCapital, feePct, thresholdPct, benchmark } =
+        options;
 
     const prepared = symbols
         .map((symbol, idx) => ({
@@ -405,7 +406,12 @@ async function backtestPortfolio(
 
     const payload = removeUndefined({
         start,
+        end,
         rebalance,
+        initial_capital: initialCapital,
+        fee_pct: feePct,
+        threshold_pct: thresholdPct,
+        benchmark: benchmark?.trim() ? benchmark.trim() : undefined,
         manual: manualPayload,
     });
 
@@ -1607,12 +1613,12 @@ function RebalanceTimeline({
                                                 </td>
                                                 <td className="py-2 pr-4">
                                                     {typeof trade.shares_change === "number"
-                                                        ? formatSignedNumber(trade.shares_change, 4)
+                                                        ? formatSignedNumber(trade.shares_change, 2)
                                                         : "—"}
                                                 </td>
                                                 <td className="py-2 pr-4">
                                                     {typeof trade.shares_after === "number"
-                                                        ? formatNumber(trade.shares_after, 4)
+                                                        ? formatNumber(trade.shares_after, 2)
                                                         : "—"}
                                                 </td>
                                                 <td className="py-2 pr-4">
