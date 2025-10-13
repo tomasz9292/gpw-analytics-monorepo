@@ -1727,8 +1727,9 @@ function PriceChart({
                             />
                             <Tooltip
                                 cursor={{ stroke: strokeColor, strokeOpacity: 0.2, strokeWidth: 1 }}
-                                content={(
+                                content={(tooltipProps) => (
                                     <ChartTooltipContent
+                                        {...tooltipProps}
                                         priceFormatter={priceFormatter}
                                         percentFormatter={percentFormatter}
                                         dateFormatter={tooltipDateFormatter}
@@ -1772,8 +1773,9 @@ function PriceChart({
                             />
                             <Tooltip
                                 cursor={{ stroke: strokeColor, strokeOpacity: 0.2, strokeWidth: 1 }}
-                                content={(
+                                content={(tooltipProps) => (
                                     <ChartTooltipContent
+                                        {...tooltipProps}
                                         priceFormatter={priceFormatter}
                                         percentFormatter={percentFormatter}
                                         dateFormatter={tooltipDateFormatter}
