@@ -1772,6 +1772,7 @@ function PriceChart({
         end: SelectionPoint;
     } | null>(null);
     const [hoverPoint, setHoverPoint] = useState<SelectionPoint | null>(null);
+    const lastKnownPointRef = useRef<SelectionPoint | null>(null);
     const [isSelecting, setIsSelecting] = useState(false);
 
     const chartContainerRef = useRef<HTMLDivElement | null>(null);
@@ -1830,10 +1831,13 @@ function PriceChart({
     const handleChartMouseDown = useCallback<CategoricalChartFunc>(
         (state) => {
             if (!state) return;
-            const point = getPointFromState(state as MouseHandlerDataParam);
+            const point =
+                getPointFromState(state as MouseHandlerDataParam) ??
+                lastKnownPointRef.current;
             if (!point) return;
             setSelection({ start: point, end: point });
             setIsSelecting(true);
+            lastKnownPointRef.current = point;
         },
         [getPointFromState]
     );
@@ -1847,6 +1851,7 @@ function PriceChart({
             const point = getPointFromState(state as MouseHandlerDataParam);
             if (!point) return;
             setHoverPoint(point);
+            lastKnownPointRef.current = point;
             if (isSelecting || selection) {
                 updateSelectionEnd(point);
             }
@@ -1857,10 +1862,13 @@ function PriceChart({
     const handleChartMouseUp = useCallback<CategoricalChartFunc>(
         (state) => {
             if (!isSelecting) return;
-            if (!state) return;
-            const point = getPointFromState(state as MouseHandlerDataParam);
-            if (point) {
-                updateSelectionEnd(point);
+            const point = state
+                ? getPointFromState(state as MouseHandlerDataParam)
+                : null;
+            const nextPoint = point ?? lastKnownPointRef.current;
+            if (nextPoint) {
+                updateSelectionEnd(nextPoint);
+                lastKnownPointRef.current = nextPoint;
             }
             setIsSelecting(false);
         },
@@ -1876,6 +1884,7 @@ function PriceChart({
         setSelection(null);
         setHoverPoint(null);
         setIsSelecting(false);
+        lastKnownPointRef.current = null;
     }, [rows]);
 
     const selectionStart = selection?.start ?? null;
