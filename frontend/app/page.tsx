@@ -13,7 +13,7 @@ import {
     AreaChart,
     Legend,
 } from "recharts";
-import type { TooltipProps } from "recharts";
+import type { TooltipContentProps } from "recharts";
 
 /** =========================
  *  API base (proxy w next.config.mjs)
@@ -1509,7 +1509,7 @@ function ChartTooltipContent({
     dateFormatter,
     onHighlight,
     showSMA,
-}: TooltipProps<number, string> & {
+}: TooltipContentProps<number, string> & {
     priceFormatter: Intl.NumberFormat;
     percentFormatter: Intl.NumberFormat;
     dateFormatter: Intl.DateTimeFormat;
@@ -1725,10 +1725,11 @@ function PriceChart({
                                 tickFormatter={yTickFormatter}
                                 domain={["auto", "auto"]}
                             />
-                            <Tooltip
+                            <Tooltip<number, string>
                                 cursor={{ stroke: strokeColor, strokeOpacity: 0.2, strokeWidth: 1 }}
-                                content={(
+                                content={(tooltipProps) => (
                                     <ChartTooltipContent
+                                        {...tooltipProps}
                                         priceFormatter={priceFormatter}
                                         percentFormatter={percentFormatter}
                                         dateFormatter={tooltipDateFormatter}
@@ -1770,10 +1771,11 @@ function PriceChart({
                                 tickFormatter={yTickFormatter}
                                 domain={["auto", "auto"]}
                             />
-                            <Tooltip
+                            <Tooltip<number, string>
                                 cursor={{ stroke: strokeColor, strokeOpacity: 0.2, strokeWidth: 1 }}
-                                content={(
+                                content={(tooltipProps) => (
                                     <ChartTooltipContent
+                                        {...tooltipProps}
                                         priceFormatter={priceFormatter}
                                         percentFormatter={percentFormatter}
                                         dateFormatter={tooltipDateFormatter}
