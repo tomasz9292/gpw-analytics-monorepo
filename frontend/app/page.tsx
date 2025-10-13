@@ -11,7 +11,6 @@ import {
     CartesianGrid,
     Area,
     AreaChart,
-    Legend,
     ReferenceLine,
     ReferenceDot,
     Brush,
@@ -312,6 +311,16 @@ type PortfolioResp = {
     rebalances?: PortfolioRebalanceEvent[];
     benchmark?: PortfolioPoint[];
 };
+
+const portfolioPointsToRows = (points: PortfolioPoint[]): Row[] =>
+    points.map((point) => ({
+        date: point.date,
+        open: point.value,
+        high: point.value,
+        low: point.value,
+        close: point.value,
+        volume: 0,
+    }));
 
 /** =========================
  *  API helpers
@@ -2757,6 +2766,9 @@ export default function Page() {
     const [pfScoreUniverse, setPfScoreUniverse] = useState("");
     const [pfScoreMin, setPfScoreMin] = useState("");
     const [pfScoreMax, setPfScoreMax] = useState("");
+    const [pfComparisonSymbols, setPfComparisonSymbols] = useState<string[]>([]);
+    const [pfComparisonAllRows, setPfComparisonAllRows] = useState<Record<string, Row[]>>({});
+    const [pfComparisonErrors, setPfComparisonErrors] = useState<Record<string, string>>({});
     const pfTotal = pfRows.reduce((a, b) => a + (Number(b.weight) || 0), 0);
     const pfRangeInvalid = pfStart > pfEnd;
     const [pfLoading, setPfLoading] = useState(false);
@@ -2952,6 +2964,37 @@ export default function Page() {
         });
     }, []);
 
+    const handleAddPfComparison = useCallback(
+        (candidate: string) => {
+            const normalized = candidate.trim().toUpperCase();
+            if (!normalized) return;
+            if (pfLastBenchmark && normalized === pfLastBenchmark.toUpperCase()) return;
+            setPfComparisonSymbols((prev) => {
+                if (prev.includes(normalized) || prev.length >= MAX_COMPARISONS) {
+                    return prev;
+                }
+                return [...prev, normalized];
+            });
+        },
+        [pfLastBenchmark]
+    );
+
+    const handleRemovePfComparison = useCallback((sym: string) => {
+        setPfComparisonSymbols((prev) => prev.filter((item) => item !== sym));
+        setPfComparisonAllRows((prev) => {
+            if (!(sym in prev)) return prev;
+            const next = { ...prev };
+            delete next[sym];
+            return next;
+        });
+        setPfComparisonErrors((prev) => {
+            if (!(sym in prev)) return prev;
+            const next = { ...prev };
+            delete next[sym];
+            return next;
+        });
+    }, []);
+
     const handleBrushSelectionChange = useCallback(
         (range: BrushStartEndIndex) => {
             if (period !== "max" || !allRows.length) return;
@@ -2982,30 +3025,126 @@ export default function Page() {
     );
     const comparisonLimitReached = comparisonSymbols.length >= MAX_COMPARISONS;
 
-    const pfChartData = useMemo(() => {
-        if (!pfRes) return [];
+    const pfPortfolioRows = useMemo<Row[]>(
+        () => (pfRes ? portfolioPointsToRows(pfRes.equity) : []),
+        [pfRes]
+    );
 
-        const merged = new Map<
-            string,
-            { date: string; portfolio?: number; benchmark?: number }
-        >();
+    const pfPortfolioRowsWithSma = useMemo<RowSMA[]>(
+        () => pfPortfolioRows.map((row) => ({ ...row, sma: null })),
+        [pfPortfolioRows]
+    );
 
-        for (const point of pfRes.equity) {
-            merged.set(point.date, { date: point.date, portfolio: point.value });
+    const pfBenchmarkRows = useMemo<Row[]>(
+        () => (pfRes?.benchmark?.length ? portfolioPointsToRows(pfRes.benchmark) : []),
+        [pfRes]
+    );
+
+    const pfBenchmarkSeries = useMemo<ComparisonSeries | null>(() => {
+        if (!pfBenchmarkRows.length) return null;
+        const label = pfLastBenchmark ?? "Benchmark";
+        return {
+            symbol: label,
+            label,
+            color: "#2563EB",
+            rows: pfBenchmarkRows,
+        };
+    }, [pfBenchmarkRows, pfLastBenchmark]);
+
+    useEffect(() => {
+        let live = true;
+        if (!pfRes || !pfRes.equity.length || pfComparisonSymbols.length === 0) {
+            setPfComparisonAllRows({});
+            setPfComparisonErrors({});
+            return () => {
+                live = false;
+            };
         }
 
-        const benchmarkSeries = pfRes.benchmark ?? [];
-        for (const point of benchmarkSeries) {
-            const existing = merged.get(point.date);
-            if (existing) {
-                existing.benchmark = point.value;
-            } else {
-                merged.set(point.date, { date: point.date, benchmark: point.value });
-            }
-        }
+        const startISO = pfRes.equity[0]?.date ?? pfStart;
 
-        return Array.from(merged.values()).sort((a, b) => a.date.localeCompare(b.date));
-    }, [pfRes]);
+        (async () => {
+            const results = await Promise.allSettled(
+                pfComparisonSymbols.map((sym) =>
+                    fetchQuotes(sym, startISO).then((data) => ({ symbol: sym, data }))
+                )
+            );
+
+            if (!live) return;
+
+            const nextAll: Record<string, Row[]> = {};
+            const nextErrors: Record<string, string> = {};
+
+            results.forEach((result, idx) => {
+                const sym = pfComparisonSymbols[idx];
+                if (!sym) return;
+                if (result.status === "fulfilled") {
+                    nextAll[sym] = result.value.data;
+                } else {
+                    const reason = result.reason;
+                    const message =
+                        reason instanceof Error
+                            ? reason.message
+                            : typeof reason === "string"
+                                ? reason
+                                : `Nie udało się pobrać danych dla ${sym}`;
+                    nextErrors[sym] = message;
+                }
+            });
+
+            setPfComparisonAllRows(nextAll);
+            setPfComparisonErrors(nextErrors);
+        })();
+
+        return () => {
+            live = false;
+        };
+    }, [pfComparisonSymbols, pfRes, pfStart]);
+
+    const pfComparisonVisibleRows = useMemo(() => {
+        if (!pfPortfolioRows.length) return {} as Record<string, Row[]>;
+        const startDate = pfPortfolioRows[0].date;
+        const endDate = pfPortfolioRows[pfPortfolioRows.length - 1].date;
+        const next: Record<string, Row[]> = {};
+        for (const sym of pfComparisonSymbols) {
+            const series = pfComparisonAllRows[sym];
+            if (!series?.length) continue;
+            next[sym] = series.filter((row) => row.date >= startDate && row.date <= endDate);
+        }
+        return next;
+    }, [pfComparisonAllRows, pfComparisonSymbols, pfPortfolioRows]);
+
+    const pfComparisonSeriesForChart = useMemo<ComparisonSeries[]>(() => {
+        const series: ComparisonSeries[] = [];
+        if (pfBenchmarkSeries) {
+            series.push(pfBenchmarkSeries);
+        }
+        const offset = pfBenchmarkSeries ? 1 : 0;
+        pfComparisonSymbols.forEach((sym, idx) => {
+            series.push({
+                symbol: sym,
+                label: sym,
+                color: COMPARISON_COLORS[(idx + offset) % COMPARISON_COLORS.length],
+                rows: pfComparisonVisibleRows[sym] ?? [],
+            });
+        });
+        return series;
+    }, [pfBenchmarkSeries, pfComparisonSymbols, pfComparisonVisibleRows]);
+
+    const pfComparisonColorMap = useMemo(() => {
+        const map: Record<string, string> = {};
+        for (const series of pfComparisonSeriesForChart) {
+            map[series.symbol] = series.color;
+        }
+        return map;
+    }, [pfComparisonSeriesForChart]);
+
+    const pfComparisonLimitReached = pfComparisonSymbols.length >= MAX_COMPARISONS;
+
+    const pfComparisonErrorEntries = useMemo(
+        () => Object.entries(pfComparisonErrors),
+        [pfComparisonErrors]
+    );
 
     const parseUniverseValue = (value: string): string | string[] | null => {
         const trimmed = value.trim();
@@ -4157,38 +4296,88 @@ export default function Page() {
                                                 <AllocationTable allocations={pfRes.allocations} />
                                             </div>
                                         )}
-                                        <div className="h-72">
-                                            <ResponsiveContainer width="100%" height="100%">
-                                                <LineChart data={pfChartData}>
-                                                    <CartesianGrid strokeDasharray="3 3" stroke="#BDC3C7" />
-                                                    <XAxis dataKey="date" tick={{ fontSize: 12 }} tickMargin={8} />
-                                                    <YAxis tick={{ fontSize: 12 }} width={60} />
-                                                    <Tooltip
-                                                        formatter={(value: number) =>
-                                                            typeof value === "number" ? value.toFixed(2) : value
-                                                        }
-                                                    />
-                                                    <Legend verticalAlign="top" height={36} />
-                                                    <Line
-                                                        type="monotone"
-                                                        dataKey="portfolio"
-                                                        name="Portfel"
-                                                        stroke="#0A2342"
-                                                        dot={false}
-                                                    />
-                                                    {pfRes.benchmark && pfRes.benchmark.length > 0 && (
-                                                        <Line
-                                                            type="monotone"
-                                                            dataKey="benchmark"
-                                                            name="Benchmark"
-                                                            stroke="#3498DB"
-                                                            strokeDasharray="4 2"
-                                                            dot={false}
+                                        {pfPortfolioRows.length > 0 && (
+                                            <div className="mt-6 space-y-4">
+                                                <Stats data={pfPortfolioRows} />
+                                                <div className="rounded-lg border border-dashed border-soft/70 bg-white/60 p-3">
+                                                    <div className="flex flex-wrap items-center gap-3">
+                                                        <div className="text-xs font-semibold uppercase tracking-wide text-muted">
+                                                            Porównania benchmarków
+                                                        </div>
+                                                        <TickerAutosuggest
+                                                            onPick={handleAddPfComparison}
+                                                            placeholder={
+                                                                pfComparisonLimitReached
+                                                                    ? "Osiągnięto limit porównań"
+                                                                    : "Dodaj benchmark (np. WIG20.WA)"
+                                                            }
+                                                            inputClassName="w-60"
+                                                            disabled={pfComparisonLimitReached}
                                                         />
-                                                    )}
-                                                </LineChart>
-                                            </ResponsiveContainer>
-                                        </div>
+                                                        {pfComparisonLimitReached && (
+                                                            <span className="text-[11px] text-subtle">
+                                                                Maksymalnie {MAX_COMPARISONS} serii.
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                    <div className="mt-3 space-y-2">
+                                                        {pfBenchmarkSeries && (
+                                                            <div className="inline-flex items-center gap-2 rounded-full border border-soft bg-white/80 px-3 py-1 text-xs font-medium text-neutral shadow-sm">
+                                                                <span
+                                                                    className="h-2.5 w-2.5 rounded-full"
+                                                                    style={{ backgroundColor: pfBenchmarkSeries.color }}
+                                                                />
+                                                                {pfBenchmarkSeries.label}
+                                                                <span className="text-[11px] text-subtle">(z symulacji)</span>
+                                                            </div>
+                                                        )}
+                                                        {pfComparisonSymbols.length ? (
+                                                            <div className="flex flex-wrap gap-2">
+                                                                {pfComparisonSymbols.map((sym) => {
+                                                                    const color = pfComparisonColorMap[sym] ?? "#475569";
+                                                                    return (
+                                                                        <span
+                                                                            key={sym}
+                                                                            className="inline-flex items-center gap-2 rounded-full border border-soft bg-white/80 px-3 py-1 text-xs font-medium text-neutral shadow-sm"
+                                                                        >
+                                                                            <span
+                                                                                className="h-2.5 w-2.5 rounded-full"
+                                                                                style={{ backgroundColor: color }}
+                                                                            />
+                                                                            {sym}
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={() => handleRemovePfComparison(sym)}
+                                                                                className="text-subtle transition hover:text-negative focus-visible:text-negative"
+                                                                                aria-label={`Usuń ${sym} z porównań`}
+                                                                            >
+                                                                                ×
+                                                                            </button>
+                                                                        </span>
+                                                                    );
+                                                                })}
+                                                            </div>
+                                                        ) : !pfBenchmarkSeries ? (
+                                                            <p className="text-xs text-subtle">
+                                                                Dodaj indeks lub ETF, aby zestawić portfel z rynkowymi benchmarkami.
+                                                            </p>
+                                                        ) : null}
+                                                        {pfComparisonErrorEntries.map(([sym, message]) => (
+                                                            <div key={sym} className="text-xs text-negative">
+                                                                {sym}: {message}
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                                <PriceChart
+                                                    rows={pfPortfolioRowsWithSma}
+                                                    showArea
+                                                    showSMA={false}
+                                                    primarySymbol="Portfel"
+                                                    comparisonSeries={pfComparisonSeriesForChart}
+                                                />
+                                            </div>
+                                        )}
                                         {pfRes.rebalances && pfRes.rebalances.length > 0 && (
                                             <div className="mt-6 space-y-6">
                                                 <RebalanceTimeline
@@ -4211,9 +4400,12 @@ export default function Page() {
                                                     : ` ${pfInitial.toFixed(2)}`} {" "}• Wagi są normalizowane do 100%.
                                             </div>
                                             <div>
-                                                {pfRes.benchmark && pfRes.benchmark.length > 0
-                                                    ? `Benchmark: ${pfLastBenchmark ?? "dostarczony w odpowiedzi"}.`
+                                                {pfBenchmarkSeries
+                                                    ? `Benchmark: ${pfBenchmarkSeries.label}.`
                                                     : "Bez benchmarku."}
+                                                {pfComparisonSymbols.length > 0
+                                                    ? ` Dodatkowe porównania: ${pfComparisonSymbols.join(", ")}.`
+                                                    : ""}
                                             </div>
                                         </div>
                                     </>
