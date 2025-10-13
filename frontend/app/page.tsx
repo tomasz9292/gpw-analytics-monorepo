@@ -66,6 +66,9 @@ const buildScoreComponents = (rules: ScoreBuilderRule[]): ScoreComponentRequest[
 const createRuleId = () =>
     `rule-${Math.random().toString(36).slice(2, 8)}-${Date.now().toString(36)}`;
 
+const createTemplateId = () =>
+    `tpl-${Math.random().toString(36).slice(2, 8)}-${Date.now().toString(36)}`;
+
 type ScoreMetricOption = {
     value: string;
     label: string;
@@ -138,6 +141,47 @@ const SCORE_UNIVERSE_FALLBACK: string[] = [
     "OPL.WA",
     "MRC.WA",
 ];
+
+const SCORE_TEMPLATE_STORAGE_KEY = "gpw_score_templates_v1";
+
+const resolveUniverseWithFallback = (
+    universe: ScorePreviewRequest["universe"],
+    fallback?: string[]
+): ScorePreviewRequest["universe"] => {
+    if (typeof universe === "string" && universe.trim()) {
+        return universe.trim();
+    }
+    if (Array.isArray(universe)) {
+        const cleaned = universe
+            .map((item) => (typeof item === "string" ? item.trim() : ""))
+            .filter(Boolean);
+        if (cleaned.length) {
+            return cleaned;
+        }
+    }
+    if (fallback && fallback.length) {
+        return [...fallback];
+    }
+    return undefined;
+};
+
+const toTemplateRule = (rule: ScoreBuilderRule): ScoreTemplateRule => ({
+    metric: rule.metric,
+    weight: Number(rule.weight) || 0,
+    direction: rule.direction === "asc" ? "asc" : "desc",
+    label: rule.label ?? null,
+    transform: rule.transform ?? "raw",
+});
+
+const fromTemplateRules = (rules: ScoreTemplateRule[]): ScoreBuilderRule[] =>
+    rules.map((rule) => ({
+        id: createRuleId(),
+        metric: rule.metric,
+        weight: Number(rule.weight) || 0,
+        direction: rule.direction === "asc" ? "asc" : "desc",
+        label: rule.label ?? findScoreMetric(rule.metric)?.label ?? undefined,
+        transform: rule.transform ?? "raw",
+    }));
 
 const getDefaultScoreRules = (): ScoreBuilderRule[] => {
     const picks: { option: ScoreMetricOption; weight: number }[] = [
@@ -279,6 +323,28 @@ type ScorePreviewRequest = {
     limit?: number;
     universe?: string | string[] | null;
     sort?: "asc" | "desc" | null;
+};
+
+type ScoreTemplateRule = {
+    metric: string;
+    weight: number;
+    direction: "asc" | "desc";
+    label?: string | null;
+    transform?: "raw" | "zscore" | "percentile" | "";
+};
+
+type ScoreTemplate = {
+    id: string;
+    title: string;
+    name?: string;
+    description?: string;
+    rules: ScoreTemplateRule[];
+    limit: number;
+    sort: "asc" | "desc";
+    universe: string;
+    minMcap: string;
+    minTurnover: string;
+    createdAt: string;
 };
 
 type ScorePreviewRow = {
@@ -451,7 +517,8 @@ async function backtestPortfolio(
 
 async function backtestPortfolioByScore(
     options: ScorePortfolioOptions,
-    components: ScoreComponentRequest[]
+    components: ScoreComponentRequest[],
+    fallbackUniverse?: string[]
 ): Promise<PortfolioResp> {
     const {
         score,
@@ -486,11 +553,13 @@ async function backtestPortfolioByScore(
         label: component.label,
     }));
 
+    const resolvedUniverse = resolveUniverseWithFallback(universe, fallbackUniverse);
+
     const previewPayload: ScorePreviewRequest = {
         name: score && score.trim() ? score.trim() : undefined,
         rules: previewRules,
         limit: limitCandidate,
-        universe,
+        universe: resolvedUniverse,
         sort: direction ?? undefined,
     };
 
@@ -2716,11 +2785,130 @@ export function AnalyticsDashboard({
     const [scoreResults, setScoreResults] = useState<ScorePreviewResult | null>(null);
     const [scoreLoading, setScoreLoading] = useState(false);
     const [scoreError, setScoreError] = useState("");
+    const [scoreTemplates, setScoreTemplates] = useState<ScoreTemplate[]>([]);
+    const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
+    const [scoreTemplateFeedback, setScoreTemplateFeedback] = useState<
+        { type: "success" | "error"; message: string } | null
+    >(null);
+    const templatesHydratedRef = useRef(false);
 
     const scoreComponents = useMemo(() => buildScoreComponents(scoreRules), [scoreRules]);
     const scoreTotalWeight = scoreComponents.reduce((acc, component) => acc + component.weight, 0);
     const scoreLimitInvalid = !Number.isFinite(scoreLimit) || scoreLimit <= 0;
     const scoreDisabled = scoreLoading || scoreLimitInvalid || !scoreComponents.length;
+    const editingTemplate = useMemo(
+        () =>
+            editingTemplateId
+                ? scoreTemplates.find((tpl) => tpl.id === editingTemplateId) ?? null
+                : null,
+        [editingTemplateId, scoreTemplates]
+    );
+
+    useEffect(() => {
+        if (typeof window === "undefined") return;
+        try {
+            const stored = window.localStorage.getItem(SCORE_TEMPLATE_STORAGE_KEY);
+            if (!stored) return;
+            const parsed: unknown = JSON.parse(stored);
+            if (!Array.isArray(parsed)) return;
+            const normalized = parsed
+                .map((item) => {
+                    if (!item || typeof item !== "object") return null;
+                    const candidate = item as Partial<ScoreTemplate>;
+                    if (typeof candidate.id !== "string") return null;
+                    const title =
+                        typeof candidate.title === "string" && candidate.title.trim()
+                            ? candidate.title.trim()
+                            : candidate.id;
+                    const rulesSource = Array.isArray(candidate.rules)
+                        ? candidate.rules
+                        : [];
+                    const rules = rulesSource
+                        .map((rule) => {
+                            if (!rule || typeof rule !== "object") return null;
+                            const asRule = rule as Partial<ScoreTemplateRule>;
+                            if (typeof asRule.metric !== "string") return null;
+                            const transform =
+                                asRule.transform === "zscore"
+                                    ? "zscore"
+                                    : asRule.transform === "percentile"
+                                    ? "percentile"
+                                    : "raw";
+                            return {
+                                metric: asRule.metric,
+                                weight: Number(asRule.weight) || 0,
+                                direction: asRule.direction === "asc" ? "asc" : "desc",
+                                label:
+                                    typeof asRule.label === "string"
+                                        ? asRule.label
+                                        : asRule.label === null
+                                        ? null
+                                        : undefined,
+                                transform,
+                            } satisfies ScoreTemplateRule;
+                        })
+                        .filter((rule): rule is ScoreTemplateRule => Boolean(rule));
+
+                    return {
+                        id: candidate.id,
+                        title,
+                        name:
+                            typeof candidate.name === "string" && candidate.name.trim()
+                                ? candidate.name.trim()
+                                : undefined,
+                        description:
+                            typeof candidate.description === "string" && candidate.description.trim()
+                                ? candidate.description.trim()
+                                : undefined,
+                        rules,
+                        limit:
+                            typeof candidate.limit === "number" && candidate.limit > 0
+                                ? Math.floor(candidate.limit)
+                                : Number(candidate.limit) > 0
+                                ? Math.floor(Number(candidate.limit))
+                                : 10,
+                        sort: candidate.sort === "asc" ? "asc" : "desc",
+                        universe:
+                            typeof candidate.universe === "string" ? candidate.universe : "",
+                        minMcap:
+                            typeof candidate.minMcap === "string" ? candidate.minMcap : "",
+                        minTurnover:
+                            typeof candidate.minTurnover === "string"
+                                ? candidate.minTurnover
+                                : "",
+                        createdAt:
+                            typeof candidate.createdAt === "string"
+                                ? candidate.createdAt
+                                : new Date().toISOString(),
+                    } satisfies ScoreTemplate;
+                })
+                .filter((item): item is ScoreTemplate => Boolean(item));
+            setScoreTemplates(normalized);
+        } catch {
+            // ignoruj uszkodzone dane
+        }
+        templatesHydratedRef.current = true;
+    }, []);
+
+    useEffect(() => {
+        if (typeof window === "undefined") return;
+        if (!templatesHydratedRef.current) return;
+        try {
+            window.localStorage.setItem(
+                SCORE_TEMPLATE_STORAGE_KEY,
+                JSON.stringify(scoreTemplates)
+            );
+        } catch {
+            // ignoruj brak miejsca w localStorage
+        }
+    }, [scoreTemplates]);
+
+    useEffect(() => {
+        if (!editingTemplateId) return;
+        if (!scoreTemplates.some((tpl) => tpl.id === editingTemplateId)) {
+            setEditingTemplateId(null);
+        }
+    }, [editingTemplateId, scoreTemplates]);
 
     useEffect(() => {
         let active = true;
@@ -2793,6 +2981,7 @@ export function AnalyticsDashboard({
     const pfRangeInvalid = pfStart > pfEnd;
     const [pfLoading, setPfLoading] = useState(false);
     const [pfErr, setPfErr] = useState("");
+    const [pfSelectedTemplateId, setPfSelectedTemplateId] = useState<string | null>(null);
     const pfHasInvalidWeights = pfRows.some((row) => Number(row.weight) < 0 || Number.isNaN(Number(row.weight)));
     const pfHasMissingSymbols = pfRows.some(
         (row) => Number(row.weight) > 0 && (!row.symbol || !row.symbol.trim())
@@ -2811,6 +3000,23 @@ export function AnalyticsDashboard({
         pfLoading || pfInitial <= 0 || pfRangeInvalid || pfScoreNameInvalid || pfScoreLimitInvalid;
     const pfDisableSimulation =
         pfMode === "manual" ? pfDisableManualSimulation : pfDisableScoreSimulation;
+
+    useEffect(() => {
+        if (!pfSelectedTemplateId) return;
+        if (!scoreTemplates.some((tpl) => tpl.id === pfSelectedTemplateId)) {
+            setPfSelectedTemplateId(null);
+        }
+    }, [pfSelectedTemplateId, scoreTemplates]);
+
+    useEffect(() => {
+        if (!pfSelectedTemplateId) return;
+        const tpl = scoreTemplates.find((item) => item.id === pfSelectedTemplateId);
+        if (!tpl) return;
+        setPfScoreName(tpl.name?.trim() ? tpl.name.trim() : tpl.title);
+        setPfScoreDirection(tpl.sort);
+        setPfScoreLimit(tpl.limit);
+        setPfScoreUniverse(tpl.universe ?? "");
+    }, [pfSelectedTemplateId, scoreTemplates]);
 
     useEffect(() => {
         if (pfPeriod !== "max") {
@@ -3280,11 +3486,108 @@ export function AnalyticsDashboard({
         setScoreMinTurnover("");
         setScoreResults(null);
         setScoreError("");
+        setEditingTemplateId(null);
+        setScoreTemplateFeedback(null);
+    };
+
+    const handleSaveScoreTemplate = (
+        mode: "update" | "new" = editingTemplateId ? "update" : "new"
+    ) => {
+        setScoreTemplateFeedback(null);
+        const sanitizedRules = scoreRules
+            .map(toTemplateRule)
+            .filter((rule) => typeof rule.metric === "string" && rule.metric.trim());
+        if (!sanitizedRules.length) {
+            setScoreTemplateFeedback({
+                type: "error",
+                message: "Dodaj co najmniej jedną metrykę, aby zapisać szablon.",
+            });
+            return;
+        }
+
+        const templateTitle = scoreNameInput.trim()
+            ? scoreNameInput.trim()
+            : `Szablon ${scoreTemplates.length + 1}`;
+        const limitValue =
+            typeof scoreLimit === "number" && Number.isFinite(scoreLimit) && scoreLimit > 0
+                ? Math.floor(scoreLimit)
+                : 10;
+
+        const baseTemplate = {
+            title: templateTitle,
+            name: scoreNameInput.trim() || undefined,
+            description: scoreDescription.trim() || undefined,
+            rules: sanitizedRules,
+            limit: limitValue,
+            sort: scoreSort === "asc" ? "asc" : "desc",
+            universe: scoreUniverse,
+            minMcap: scoreMinMcap,
+            minTurnover: scoreMinTurnover,
+        } satisfies Omit<ScoreTemplate, "id" | "createdAt">;
+
+        if (mode === "update" && editingTemplateId) {
+            const existing = scoreTemplates.find((tpl) => tpl.id === editingTemplateId);
+            if (existing) {
+                setScoreTemplates((prev) =>
+                    prev.map((tpl) =>
+                        tpl.id === editingTemplateId ? { ...existing, ...baseTemplate } : tpl
+                    )
+                );
+                setScoreTemplateFeedback({
+                    type: "success",
+                    message: `Zaktualizowano szablon „${templateTitle}”.`,
+                });
+                return;
+            }
+        }
+
+        const newTemplate: ScoreTemplate = {
+            ...baseTemplate,
+            id: createTemplateId(),
+            createdAt: new Date().toISOString(),
+        };
+
+        setScoreTemplates((prev) => [...prev, newTemplate]);
+        setEditingTemplateId(newTemplate.id);
+        setScoreTemplateFeedback({
+            type: "success",
+            message: `Zapisano szablon „${templateTitle}”.`,
+        });
+    };
+
+    const handleApplyScoreTemplate = (template: ScoreTemplate) => {
+        setScoreRules(fromTemplateRules(template.rules));
+        setScoreNameInput(template.name ?? template.title);
+        setScoreDescription(template.description ?? "");
+        setScoreLimit(template.limit);
+        setScoreSort(template.sort);
+        setScoreUniverse(template.universe ?? "");
+        setScoreMinMcap(template.minMcap ?? "");
+        setScoreMinTurnover(template.minTurnover ?? "");
+        setScoreResults(null);
+        setScoreError("");
+        setEditingTemplateId(template.id);
+        setScoreTemplateFeedback({
+            type: "success",
+            message: `Załadowano szablon „${template.title}”.`,
+        });
+    };
+
+    const handleDeleteScoreTemplate = (id: string) => {
+        const template = scoreTemplates.find((tpl) => tpl.id === id);
+        setScoreTemplates((prev) => prev.filter((tpl) => tpl.id !== id));
+        setScoreTemplateFeedback({
+            type: "success",
+            message: template
+                ? `Usunięto szablon „${template.title}”.`
+                : "Usunięto szablon.",
+        });
     };
 
     const handleScorePreview = async () => {
         try {
             setScoreError("");
+            setScoreTemplateFeedback(null);
             setScoreLoading(true);
             setScoreResults(null);
 
@@ -3305,9 +3608,10 @@ export function AnalyticsDashboard({
                 : undefined;
 
             const parsedUniverse = parseUniverseValue(scoreUniverse);
-            const resolvedUniverse =
-                parsedUniverse ??
-                (scoreUniverseFallback.length ? [...scoreUniverseFallback] : undefined);
+            const resolvedUniverse = resolveUniverseWithFallback(
+                parsedUniverse,
+                scoreUniverseFallback
+            );
 
             const payload: ScorePreviewRequest = {
                 name: scoreNameInput.trim() || undefined,
@@ -3365,7 +3669,12 @@ export function AnalyticsDashboard({
                         ? universeCandidates[0]
                         : universeCandidates;
 
-                const componentsForScore = scoreComponents;
+                const selectedTemplate = pfSelectedTemplateId
+                    ? scoreTemplates.find((tpl) => tpl.id === pfSelectedTemplateId)
+                    : null;
+                const componentsForScore = selectedTemplate
+                    ? buildScoreComponents(fromTemplateRules(selectedTemplate.rules))
+                    : scoreComponents;
                 if (!componentsForScore.length) {
                     throw new Error("Skonfiguruj ranking score, aby uruchomić symulację.");
                 }
@@ -3387,7 +3696,8 @@ export function AnalyticsDashboard({
                         thresholdPct: pfThreshold,
                         benchmark: pfBenchmark,
                     },
-                    componentsForScore
+                    componentsForScore,
+                    scoreUniverseFallback
                 );
                 setPfRes(res);
             }
@@ -3988,6 +4298,24 @@ export function AnalyticsDashboard({
                                 </button>
                                 <button
                                     type="button"
+                                    onClick={() => handleSaveScoreTemplate()}
+                                    className="px-4 py-2 rounded-xl bg-primary text-white transition hover:opacity-90"
+                                >
+                                    {editingTemplate
+                                        ? "Zapisz zmiany w szablonie"
+                                        : "Zapisz szablon"}
+                                </button>
+                                {editingTemplate && (
+                                    <button
+                                        type="button"
+                                        onClick={() => handleSaveScoreTemplate("new")}
+                                        className="px-4 py-2 rounded-xl border border-soft text-muted transition hover:border-[var(--color-primary)] hover:text-primary"
+                                    >
+                                        Zapisz jako nowy
+                                    </button>
+                                )}
+                                <button
+                                    type="button"
                                     onClick={resetScoreBuilder}
                                     className="px-4 py-2 rounded-xl border border-soft text-muted transition hover:border-[var(--color-primary)] hover:text-primary"
                                 >
@@ -4002,6 +4330,79 @@ export function AnalyticsDashboard({
                                     <div className="text-xs text-negative">Liczba spółek musi być dodatnia.</div>
                                 )}
                             </div>
+                            {editingTemplate && (
+                                <div className="text-xs text-subtle">
+                                    Edytujesz szablon „{editingTemplate.title}”.
+                                </div>
+                            )}
+                            {scoreTemplateFeedback && (
+                                <div
+                                    className={`text-xs ${
+                                        scoreTemplateFeedback.type === "error"
+                                            ? "text-negative"
+                                            : "text-primary"
+                                    }`}
+                                >
+                                    {scoreTemplateFeedback.message}
+                                </div>
+                            )}
+                            {scoreTemplates.length > 0 && (
+                                <div className="space-y-2">
+                                    <div className="text-xs uppercase tracking-wide text-muted">
+                                        Zapisane szablony
+                                    </div>
+                                    <div className="flex flex-col gap-2">
+                                        {scoreTemplates.map((template) => {
+                                            const isActive = template.id === editingTemplateId;
+                                            const rulesCount = template.rules.length;
+                                            const ruleLabel =
+                                                rulesCount === 1
+                                                    ? "1 reguła"
+                                                    : rulesCount >= 2 && rulesCount <= 4
+                                                    ? `${rulesCount} reguły`
+                                                    : `${rulesCount} reguł`;
+                                            const universeLabel = template.universe.trim()
+                                                ? template.universe.trim()
+                                                : "Auto (fallback)";
+                                            return (
+                                                <div
+                                                    key={template.id}
+                                                    className={`flex flex-wrap items-center justify-between gap-2 rounded-xl border px-3 py-2 bg-surface ${
+                                                        isActive ? "border-primary" : "border-soft"
+                                                    }`}
+                                                >
+                                                    <div>
+                                                        <div className="font-medium text-primary">
+                                                            {template.title}
+                                                        </div>
+                                                        <div className="text-xs text-subtle">
+                                                            {ruleLabel} • Limit {template.limit} • Sortowanie: {" "}
+                                                            {template.sort === "asc" ? "rosnąco" : "malejąco"} • Universe: {" "}
+                                                            {universeLabel}
+                                                        </div>
+                                                    </div>
+                                                    <div className="flex flex-wrap gap-2">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleApplyScoreTemplate(template)}
+                                                            className="px-3 py-1.5 rounded-lg bg-accent text-primary text-xs font-medium transition hover:bg-[#27AE60]"
+                                                        >
+                                                            Załaduj
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleDeleteScoreTemplate(template.id)}
+                                                            className="px-3 py-1.5 rounded-lg border border-soft text-xs text-muted transition hover:border-[var(--color-primary)] hover:text-primary"
+                                                        >
+                                                            Usuń
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            )}
                             {scoreError && <div className="text-sm text-negative">Błąd: {scoreError}</div>}
                             {scoreResults ? (
                                 <div className="space-y-4">
@@ -4051,7 +4452,7 @@ export function AnalyticsDashboard({
                                 </div>
                                 <p className="text-sm text-muted">
                                     Wybierz tryb konfiguracji portfela. Wariant score wykorzysta parametry zdefiniowane
-                                    powyżej lub dowolną istniejącą nazwę rankingu z backendu.
+                                    powyżej, zapisany szablon lub dowolną istniejącą nazwę rankingu z backendu.
                                 </p>
                             </div>
                             <div className="grid gap-6 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
@@ -4129,6 +4530,64 @@ export function AnalyticsDashboard({
                                         </>
                                     ) : (
                                         <div className="space-y-3">
+                                            <div className="space-y-2">
+                                                <label className="flex flex-col gap-2">
+                                                    <span className="text-xs uppercase tracking-wide text-muted">
+                                                        Szablon z konfiguratora
+                                                    </span>
+                                                    <div className="flex flex-wrap gap-2">
+                                                        <select
+                                                            value={pfSelectedTemplateId ?? ""}
+                                                            onChange={(e) =>
+                                                                setPfSelectedTemplateId(
+                                                                    e.target.value ? e.target.value : null
+                                                                )
+                                                            }
+                                                            className={`${inputBaseClasses} min-w-[12rem]`}
+                                                            disabled={scoreTemplates.length === 0}
+                                                        >
+                                                            <option value="">
+                                                                Brak – użyj bieżącej konfiguracji
+                                                            </option>
+                                                            {scoreTemplates.map((template) => (
+                                                                <option key={template.id} value={template.id}>
+                                                                    {template.title}
+                                                                </option>
+                                                            ))}
+                                                        </select>
+                                                        {pfSelectedTemplateId && (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => setPfSelectedTemplateId(null)}
+                                                                className="px-3 py-1.5 rounded-lg border border-soft text-xs text-muted transition hover:border-[var(--color-primary)] hover:text-primary"
+                                                            >
+                                                                Wyczyść
+                                                            </button>
+                                                        )}
+                                                        {pfSelectedTemplateId && (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => {
+                                                                    const template = scoreTemplates.find(
+                                                                        (item) => item.id === pfSelectedTemplateId
+                                                                    );
+                                                                    if (template) {
+                                                                        handleApplyScoreTemplate(template);
+                                                                    }
+                                                                }}
+                                                                className="px-3 py-1.5 rounded-lg bg-accent text-primary text-xs font-medium transition hover:bg-[#27AE60]"
+                                                            >
+                                                                Otwórz w konfiguratorze
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                </label>
+                                                <div className="text-xs text-subtle">
+                                                    {scoreTemplates.length
+                                                        ? "Wybierz zapisany zestaw reguł, aby szybko zasymulować portfel."
+                                                        : "Zapisz konfigurację score powyżej, by móc użyć jej tutaj."}
+                                                </div>
+                                            </div>
                                             <div className="grid gap-3 md:grid-cols-2">
                                                 <label className="flex flex-col gap-2">
                                                     <span className="text-xs uppercase tracking-wide text-muted">
