@@ -167,6 +167,14 @@ type PriceChartComparisonPoint =
 
 type ChartPeriod = 90 | 180 | 365 | 1825 | "max";
 
+const PERIOD_OPTIONS: { label: string; value: ChartPeriod }[] = [
+    { label: "3M", value: 90 },
+    { label: "6M", value: 180 },
+    { label: "1R", value: 365 },
+    { label: "5L", value: 1825 },
+    { label: "MAX", value: "max" },
+];
+
 const DAY_MS = 24 * 3600 * 1000;
 
 const computeStartISOForPeriod = (period: ChartPeriod): string => {
@@ -175,6 +183,28 @@ const computeStartISOForPeriod = (period: ChartPeriod): string => {
     }
     const startDate = new Date(Date.now() - period * DAY_MS);
     return startDate.toISOString().slice(0, 10);
+};
+
+const computeVisibleRangeForRows = (
+    rows: Row[],
+    period: ChartPeriod
+): { start: string; end: string } | null => {
+    if (!rows.length) return null;
+    const end = rows[rows.length - 1]?.date;
+    const start = rows[0]?.date;
+    if (!end || !start) return null;
+    if (period === "max") {
+        return { start, end };
+    }
+    const endDate = new Date(end);
+    if (Number.isNaN(endDate.getTime())) {
+        return { start, end };
+    }
+    const candidateStart = new Date(endDate.getTime() - period * DAY_MS)
+        .toISOString()
+        .slice(0, 10);
+    const matchedStart = rows.find((row) => row.date >= candidateStart)?.date ?? start;
+    return { start: matchedStart, end };
 };
 
 const COMPARISON_COLORS = [
@@ -2769,6 +2799,7 @@ export default function Page() {
     const [pfComparisonSymbols, setPfComparisonSymbols] = useState<string[]>([]);
     const [pfComparisonAllRows, setPfComparisonAllRows] = useState<Record<string, Row[]>>({});
     const [pfComparisonErrors, setPfComparisonErrors] = useState<Record<string, string>>({});
+    const [pfPeriod, setPfPeriod] = useState<ChartPeriod>("max");
     const pfTotal = pfRows.reduce((a, b) => a + (Number(b.weight) || 0), 0);
     const pfRangeInvalid = pfStart > pfEnd;
     const [pfLoading, setPfLoading] = useState(false);
@@ -3025,31 +3056,50 @@ export default function Page() {
     );
     const comparisonLimitReached = comparisonSymbols.length >= MAX_COMPARISONS;
 
-    const pfPortfolioRows = useMemo<Row[]>(
+    const pfPortfolioAllRows = useMemo<Row[]>(
         () => (pfRes ? portfolioPointsToRows(pfRes.equity) : []),
         [pfRes]
     );
 
-    const pfPortfolioRowsWithSma = useMemo<RowSMA[]>(
-        () => pfPortfolioRows.map((row) => ({ ...row, sma: null })),
-        [pfPortfolioRows]
+    const pfVisibleRange = useMemo(
+        () => computeVisibleRangeForRows(pfPortfolioAllRows, pfPeriod),
+        [pfPortfolioAllRows, pfPeriod]
     );
 
-    const pfBenchmarkRows = useMemo<Row[]>(
+    const pfPortfolioVisibleRows = useMemo<Row[]>(() => {
+        if (!pfVisibleRange) return [];
+        return pfPortfolioAllRows.filter(
+            (row) => row.date >= pfVisibleRange.start && row.date <= pfVisibleRange.end
+        );
+    }, [pfPortfolioAllRows, pfVisibleRange]);
+
+    const pfPortfolioRowsWithSma = useMemo<RowSMA[]>(
+        () => pfPortfolioVisibleRows.map((row) => ({ ...row, sma: null })),
+        [pfPortfolioVisibleRows]
+    );
+
+    const pfBenchmarkAllRows = useMemo<Row[]>(
         () => (pfRes?.benchmark?.length ? portfolioPointsToRows(pfRes.benchmark) : []),
         [pfRes]
     );
 
+    const pfBenchmarkVisibleRows = useMemo<Row[]>(() => {
+        if (!pfVisibleRange) return [];
+        return pfBenchmarkAllRows.filter(
+            (row) => row.date >= pfVisibleRange.start && row.date <= pfVisibleRange.end
+        );
+    }, [pfBenchmarkAllRows, pfVisibleRange]);
+
     const pfBenchmarkSeries = useMemo<ComparisonSeries | null>(() => {
-        if (!pfBenchmarkRows.length) return null;
+        if (!pfBenchmarkVisibleRows.length) return null;
         const label = pfLastBenchmark ?? "Benchmark";
         return {
             symbol: label,
             label,
             color: "#2563EB",
-            rows: pfBenchmarkRows,
+            rows: pfBenchmarkVisibleRows,
         };
-    }, [pfBenchmarkRows, pfLastBenchmark]);
+    }, [pfBenchmarkVisibleRows, pfLastBenchmark]);
 
     useEffect(() => {
         let live = true;
@@ -3102,17 +3152,17 @@ export default function Page() {
     }, [pfComparisonSymbols, pfRes, pfStart]);
 
     const pfComparisonVisibleRows = useMemo(() => {
-        if (!pfPortfolioRows.length) return {} as Record<string, Row[]>;
-        const startDate = pfPortfolioRows[0].date;
-        const endDate = pfPortfolioRows[pfPortfolioRows.length - 1].date;
+        if (!pfVisibleRange) return {} as Record<string, Row[]>;
         const next: Record<string, Row[]> = {};
         for (const sym of pfComparisonSymbols) {
             const series = pfComparisonAllRows[sym];
             if (!series?.length) continue;
-            next[sym] = series.filter((row) => row.date >= startDate && row.date <= endDate);
+            next[sym] = series.filter(
+                (row) => row.date >= pfVisibleRange.start && row.date <= pfVisibleRange.end
+            );
         }
         return next;
-    }, [pfComparisonAllRows, pfComparisonSymbols, pfPortfolioRows]);
+    }, [pfComparisonAllRows, pfComparisonSymbols, pfVisibleRange]);
 
     const pfComparisonSeriesForChart = useMemo<ComparisonSeries[]>(() => {
         const series: ComparisonSeries[] = [];
@@ -3385,21 +3435,15 @@ export default function Page() {
                                 title={symbol ? `${symbol} – wykres cenowy` : "Wykres cenowy"}
                                 right={
                                     <>
-                                        <Chip active={period === 90} onClick={() => setPeriod(90)}>
-                                            3M
-                                        </Chip>
-                                        <Chip active={period === 180} onClick={() => setPeriod(180)}>
-                                            6M
-                                        </Chip>
-                                        <Chip active={period === 365} onClick={() => setPeriod(365)}>
-                                            1R
-                                        </Chip>
-                                        <Chip active={period === 1825} onClick={() => setPeriod(1825)}>
-                                            5L
-                                        </Chip>
-                                        <Chip active={period === "max"} onClick={() => setPeriod("max")}>
-                                            MAX
-                                        </Chip>
+                                        {PERIOD_OPTIONS.map(({ label, value }) => (
+                                            <Chip
+                                                key={value}
+                                                active={period === value}
+                                                onClick={() => setPeriod(value)}
+                                            >
+                                                {label}
+                                            </Chip>
+                                        ))}
                                         <Chip active={area} onClick={() => setArea(!area)}>
                                             Area
                                         </Chip>
@@ -4296,9 +4340,24 @@ export default function Page() {
                                                 <AllocationTable allocations={pfRes.allocations} />
                                             </div>
                                         )}
-                                        {pfPortfolioRows.length > 0 && (
+                                        {pfPortfolioVisibleRows.length > 0 && (
                                             <div className="mt-6 space-y-4">
-                                                <Stats data={pfPortfolioRows} />
+                                                <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                                                    <div className="flex-1">
+                                                        <Stats data={pfPortfolioVisibleRows} />
+                                                    </div>
+                                                    <div className="flex flex-wrap items-center gap-2 md:justify-end">
+                                                        {PERIOD_OPTIONS.map(({ label, value }) => (
+                                                            <Chip
+                                                                key={`pf-${value}`}
+                                                                active={pfPeriod === value}
+                                                                onClick={() => setPfPeriod(value)}
+                                                            >
+                                                                {label}
+                                                            </Chip>
+                                                        ))}
+                                                    </div>
+                                                </div>
                                                 <div className="rounded-lg border border-dashed border-soft/70 bg-white/60 p-3">
                                                     <div className="flex flex-wrap items-center gap-3">
                                                         <div className="text-xs font-semibold uppercase tracking-wide text-muted">
