@@ -14,6 +14,8 @@ import {
     Legend,
 } from "recharts";
 import type { TooltipContentProps } from "recharts";
+import type { CategoricalChartFunc } from "recharts/types/chart/types";
+import type { MouseHandlerDataParam } from "recharts/types/synchronisation/types";
 
 /** =========================
  *  API base (proxy w next.config.mjs)
@@ -1619,7 +1621,7 @@ function PriceChart({
         [priceFormatter]
     );
 
-    type ChartMouseEvent = {
+    type ChartMouseState = MouseHandlerDataParam & {
         activePayload?: Array<{ payload?: PriceChartPoint }>;
     };
 
@@ -1629,8 +1631,8 @@ function PriceChart({
     } | null>(null);
     const [isSelecting, setIsSelecting] = useState(false);
 
-    const getPointFromEvent = useCallback((event: ChartMouseEvent): PriceChartPoint | null => {
-        const payload = event?.activePayload?.[0]?.payload;
+    const getPointFromState = useCallback((state: MouseHandlerDataParam): PriceChartPoint | null => {
+        const payload = (state as ChartMouseState)?.activePayload?.[0]?.payload;
         if (payload && typeof payload === "object" && "close" in payload) {
             return payload as PriceChartPoint;
         }
@@ -1641,36 +1643,36 @@ function PriceChart({
         setSelection((current) => (current ? { start: current.start, end: point } : current));
     }, []);
 
-    const handleChartMouseDown = useCallback(
-        (event: ChartMouseEvent) => {
-            const point = getPointFromEvent(event);
+    const handleChartMouseDown = useCallback<CategoricalChartFunc>(
+        (state) => {
+            const point = getPointFromState(state);
             if (!point) return;
             setSelection({ start: point, end: point });
             setIsSelecting(true);
         },
-        [getPointFromEvent]
+        [getPointFromState]
     );
 
-    const handleChartMouseMove = useCallback(
-        (event: ChartMouseEvent) => {
+    const handleChartMouseMove = useCallback<CategoricalChartFunc>(
+        (state) => {
             if (!isSelecting) return;
-            const point = getPointFromEvent(event);
+            const point = getPointFromState(state);
             if (!point) return;
             updateSelectionEnd(point);
         },
-        [getPointFromEvent, isSelecting, updateSelectionEnd]
+        [getPointFromState, isSelecting, updateSelectionEnd]
     );
 
-    const handleChartMouseUp = useCallback(
-        (event: ChartMouseEvent) => {
+    const handleChartMouseUp = useCallback<CategoricalChartFunc>(
+        (state) => {
             if (!isSelecting) return;
-            const point = getPointFromEvent(event);
+            const point = getPointFromState(state);
             if (point) {
                 updateSelectionEnd(point);
             }
             setIsSelecting(false);
         },
-        [getPointFromEvent, isSelecting, updateSelectionEnd]
+        [getPointFromState, isSelecting, updateSelectionEnd]
     );
 
     const handleChartMouseLeave = useCallback(() => {
