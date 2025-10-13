@@ -1,8 +1,22 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { tmpdir } from "node:os";
 
-const DATA_DIR = path.join(process.cwd(), "data");
-const DATA_FILE = path.join(DATA_DIR, "users.json");
+const resolveConfiguredDir = (): string | null => {
+    const configured = process.env.APP_DATA_DIR ?? process.env.DATA_DIR;
+    if (!configured) return null;
+    const trimmed = configured.trim();
+    if (!trimmed) return null;
+    if (path.isAbsolute(trimmed)) {
+        return trimmed;
+    }
+    return path.join(process.cwd(), trimmed);
+};
+
+const DEFAULT_DATA_DIRS = [path.join(process.cwd(), "data"), path.join(tmpdir(), "gpw-analytics")];
+const configuredDir = resolveConfiguredDir();
+const DATA_DIRS = configuredDir ? [configuredDir] : DEFAULT_DATA_DIRS;
+const DATA_FILES = DATA_DIRS.map((dir) => path.join(dir, "users.json"));
 
 export type StoredScoreBuilderRule = {
     id: string;
@@ -162,24 +176,49 @@ const DEFAULT_PREFERENCES: StoredPreferences = {
 };
 
 const readStore = async (): Promise<Record<string, StoredUser>> => {
-    try {
-        const raw = await fs.readFile(DATA_FILE, "utf8");
-        const parsed = JSON.parse(raw) as Record<string, StoredUser>;
-        if (!parsed || typeof parsed !== "object") {
-            return {};
+    for (const file of DATA_FILES) {
+        try {
+            const raw = await fs.readFile(file, "utf8");
+            const parsed = JSON.parse(raw) as Record<string, StoredUser>;
+            if (!parsed || typeof parsed !== "object") {
+                return {};
+            }
+            return parsed;
+        } catch (err: unknown) {
+            const code = (err as NodeJS.ErrnoException)?.code;
+            if (code === "ENOENT" || code === "EACCES" || code === "EROFS") {
+                continue;
+            }
+            throw err;
         }
-        return parsed;
-    } catch (err: unknown) {
-        if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
-            return {};
-        }
-        throw err;
     }
+    return {};
 };
 
 const writeStore = async (data: Record<string, StoredUser>) => {
-    await fs.mkdir(DATA_DIR, { recursive: true });
-    await fs.writeFile(DATA_FILE, JSON.stringify(data, null, 2), "utf8");
+    let lastError: unknown;
+    for (const [index, dir] of DATA_DIRS.entries()) {
+        const file = DATA_FILES[index];
+        try {
+            await fs.mkdir(dir, { recursive: true });
+            await fs.writeFile(file, JSON.stringify(data, null, 2), "utf8");
+            return;
+        } catch (err: unknown) {
+            const code = (err as NodeJS.ErrnoException)?.code;
+            if (code === "EACCES" || code === "EROFS" || code === "ENOENT") {
+                lastError = err;
+                continue;
+            }
+            throw err;
+        }
+    }
+    if (lastError) {
+        const error = new Error(
+            "Nie można zapisać profilu użytkownika. Skonfiguruj APP_DATA_DIR lub sprawdź uprawnienia do katalogu danych."
+        );
+        (error as Error & { cause?: unknown }).cause = lastError;
+        throw error;
+    }
 };
 
 const normalizeString = (value: unknown): string => {
