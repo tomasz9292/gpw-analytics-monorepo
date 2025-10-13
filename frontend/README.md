@@ -23,7 +23,16 @@ Domyślnie aplikacja startuje pod adresem [http://localhost:3000](http://localho
 
    `AUTH_SECRET` służy do podpisywania ciasteczek sesji – w środowisku produkcyjnym ustaw długi, losowy ciąg.
 
-3. Po zalogowaniu preferencje użytkownika są zapisywane w pliku `data/users.json` (ścieżka ignorowana przez Gita). Dane synchronizują się automatycznie przy zmianach w konfiguratorach.
+3. W konfiguracji identyfikatora OAuth w konsoli Google uzupełnij pola:
+
+   | Pole w konsoli Google                     | Wartość dla środowiska lokalnego                     | Wartość produkcyjna (Vercel)                |
+   | ---------------------------------------- | ---------------------------------------------------- | ------------------------------------------- |
+   | Autoryzowane źródła JavaScript           | `http://localhost:3000`                              | `https://gpw-frontend.vercel.app`*          |
+   | Autoryzowane identyfikatory URI przekierowania | *(pozostaw puste – przepływ tokenowy GIS nie używa przekierowania)* | *(pozostaw puste)* |
+
+   \* Zastąp docelową domeną produkcyjną, jeżeli aplikacja działa pod innym adresem.
+
+4. Po zalogowaniu preferencje użytkownika są zapisywane w pliku `data/users.json` (ścieżka ignorowana przez Gita). Dane synchronizują się automatycznie przy zmianach w konfiguratorach.
 
 Jeżeli `NEXT_PUBLIC_GOOGLE_CLIENT_ID` nie jest ustawiony, przycisk logowania zostanie dezaktywowany.
 
