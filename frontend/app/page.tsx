@@ -3193,135 +3193,6 @@ export function AnalyticsDashboard({
         void fetchProfile();
     }, [fetchProfile]);
 
-    const preferencesObject = useMemo<PersistedPreferences>(() => {
-        const sanitizedWatch = Array.from(
-            new Set(watch.map((item) => item.trim().toUpperCase()).filter((item) => Boolean(item)))
-        );
-        const sanitizedTemplates = scoreTemplates.map((tpl) => ({
-            ...tpl,
-            rules: tpl.rules.map((rule) => ({ ...rule })),
-        }));
-        const scoreDraft: ScoreDraftState = {
-            name: scoreNameInput,
-            description: scoreDescription,
-            limit: scoreLimit,
-            sort: scoreSort,
-            universe: scoreUniverse,
-            minMcap: scoreMinMcap,
-            minTurnover: scoreMinTurnover,
-            asOf: scoreAsOf,
-            rules: scoreRules.map((rule) => ({ ...rule })),
-        };
-        const portfolioDraft: PortfolioDraftState = {
-            mode: pfMode,
-            rows: pfRows.map((row) => ({ ...row })),
-            start: pfStart,
-            end: pfEnd,
-            initial: pfInitial,
-            fee: pfFee,
-            threshold: pfThreshold,
-            benchmark: pfBenchmark ?? null,
-            frequency: pfFreq,
-            score: {
-                name: pfScoreName,
-                limit: pfScoreLimit,
-                weighting: pfScoreWeighting,
-                direction: pfScoreDirection,
-                universe: pfScoreUniverse,
-                min: pfScoreMin,
-                max: pfScoreMax,
-            },
-            comparisons: Array.from(
-                new Set(
-                    pfComparisonSymbols
-                        .map((item) => item.trim().toUpperCase())
-                        .filter((item) => Boolean(item))
-                )
-            ),
-        };
-        return {
-            watchlist: sanitizedWatch,
-            scoreTemplates: sanitizedTemplates,
-            scoreDraft,
-            portfolioDraft,
-        };
-    }, [
-        pfBenchmark,
-        pfComparisonSymbols,
-        pfEnd,
-        pfFee,
-        pfFreq,
-        pfInitial,
-        pfMode,
-        pfRows,
-        pfScoreDirection,
-        pfScoreLimit,
-        pfScoreMax,
-        pfScoreMin,
-        pfScoreName,
-        pfScoreUniverse,
-        pfScoreWeighting,
-        pfStart,
-        pfThreshold,
-        scoreAsOf,
-        scoreDescription,
-        scoreLimit,
-        scoreMinMcap,
-        scoreMinTurnover,
-        scoreNameInput,
-        scoreRules,
-        scoreSort,
-        scoreTemplates,
-        scoreUniverse,
-        watch,
-    ]);
-
-    const preferencesJson = useMemo(() => JSON.stringify(preferencesObject), [preferencesObject]);
-
-    useEffect(() => {
-        if (!isAuthenticated || !profileHydrated) return;
-        if (!preferencesJson) return;
-        if (lastSavedPreferencesRef.current === preferencesJson) return;
-
-        const controller = new AbortController();
-        const timeout = setTimeout(() => {
-            void (async () => {
-                try {
-                    const response = await fetch("/api/account/profile", {
-                        method: "PUT",
-                        headers: { "Content-Type": "application/json" },
-                        body: preferencesJson,
-                        signal: controller.signal,
-                    });
-                    if (!response.ok) {
-                        const text = await response.text();
-                        throw new Error(
-                            text?.trim()
-                                ? `Nie udało się zapisać profilu: ${text.trim()}`
-                                : `Nie udało się zapisać profilu (status ${response.status})`
-                        );
-                    }
-                    const data = (await response.json()) as PublicUserProfile;
-                    setAuthUser(data.user);
-                    lastSavedPreferencesRef.current = preferencesJson;
-                    setProfileError(null);
-                } catch (error: unknown) {
-                    if (error instanceof DOMException && error.name === "AbortError") {
-                        return;
-                    }
-                    const message = error instanceof Error ? error.message : String(error);
-                    setProfileError(message);
-                    lastSavedPreferencesRef.current = null;
-                }
-            })();
-        }, 750);
-
-        return () => {
-            clearTimeout(timeout);
-            controller.abort();
-        };
-    }, [isAuthenticated, preferencesJson, profileHydrated]);
-
     const handleGoogleCredential = useCallback(
         async (credential: string | undefined) => {
             if (!credential) {
@@ -3615,6 +3486,135 @@ export function AnalyticsDashboard({
         pfLoading || pfInitial <= 0 || pfRangeInvalid || pfScoreNameInvalid || pfScoreLimitInvalid;
     const pfDisableSimulation =
         pfMode === "manual" ? pfDisableManualSimulation : pfDisableScoreSimulation;
+
+    const preferencesObject = useMemo<PersistedPreferences>(() => {
+        const sanitizedWatch = Array.from(
+            new Set(watch.map((item) => item.trim().toUpperCase()).filter((item) => Boolean(item)))
+        );
+        const sanitizedTemplates = scoreTemplates.map((tpl) => ({
+            ...tpl,
+            rules: tpl.rules.map((rule) => ({ ...rule })),
+        }));
+        const scoreDraft: ScoreDraftState = {
+            name: scoreNameInput,
+            description: scoreDescription,
+            limit: scoreLimit,
+            sort: scoreSort,
+            universe: scoreUniverse,
+            minMcap: scoreMinMcap,
+            minTurnover: scoreMinTurnover,
+            asOf: scoreAsOf,
+            rules: scoreRules.map((rule) => ({ ...rule })),
+        };
+        const portfolioDraft: PortfolioDraftState = {
+            mode: pfMode,
+            rows: pfRows.map((row) => ({ ...row })),
+            start: pfStart,
+            end: pfEnd,
+            initial: pfInitial,
+            fee: pfFee,
+            threshold: pfThreshold,
+            benchmark: pfBenchmark ?? null,
+            frequency: pfFreq,
+            score: {
+                name: pfScoreName,
+                limit: pfScoreLimit,
+                weighting: pfScoreWeighting,
+                direction: pfScoreDirection,
+                universe: pfScoreUniverse,
+                min: pfScoreMin,
+                max: pfScoreMax,
+            },
+            comparisons: Array.from(
+                new Set(
+                    pfComparisonSymbols
+                        .map((item) => item.trim().toUpperCase())
+                        .filter((item) => Boolean(item))
+                )
+            ),
+        };
+        return {
+            watchlist: sanitizedWatch,
+            scoreTemplates: sanitizedTemplates,
+            scoreDraft,
+            portfolioDraft,
+        };
+    }, [
+        pfBenchmark,
+        pfComparisonSymbols,
+        pfEnd,
+        pfFee,
+        pfFreq,
+        pfInitial,
+        pfMode,
+        pfRows,
+        pfScoreDirection,
+        pfScoreLimit,
+        pfScoreMax,
+        pfScoreMin,
+        pfScoreName,
+        pfScoreUniverse,
+        pfScoreWeighting,
+        pfStart,
+        pfThreshold,
+        scoreAsOf,
+        scoreDescription,
+        scoreLimit,
+        scoreMinMcap,
+        scoreMinTurnover,
+        scoreNameInput,
+        scoreRules,
+        scoreSort,
+        scoreTemplates,
+        scoreUniverse,
+        watch,
+    ]);
+
+    const preferencesJson = useMemo(() => JSON.stringify(preferencesObject), [preferencesObject]);
+
+    useEffect(() => {
+        if (!isAuthenticated || !profileHydrated) return;
+        if (!preferencesJson) return;
+        if (lastSavedPreferencesRef.current === preferencesJson) return;
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => {
+            void (async () => {
+                try {
+                    const response = await fetch("/api/account/profile", {
+                        method: "PUT",
+                        headers: { "Content-Type": "application/json" },
+                        body: preferencesJson,
+                        signal: controller.signal,
+                    });
+                    if (!response.ok) {
+                        const text = await response.text();
+                        throw new Error(
+                            text?.trim()
+                                ? `Nie udało się zapisać profilu: ${text.trim()}`
+                                : `Nie udało się zapisać profilu (status ${response.status})`
+                        );
+                    }
+                    const data = (await response.json()) as PublicUserProfile;
+                    setAuthUser(data.user);
+                    lastSavedPreferencesRef.current = preferencesJson;
+                    setProfileError(null);
+                } catch (error: unknown) {
+                    if (error instanceof DOMException && error.name === "AbortError") {
+                        return;
+                    }
+                    const message = error instanceof Error ? error.message : String(error);
+                    setProfileError(message);
+                    lastSavedPreferencesRef.current = null;
+                }
+            })();
+        }, 750);
+
+        return () => {
+            clearTimeout(timeout);
+            controller.abort();
+        };
+    }, [isAuthenticated, preferencesJson, profileHydrated]);
 
     useEffect(() => {
         if (!pfSelectedTemplateId) return;
