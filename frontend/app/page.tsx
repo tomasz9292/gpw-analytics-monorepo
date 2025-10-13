@@ -1,6 +1,8 @@
 "use client";
 
 import React, { useMemo, useState, useEffect, useId, useCallback, useRef } from "react";
+import Image from "next/image";
+import Script from "next/script";
 import {
     LineChart,
     Line,
@@ -19,6 +21,26 @@ import type { TooltipContentProps } from "recharts";
 import type { CategoricalChartFunc } from "recharts/types/chart/types";
 import type { MouseHandlerDataParam } from "recharts/types/synchronisation/types";
 import type { BrushStartEndIndex } from "recharts/types/context/brushUpdateContext";
+
+declare global {
+    interface Window {
+        google?: {
+            accounts: {
+                id: {
+                    initialize: (options: {
+                        client_id: string;
+                        callback: (response: { credential?: string | undefined }) => void;
+                        ux_mode?: "popup" | "redirect";
+                        auto_select?: boolean;
+                        cancel_on_tap_outside?: boolean;
+                    }) => void;
+                    prompt: () => void;
+                    disableAutoSelect?: () => void;
+                };
+            };
+        };
+    }
+}
 
 /** =========================
  *  API base (proxy w next.config.mjs)
@@ -200,6 +222,103 @@ const getDefaultScoreRules = (): ScoreBuilderRule[] => {
         transform: "raw",
     }));
 };
+
+const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? "";
+const DEFAULT_WATCHLIST = ["CDR.WA", "PKN.WA", "PKOBP"];
+
+type ScoreDraftState = {
+    name: string;
+    description: string;
+    limit: number;
+    sort: "asc" | "desc";
+    universe: string;
+    minMcap: string;
+    minTurnover: string;
+    asOf: string;
+    rules: ScoreBuilderRule[];
+};
+
+type PortfolioDraftState = {
+    mode: "manual" | "score";
+    rows: { symbol: string; weight: number }[];
+    start: string;
+    end: string;
+    initial: number;
+    fee: number;
+    threshold: number;
+    benchmark: string | null;
+    frequency: Rebalance;
+    score: {
+        name: string;
+        limit: number;
+        weighting: string;
+        direction: "asc" | "desc";
+        universe: string;
+        min: string;
+        max: string;
+    };
+    comparisons: string[];
+};
+
+type AuthUser = {
+    id: string;
+    email: string | null;
+    name: string | null;
+    picture: string | null;
+    provider: "google";
+    createdAt: string;
+    updatedAt: string;
+};
+
+type PersistedPreferences = {
+    watchlist: string[];
+    scoreTemplates: ScoreTemplate[];
+    scoreDraft: ScoreDraftState;
+    portfolioDraft: PortfolioDraftState;
+};
+
+type PublicUserProfile = {
+    user: AuthUser;
+    preferences: PersistedPreferences;
+};
+
+const getDefaultScoreDraft = (): ScoreDraftState => ({
+    name: "custom_quality",
+    description: "Ranking jakościowy – przykład",
+    limit: 10,
+    sort: "desc",
+    universe: "",
+    minMcap: "",
+    minTurnover: "",
+    asOf: new Date().toISOString().slice(0, 10),
+    rules: getDefaultScoreRules(),
+});
+
+const getDefaultPortfolioDraft = (): PortfolioDraftState => ({
+    mode: "manual",
+    rows: [
+        { symbol: "CDR.WA", weight: 40 },
+        { symbol: "PKN.WA", weight: 30 },
+        { symbol: "PKOBP", weight: 30 },
+    ],
+    start: "2015-01-01",
+    end: new Date().toISOString().slice(0, 10),
+    initial: 10000,
+    fee: 0,
+    threshold: 0,
+    benchmark: null,
+    frequency: "monthly",
+    score: {
+        name: "quality_score",
+        limit: 10,
+        weighting: "equal",
+        direction: "desc",
+        universe: "",
+        min: "",
+        max: "",
+    },
+    comparisons: [],
+});
 
 /** =========================
  *  Typy danych
@@ -2754,8 +2873,21 @@ export function AnalyticsDashboard({
 }: {
     view: "analysis" | "score" | "portfolio";
 }) {
-    const [watch, setWatch] = useState<string[]>([]);
-    const [symbol, setSymbol] = useState<string | null>(null);
+    const defaultScoreDraft = useMemo(() => getDefaultScoreDraft(), []);
+    const defaultPortfolioDraft = useMemo(() => getDefaultPortfolioDraft(), []);
+
+    const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+    const [authLoading, setAuthLoading] = useState(true);
+    const [authError, setAuthError] = useState<string | null>(null);
+    const [profileLoading, setProfileLoading] = useState(false);
+    const [profileError, setProfileError] = useState<string | null>(null);
+    const [profileHydrated, setProfileHydrated] = useState(false);
+    const [googleLoaded, setGoogleLoaded] = useState(false);
+    const googleInitializedRef = useRef(false);
+    const lastSavedPreferencesRef = useRef<string | null>(null);
+
+    const [watch, setWatch] = useState<string[]>(() => [...DEFAULT_WATCHLIST]);
+    const [symbol, setSymbol] = useState<string | null>(DEFAULT_WATCHLIST[0] ?? null);
     const [period, setPeriod] = useState<ChartPeriod>(365);
     const [area, setArea] = useState(true);
     const [smaOn, setSmaOn] = useState(true);
@@ -2770,18 +2902,18 @@ export function AnalyticsDashboard({
     const [err, setErr] = useState("");
 
     // Score builder
-    const [scoreRules, setScoreRules] = useState<ScoreBuilderRule[]>(() => getDefaultScoreRules());
-    const [scoreNameInput, setScoreNameInput] = useState("custom_quality");
-    const [scoreDescription, setScoreDescription] = useState("Ranking jakościowy – przykład");
-    const [scoreLimit, setScoreLimit] = useState(10);
-    const [scoreSort, setScoreSort] = useState<"asc" | "desc">("desc");
-    const [scoreUniverse, setScoreUniverse] = useState("");
+    const [scoreRules, setScoreRules] = useState<ScoreBuilderRule[]>(() => defaultScoreDraft.rules);
+    const [scoreNameInput, setScoreNameInput] = useState(defaultScoreDraft.name);
+    const [scoreDescription, setScoreDescription] = useState(defaultScoreDraft.description);
+    const [scoreLimit, setScoreLimit] = useState(defaultScoreDraft.limit);
+    const [scoreSort, setScoreSort] = useState<"asc" | "desc">(defaultScoreDraft.sort);
+    const [scoreUniverse, setScoreUniverse] = useState(defaultScoreDraft.universe);
     const [scoreUniverseFallback, setScoreUniverseFallback] = useState<string[]>(
         () => [...SCORE_UNIVERSE_FALLBACK]
     );
-    const [scoreAsOf, setScoreAsOf] = useState(() => new Date().toISOString().slice(0, 10));
-    const [scoreMinMcap, setScoreMinMcap] = useState("");
-    const [scoreMinTurnover, setScoreMinTurnover] = useState("");
+    const [scoreAsOf, setScoreAsOf] = useState(defaultScoreDraft.asOf);
+    const [scoreMinMcap, setScoreMinMcap] = useState(defaultScoreDraft.minMcap);
+    const [scoreMinTurnover, setScoreMinTurnover] = useState(defaultScoreDraft.minTurnover);
     const [scoreResults, setScoreResults] = useState<ScorePreviewResult | null>(null);
     const [scoreLoading, setScoreLoading] = useState(false);
     const [scoreError, setScoreError] = useState("");
@@ -2804,13 +2936,492 @@ export function AnalyticsDashboard({
         [editingTemplateId, scoreTemplates]
     );
 
+    const isAuthenticated = Boolean(authUser);
+    const useLocalTemplates = !isAuthenticated;
+
+    const resetToDefaults = useCallback(() => {
+        const freshScoreDraft = getDefaultScoreDraft();
+        const freshPortfolioDraft = getDefaultPortfolioDraft();
+        setWatch([...DEFAULT_WATCHLIST]);
+        setSymbol(DEFAULT_WATCHLIST[0] ?? null);
+        setScoreTemplates([]);
+        setScoreRules(freshScoreDraft.rules.map((rule) => ({ ...rule })));
+        setScoreNameInput(freshScoreDraft.name);
+        setScoreDescription(freshScoreDraft.description);
+        setScoreLimit(freshScoreDraft.limit);
+        setScoreSort(freshScoreDraft.sort);
+        setScoreUniverse(freshScoreDraft.universe);
+        setScoreAsOf(freshScoreDraft.asOf);
+        setScoreMinMcap(freshScoreDraft.minMcap);
+        setScoreMinTurnover(freshScoreDraft.minTurnover);
+        setPfMode(freshPortfolioDraft.mode);
+        setPfRows(freshPortfolioDraft.rows.map((row) => ({ ...row })));
+        setPfStart(freshPortfolioDraft.start);
+        setPfEnd(freshPortfolioDraft.end);
+        setPfInitial(freshPortfolioDraft.initial);
+        setPfFee(freshPortfolioDraft.fee);
+        setPfThreshold(freshPortfolioDraft.threshold);
+        setPfBenchmark(freshPortfolioDraft.benchmark);
+        setPfFreq(freshPortfolioDraft.frequency);
+        setPfScoreName(freshPortfolioDraft.score.name);
+        setPfScoreLimit(freshPortfolioDraft.score.limit);
+        setPfScoreWeighting(freshPortfolioDraft.score.weighting);
+        setPfScoreDirection(freshPortfolioDraft.score.direction);
+        setPfScoreUniverse(freshPortfolioDraft.score.universe);
+        setPfScoreMin(freshPortfolioDraft.score.min);
+        setPfScoreMax(freshPortfolioDraft.score.max);
+        setPfComparisonSymbols([...freshPortfolioDraft.comparisons]);
+        lastSavedPreferencesRef.current = null;
+        setProfileHydrated(false);
+        setProfileLoading(false);
+        setAuthLoading(false);
+    }, []);
+
+    const hydrateFromPreferences = useCallback(
+        (preferences: PersistedPreferences) => {
+            const safeWatch = preferences.watchlist.length
+                ? preferences.watchlist
+                : [...DEFAULT_WATCHLIST];
+            setWatch(safeWatch);
+            setSymbol((prev) => (prev && safeWatch.includes(prev) ? prev : safeWatch[0] ?? null));
+            setScoreTemplates(
+                preferences.scoreTemplates.map((tpl) => ({
+                    ...tpl,
+                    rules: tpl.rules.map((rule) => ({ ...rule })),
+                }))
+            );
+
+            const incomingScoreDraft = preferences.scoreDraft ?? defaultScoreDraft;
+            const scoreRulesSource =
+                incomingScoreDraft.rules && incomingScoreDraft.rules.length
+                    ? incomingScoreDraft.rules
+                    : defaultScoreDraft.rules;
+            setScoreRules(scoreRulesSource.map((rule) => ({ ...rule })));
+            setScoreNameInput(
+                incomingScoreDraft.name?.trim().length
+                    ? incomingScoreDraft.name
+                    : defaultScoreDraft.name
+            );
+            setScoreDescription(
+                incomingScoreDraft.description?.trim().length
+                    ? incomingScoreDraft.description
+                    : defaultScoreDraft.description
+            );
+            setScoreLimit(
+                incomingScoreDraft.limit && incomingScoreDraft.limit > 0
+                    ? incomingScoreDraft.limit
+                    : defaultScoreDraft.limit
+            );
+            setScoreSort(incomingScoreDraft.sort === "asc" ? "asc" : "desc");
+            setScoreUniverse(incomingScoreDraft.universe ?? "");
+            setScoreAsOf(incomingScoreDraft.asOf || defaultScoreDraft.asOf);
+            setScoreMinMcap(incomingScoreDraft.minMcap ?? "");
+            setScoreMinTurnover(incomingScoreDraft.minTurnover ?? "");
+
+            const incomingPortfolio = preferences.portfolioDraft ?? defaultPortfolioDraft;
+            const portfolioRowsSource =
+                incomingPortfolio.rows && incomingPortfolio.rows.length
+                    ? incomingPortfolio.rows
+                    : defaultPortfolioDraft.rows;
+            setPfMode(incomingPortfolio.mode === "score" ? "score" : "manual");
+            setPfRows(portfolioRowsSource.map((row) => ({ ...row })));
+            setPfStart(incomingPortfolio.start || defaultPortfolioDraft.start);
+            setPfEnd(incomingPortfolio.end || defaultPortfolioDraft.end);
+            setPfInitial(
+                incomingPortfolio.initial && incomingPortfolio.initial > 0
+                    ? incomingPortfolio.initial
+                    : defaultPortfolioDraft.initial
+            );
+            setPfFee(
+                typeof incomingPortfolio.fee === "number"
+                    ? incomingPortfolio.fee
+                    : defaultPortfolioDraft.fee
+            );
+            setPfThreshold(
+                typeof incomingPortfolio.threshold === "number"
+                    ? incomingPortfolio.threshold
+                    : defaultPortfolioDraft.threshold
+            );
+            setPfBenchmark(incomingPortfolio.benchmark ?? null);
+            setPfFreq(
+                incomingPortfolio.frequency === "none"
+                    ? "none"
+                    : incomingPortfolio.frequency === "quarterly"
+                    ? "quarterly"
+                    : incomingPortfolio.frequency === "yearly"
+                    ? "yearly"
+                    : "monthly"
+            );
+            const scoreSection = incomingPortfolio.score ?? defaultPortfolioDraft.score;
+            setPfScoreName(scoreSection.name || defaultPortfolioDraft.score.name);
+            setPfScoreLimit(
+                scoreSection.limit && scoreSection.limit > 0
+                    ? scoreSection.limit
+                    : defaultPortfolioDraft.score.limit
+            );
+            setPfScoreWeighting(scoreSection.weighting || defaultPortfolioDraft.score.weighting);
+            setPfScoreDirection(scoreSection.direction === "asc" ? "asc" : "desc");
+            setPfScoreUniverse(scoreSection.universe ?? "");
+            setPfScoreMin(scoreSection.min ?? "");
+            setPfScoreMax(scoreSection.max ?? "");
+            setPfComparisonSymbols(
+                scoreSection && incomingPortfolio.comparisons?.length
+                    ? Array.from(
+                          new Set(
+                              incomingPortfolio.comparisons.map((item) =>
+                                  (item ?? "").toString().trim().toUpperCase()
+                              )
+                          )
+                      ).filter((item) => item)
+                    : [...defaultPortfolioDraft.comparisons]
+            );
+
+            const snapshot: PersistedPreferences = {
+                watchlist: safeWatch,
+                scoreTemplates: preferences.scoreTemplates.map((tpl) => ({
+                    ...tpl,
+                    rules: tpl.rules.map((rule) => ({ ...rule })),
+                })),
+                scoreDraft: {
+                    name: incomingScoreDraft.name || defaultScoreDraft.name,
+                    description:
+                        incomingScoreDraft.description || defaultScoreDraft.description,
+                    limit:
+                        incomingScoreDraft.limit && incomingScoreDraft.limit > 0
+                            ? incomingScoreDraft.limit
+                            : defaultScoreDraft.limit,
+                    sort: incomingScoreDraft.sort === "asc" ? "asc" : "desc",
+                    universe: incomingScoreDraft.universe ?? "",
+                    minMcap: incomingScoreDraft.minMcap ?? "",
+                    minTurnover: incomingScoreDraft.minTurnover ?? "",
+                    asOf: incomingScoreDraft.asOf || defaultScoreDraft.asOf,
+                    rules: scoreRulesSource.map((rule) => ({ ...rule })),
+                },
+                portfolioDraft: {
+                    mode: incomingPortfolio.mode === "score" ? "score" : "manual",
+                    rows: portfolioRowsSource.map((row) => ({ ...row })),
+                    start: incomingPortfolio.start || defaultPortfolioDraft.start,
+                    end: incomingPortfolio.end || defaultPortfolioDraft.end,
+                    initial:
+                        incomingPortfolio.initial && incomingPortfolio.initial > 0
+                            ? incomingPortfolio.initial
+                            : defaultPortfolioDraft.initial,
+                    fee:
+                        typeof incomingPortfolio.fee === "number"
+                            ? incomingPortfolio.fee
+                            : defaultPortfolioDraft.fee,
+                    threshold:
+                        typeof incomingPortfolio.threshold === "number"
+                            ? incomingPortfolio.threshold
+                            : defaultPortfolioDraft.threshold,
+                    benchmark: incomingPortfolio.benchmark ?? null,
+                    frequency:
+                        incomingPortfolio.frequency === "none"
+                            ? "none"
+                            : incomingPortfolio.frequency === "quarterly"
+                            ? "quarterly"
+                            : incomingPortfolio.frequency === "yearly"
+                            ? "yearly"
+                            : "monthly",
+                    score: {
+                        name: scoreSection.name || defaultPortfolioDraft.score.name,
+                        limit:
+                            scoreSection.limit && scoreSection.limit > 0
+                                ? scoreSection.limit
+                                : defaultPortfolioDraft.score.limit,
+                        weighting: scoreSection.weighting || defaultPortfolioDraft.score.weighting,
+                        direction: scoreSection.direction === "asc" ? "asc" : "desc",
+                        universe: scoreSection.universe ?? "",
+                        min: scoreSection.min ?? "",
+                        max: scoreSection.max ?? "",
+                    },
+                    comparisons:
+                        incomingPortfolio.comparisons?.length
+                            ? Array.from(
+                                  new Set(
+                                      incomingPortfolio.comparisons.map((item) =>
+                                          (item ?? "").toString().trim().toUpperCase()
+                                      )
+                                  )
+                              ).filter((item) => item)
+                            : [...defaultPortfolioDraft.comparisons],
+                },
+            };
+            lastSavedPreferencesRef.current = JSON.stringify(snapshot);
+            setProfileHydrated(true);
+        },
+        [defaultPortfolioDraft, defaultScoreDraft]
+    );
+
+    const fetchProfile = useCallback(async () => {
+        setAuthLoading(true);
+        setProfileLoading(true);
+        try {
+            const response = await fetch("/api/account/profile", { cache: "no-store" });
+            if (!response.ok) {
+                if (response.status === 401) {
+                    setAuthUser(null);
+                    resetToDefaults();
+                    lastSavedPreferencesRef.current = null;
+                    return null;
+                }
+                const text = await response.text();
+                throw new Error(
+                    text?.trim()
+                        ? `Nie udało się pobrać profilu: ${text.trim()}`
+                        : `Nie udało się pobrać profilu (status ${response.status})`
+                );
+            }
+            const data = (await response.json()) as PublicUserProfile;
+            setAuthUser(data.user);
+            setAuthError(null);
+            setProfileError(null);
+            hydrateFromPreferences(data.preferences);
+            return data;
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : String(error);
+            setAuthError(message);
+            setProfileError(message);
+            return null;
+        } finally {
+            setAuthLoading(false);
+            setProfileLoading(false);
+        }
+    }, [hydrateFromPreferences, resetToDefaults]);
+
+    useEffect(() => {
+        void fetchProfile();
+    }, [fetchProfile]);
+
+    const preferencesObject = useMemo<PersistedPreferences>(() => {
+        const sanitizedWatch = Array.from(
+            new Set(watch.map((item) => item.trim().toUpperCase()).filter((item) => Boolean(item)))
+        );
+        const sanitizedTemplates = scoreTemplates.map((tpl) => ({
+            ...tpl,
+            rules: tpl.rules.map((rule) => ({ ...rule })),
+        }));
+        const scoreDraft: ScoreDraftState = {
+            name: scoreNameInput,
+            description: scoreDescription,
+            limit: scoreLimit,
+            sort: scoreSort,
+            universe: scoreUniverse,
+            minMcap: scoreMinMcap,
+            minTurnover: scoreMinTurnover,
+            asOf: scoreAsOf,
+            rules: scoreRules.map((rule) => ({ ...rule })),
+        };
+        const portfolioDraft: PortfolioDraftState = {
+            mode: pfMode,
+            rows: pfRows.map((row) => ({ ...row })),
+            start: pfStart,
+            end: pfEnd,
+            initial: pfInitial,
+            fee: pfFee,
+            threshold: pfThreshold,
+            benchmark: pfBenchmark ?? null,
+            frequency: pfFreq,
+            score: {
+                name: pfScoreName,
+                limit: pfScoreLimit,
+                weighting: pfScoreWeighting,
+                direction: pfScoreDirection,
+                universe: pfScoreUniverse,
+                min: pfScoreMin,
+                max: pfScoreMax,
+            },
+            comparisons: Array.from(
+                new Set(
+                    pfComparisonSymbols
+                        .map((item) => item.trim().toUpperCase())
+                        .filter((item) => Boolean(item))
+                )
+            ),
+        };
+        return {
+            watchlist: sanitizedWatch,
+            scoreTemplates: sanitizedTemplates,
+            scoreDraft,
+            portfolioDraft,
+        };
+    }, [
+        pfBenchmark,
+        pfComparisonSymbols,
+        pfEnd,
+        pfFee,
+        pfFreq,
+        pfInitial,
+        pfMode,
+        pfRows,
+        pfScoreDirection,
+        pfScoreLimit,
+        pfScoreMax,
+        pfScoreMin,
+        pfScoreName,
+        pfScoreUniverse,
+        pfScoreWeighting,
+        pfStart,
+        pfThreshold,
+        scoreAsOf,
+        scoreDescription,
+        scoreLimit,
+        scoreMinMcap,
+        scoreMinTurnover,
+        scoreNameInput,
+        scoreRules,
+        scoreSort,
+        scoreTemplates,
+        scoreUniverse,
+        watch,
+    ]);
+
+    const preferencesJson = useMemo(() => JSON.stringify(preferencesObject), [preferencesObject]);
+
+    useEffect(() => {
+        if (!isAuthenticated || !profileHydrated) return;
+        if (!preferencesJson) return;
+        if (lastSavedPreferencesRef.current === preferencesJson) return;
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => {
+            void (async () => {
+                try {
+                    const response = await fetch("/api/account/profile", {
+                        method: "PUT",
+                        headers: { "Content-Type": "application/json" },
+                        body: preferencesJson,
+                        signal: controller.signal,
+                    });
+                    if (!response.ok) {
+                        const text = await response.text();
+                        throw new Error(
+                            text?.trim()
+                                ? `Nie udało się zapisać profilu: ${text.trim()}`
+                                : `Nie udało się zapisać profilu (status ${response.status})`
+                        );
+                    }
+                    const data = (await response.json()) as PublicUserProfile;
+                    setAuthUser(data.user);
+                    lastSavedPreferencesRef.current = preferencesJson;
+                    setProfileError(null);
+                } catch (error: unknown) {
+                    if (error instanceof DOMException && error.name === "AbortError") {
+                        return;
+                    }
+                    const message = error instanceof Error ? error.message : String(error);
+                    setProfileError(message);
+                    lastSavedPreferencesRef.current = null;
+                }
+            })();
+        }, 750);
+
+        return () => {
+            clearTimeout(timeout);
+            controller.abort();
+        };
+    }, [isAuthenticated, preferencesJson, profileHydrated]);
+
+    const handleGoogleCredential = useCallback(
+        async (credential: string | undefined) => {
+            if (!credential) {
+                setAuthError("Nie otrzymano tokenu Google.");
+                return;
+            }
+            setAuthError(null);
+            setProfileError(null);
+            try {
+                const response = await fetch("/api/auth/google", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ credential }),
+                });
+                const payload = (await response
+                    .json()
+                    .catch(() => null)) as { user?: AuthUser; error?: string } | null;
+                if (!response.ok || !payload?.user) {
+                    throw new Error(payload?.error ?? "Logowanie przez Google nie powiodło się.");
+                }
+                setAuthUser(payload.user);
+                setProfileHydrated(false);
+                await fetchProfile();
+            } catch (error: unknown) {
+                const message = error instanceof Error ? error.message : String(error);
+                setAuthError(message);
+            }
+        },
+        [fetchProfile]
+    );
+
+    const initializeGoogle = useCallback(() => {
+        if (googleInitializedRef.current) {
+            return Boolean(window.google?.accounts?.id);
+        }
+        if (!googleLoaded || !GOOGLE_CLIENT_ID) {
+            return false;
+        }
+        const googleApi = window.google?.accounts?.id;
+        if (!googleApi) {
+            return false;
+        }
+        googleApi.initialize({
+            client_id: GOOGLE_CLIENT_ID,
+            callback: (response) => {
+                void handleGoogleCredential(response?.credential);
+            },
+            ux_mode: "popup",
+            auto_select: false,
+            cancel_on_tap_outside: true,
+        });
+        googleInitializedRef.current = true;
+        return true;
+    }, [googleLoaded, handleGoogleCredential]);
+
+    useEffect(() => {
+        if (!googleLoaded) return;
+        void initializeGoogle();
+    }, [googleLoaded, initializeGoogle]);
+
+    const handleSignInClick = useCallback(() => {
+        const ready = initializeGoogle();
+        if (!ready) {
+            setAuthError("Logowanie Google nie jest dostępne. Sprawdź konfigurację klienta.");
+            return;
+        }
+        window.google?.accounts?.id?.prompt();
+    }, [initializeGoogle]);
+
+    const handleLogout = useCallback(async () => {
+        try {
+            await fetch("/api/auth/logout", { method: "POST" });
+        } catch {
+            // ignoruj błędy wylogowania
+        }
+        setAuthUser(null);
+        resetToDefaults();
+        setAuthError(null);
+        setProfileError(null);
+        window.google?.accounts?.id?.disableAutoSelect?.();
+    }, [resetToDefaults]);
+
     useEffect(() => {
         if (typeof window === "undefined") return;
+        if (!useLocalTemplates) {
+            templatesHydratedRef.current = false;
+            return;
+        }
+        templatesHydratedRef.current = false;
         try {
             const stored = window.localStorage.getItem(SCORE_TEMPLATE_STORAGE_KEY);
-            if (!stored) return;
+            if (!stored) {
+                setScoreTemplates([]);
+                return;
+            }
             const parsed: unknown = JSON.parse(stored);
-            if (!Array.isArray(parsed)) return;
+            if (!Array.isArray(parsed)) {
+                setScoreTemplates([]);
+                return;
+            }
             const normalized = (parsed
                 .map((item) => {
                     if (!item || typeof item !== "object") return null;
@@ -2886,12 +3497,14 @@ export function AnalyticsDashboard({
             setScoreTemplates(normalized);
         } catch {
             // ignoruj uszkodzone dane
+        } finally {
+            templatesHydratedRef.current = true;
         }
-        templatesHydratedRef.current = true;
-    }, []);
+    }, [useLocalTemplates]);
 
     useEffect(() => {
         if (typeof window === "undefined") return;
+        if (!useLocalTemplates) return;
         if (!templatesHydratedRef.current) return;
         try {
             window.localStorage.setItem(
@@ -2901,7 +3514,7 @@ export function AnalyticsDashboard({
         } catch {
             // ignoruj brak miejsca w localStorage
         }
-    }, [scoreTemplates]);
+    }, [scoreTemplates, useLocalTemplates]);
 
     useEffect(() => {
         if (!editingTemplateId) return;
@@ -2949,31 +3562,33 @@ export function AnalyticsDashboard({
     }, []);
 
     // Portfel
-    const [pfMode, setPfMode] = useState<"manual" | "score">("manual");
-    const [pfRows, setPfRows] = useState<{ symbol: string; weight: number }[]>([
-        { symbol: "CDR.WA", weight: 40 },
-        { symbol: "PKN.WA", weight: 30 },
-        { symbol: "PKOBP", weight: 30 },
-    ]);
-    const [pfStart, setPfStart] = useState("2015-01-01");
-    const [pfEnd, setPfEnd] = useState(() => new Date().toISOString().slice(0, 10));
-    const [pfInitial, setPfInitial] = useState(10000);
-    const [pfFee, setPfFee] = useState(0);
-    const [pfThreshold, setPfThreshold] = useState(0);
-    const [pfBenchmark, setPfBenchmark] = useState<string | null>(null);
+    const [pfMode, setPfMode] = useState<"manual" | "score">(defaultPortfolioDraft.mode);
+    const [pfRows, setPfRows] = useState<{ symbol: string; weight: number }[]>(() =>
+        defaultPortfolioDraft.rows.map((row) => ({ ...row }))
+    );
+    const [pfStart, setPfStart] = useState(defaultPortfolioDraft.start);
+    const [pfEnd, setPfEnd] = useState(defaultPortfolioDraft.end);
+    const [pfInitial, setPfInitial] = useState(defaultPortfolioDraft.initial);
+    const [pfFee, setPfFee] = useState(defaultPortfolioDraft.fee);
+    const [pfThreshold, setPfThreshold] = useState(defaultPortfolioDraft.threshold);
+    const [pfBenchmark, setPfBenchmark] = useState<string | null>(defaultPortfolioDraft.benchmark);
     const [pfLastBenchmark, setPfLastBenchmark] = useState<string | null>(null);
-    const [pfFreq, setPfFreq] = useState<Rebalance>("monthly");
+    const [pfFreq, setPfFreq] = useState<Rebalance>(defaultPortfolioDraft.frequency);
     const [pfRes, setPfRes] = useState<PortfolioResp | null>(null);
     const [pfBrushRange, setPfBrushRange] = useState<BrushStartEndIndex | null>(null);
     const [pfTimelineOpen, setPfTimelineOpen] = useState(false);
-    const [pfScoreName, setPfScoreName] = useState("quality_score");
-    const [pfScoreLimit, setPfScoreLimit] = useState(10);
-    const [pfScoreWeighting, setPfScoreWeighting] = useState("equal");
-    const [pfScoreDirection, setPfScoreDirection] = useState<"asc" | "desc">("desc");
-    const [pfScoreUniverse, setPfScoreUniverse] = useState("");
-    const [pfScoreMin, setPfScoreMin] = useState("");
-    const [pfScoreMax, setPfScoreMax] = useState("");
-    const [pfComparisonSymbols, setPfComparisonSymbols] = useState<string[]>([]);
+    const [pfScoreName, setPfScoreName] = useState(defaultPortfolioDraft.score.name);
+    const [pfScoreLimit, setPfScoreLimit] = useState(defaultPortfolioDraft.score.limit);
+    const [pfScoreWeighting, setPfScoreWeighting] = useState(defaultPortfolioDraft.score.weighting);
+    const [pfScoreDirection, setPfScoreDirection] = useState<"asc" | "desc">(
+        defaultPortfolioDraft.score.direction
+    );
+    const [pfScoreUniverse, setPfScoreUniverse] = useState(defaultPortfolioDraft.score.universe);
+    const [pfScoreMin, setPfScoreMin] = useState(defaultPortfolioDraft.score.min);
+    const [pfScoreMax, setPfScoreMax] = useState(defaultPortfolioDraft.score.max);
+    const [pfComparisonSymbols, setPfComparisonSymbols] = useState<string[]>(
+        () => [...defaultPortfolioDraft.comparisons]
+    );
     const [pfComparisonAllRows, setPfComparisonAllRows] = useState<Record<string, Row[]>>({});
     const [pfComparisonErrors, setPfComparisonErrors] = useState<Record<string, string>>({});
     const [pfPeriod, setPfPeriod] = useState<ChartPeriod>("max");
@@ -3712,12 +4327,14 @@ export function AnalyticsDashboard({
     };
 
     const removeFromWatch = (sym: string) => {
+        const normalized = sym.trim().toUpperCase();
+        if (!normalized) return;
         setWatch((prev) => {
-            if (!prev.includes(sym)) {
+            if (!prev.includes(normalized)) {
                 return prev;
             }
-            const next = prev.filter((item) => item !== sym);
-            if (symbol === sym) {
+            const next = prev.filter((item) => item !== normalized);
+            if (symbol === normalized) {
                 setSymbol(next.length ? next[0] : null);
             }
             return next;
@@ -3726,6 +4343,14 @@ export function AnalyticsDashboard({
 
     return (
         <div className="min-h-screen bg-page text-neutral">
+            <Script
+                src="https://accounts.google.com/gsi/client"
+                strategy="afterInteractive"
+                async
+                defer
+                onLoad={() => setGoogleLoaded(true)}
+                onError={() => setAuthError("Nie udało się wczytać logowania Google.")}
+            />
             <header className="border-b border-soft bg-primary text-white">
                 <div className="max-w-6xl mx-auto px-4 md:px-8 py-10 space-y-8">
                     <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
@@ -3737,13 +4362,62 @@ export function AnalyticsDashboard({
                                 backendem.
                             </p>
                         </div>
-                        <div className="flex items-center gap-3 self-start md:self-auto">
-                            <button className="px-4 py-2 rounded-xl border border-white/40 text-white hover:bg-white/10">
-                                Zaloguj
-                            </button>
-                            <button className="px-4 py-2 rounded-xl bg-accent text-primary transition hover:bg-[#27AE60]">
-                                Utwórz konto
-                            </button>
+                        <div className="flex flex-col gap-2 items-stretch md:items-end self-start md:self-auto">
+                            {isAuthenticated ? (
+                                <div className="flex items-center gap-3">
+                                    {authUser?.picture ? (
+                                        <Image
+                                            src={authUser.picture}
+                                            alt="Avatar"
+                                            width={40}
+                                            height={40}
+                                            className="h-10 w-10 rounded-full border border-white/40 object-cover"
+                                            unoptimized
+                                        />
+                                    ) : null}
+                                    <div className="text-right">
+                                        <p className="font-semibold text-white">
+                                            {authUser?.name ?? authUser?.email ?? "Użytkownik Google"}
+                                        </p>
+                                        {authUser?.email ? (
+                                            <p className="text-xs text-white/70">{authUser.email}</p>
+                                        ) : null}
+                                        <p className="text-[11px] uppercase tracking-wider text-white/60">
+                                            {profileLoading ? "Zapisywanie ustawień..." : "Konto Google"}
+                                        </p>
+                                    </div>
+                                    <button
+                                        className="px-4 py-2 rounded-xl border border-white/40 text-white hover:bg-white/10 transition disabled:opacity-60"
+                                        onClick={handleLogout}
+                                        disabled={authLoading}
+                                    >
+                                        Wyloguj
+                                    </button>
+                                </div>
+                            ) : (
+                                <div className="flex flex-col md:flex-row md:items-center gap-3">
+                                    <button
+                                        className="px-4 py-2 rounded-xl bg-white text-primary font-medium shadow hover:bg-slate-100 transition disabled:opacity-70"
+                                        onClick={handleSignInClick}
+                                        disabled={authLoading || !GOOGLE_CLIENT_ID}
+                                    >
+                                        {authLoading ? "Sprawdzanie..." : "Zaloguj przez Google"}
+                                    </button>
+                                    <p className="text-xs text-white/70 md:text-right">
+                                        Historia ustawień jest zapisywana w Twoim koncie Google.
+                                    </p>
+                                    {!GOOGLE_CLIENT_ID && (
+                                        <p className="text-[11px] text-amber-200 md:text-right">
+                                            Ustaw zmienną NEXT_PUBLIC_GOOGLE_CLIENT_ID, aby włączyć logowanie.
+                                        </p>
+                                    )}
+                                </div>
+                            )}
+                            {(authError || profileError) && (
+                                <p className="text-xs text-red-200 text-right max-w-xs">
+                                    {authError ?? profileError}
+                                </p>
+                            )}
                         </div>
                     </div>
                     <SectionNav items={navItems} />
@@ -3759,8 +4433,10 @@ export function AnalyticsDashboard({
                         actions={
                             <TickerAutosuggest
                                 onPick={(sym) => {
-                                    setWatch((w) => (w.includes(sym) ? w : [sym, ...w]));
-                                    setSymbol(sym);
+                                    const normalized = sym.trim().toUpperCase();
+                                    if (!normalized) return;
+                                    setWatch((w) => (w.includes(normalized) ? w : [normalized, ...w]));
+                                    setSymbol(normalized);
                                 }}
                             />
                         }
