@@ -14,10 +14,12 @@ import {
     Legend,
     ReferenceLine,
     ReferenceDot,
+    Brush,
 } from "recharts";
 import type { TooltipContentProps } from "recharts";
 import type { CategoricalChartFunc } from "recharts/types/chart/types";
 import type { MouseHandlerDataParam } from "recharts/types/synchronisation/types";
+import type { BrushStartEndIndex } from "recharts/types/context/brushUpdateContext";
 
 /** =========================
  *  API base (proxy w next.config.mjs)
@@ -160,6 +162,18 @@ type Row = {
 type RowSMA = Row & { sma?: number | null };
 type RowRSI = Row & { rsi: number | null };
 type PriceChartPoint = RowSMA & { change: number; changePct: number };
+
+type ChartPeriod = 90 | 180 | 365 | 1825 | "max";
+
+const DAY_MS = 24 * 3600 * 1000;
+
+const computeStartISOForPeriod = (period: ChartPeriod): string => {
+    if (period === "max") {
+        return "1990-01-01";
+    }
+    const startDate = new Date(Date.now() - period * DAY_MS);
+    return startDate.toISOString().slice(0, 10);
+};
 
 type Rebalance = "none" | "monthly" | "quarterly" | "yearly";
 
@@ -1555,10 +1569,16 @@ function PriceChart({
     rows,
     showArea,
     showSMA,
+    brushDataRows,
+    brushRange,
+    onBrushChange,
 }: {
     rows: RowSMA[];
     showArea: boolean;
     showSMA: boolean;
+    brushDataRows?: RowSMA[];
+    brushRange?: BrushStartEndIndex | null;
+    onBrushChange?: (range: BrushStartEndIndex) => void;
 }) {
     const gradientId = useId();
     const priceFormatter = useMemo(
@@ -1605,6 +1625,18 @@ function PriceChart({
         });
     }, [rows]);
 
+    const brushChartData: PriceChartPoint[] | null = useMemo(() => {
+        if (!brushDataRows?.length) return null;
+        const base = brushDataRows[0].close || 0;
+        return brushDataRows.map((row) => {
+            const change = row.close - base;
+            const changePct = base !== 0 ? (change / base) * 100 : 0;
+            return { ...row, change, changePct };
+        });
+    }, [brushDataRows]);
+
+    const showBrushControls = Boolean(brushChartData && brushChartData.length > 1 && onBrushChange);
+
     const latestPoint = chartData.at(-1) ?? null;
     const isGrowing =
         (latestPoint?.close ?? 0) >= (chartData[0]?.close ?? latestPoint?.close ?? 0);
@@ -1618,9 +1650,32 @@ function PriceChart({
         [axisDateFormatter]
     );
 
+    const brushDateFormatter = useMemo(
+        () =>
+            new Intl.DateTimeFormat("pl-PL", {
+                year: "numeric",
+            }),
+        []
+    );
+
+    const brushTickFormatter = useCallback(
+        (value: string | number) => {
+            if (typeof value !== "string" && typeof value !== "number") return "";
+            return brushDateFormatter.format(new Date(value));
+        },
+        [brushDateFormatter]
+    );
+
     const yTickFormatter = useCallback(
         (value: number) => priceFormatter.format(value),
         [priceFormatter]
+    );
+
+    const handleBrushUpdate = useCallback(
+        (range: BrushStartEndIndex) => {
+            onBrushChange?.(range);
+        },
+        [onBrushChange]
     );
 
     type ChartMouseState = MouseHandlerDataParam & {
@@ -1706,13 +1761,13 @@ function PriceChart({
 
     const handleChartMouseMove = useCallback<CategoricalChartFunc>(
         (state) => {
-            if (!isSelecting) return;
             if (!state) return;
+            if (!isSelecting && !selection) return;
             const point = getPointFromState(state as MouseHandlerDataParam);
             if (!point) return;
             updateSelectionEnd(point);
         },
-        [getPointFromState, isSelecting, updateSelectionEnd]
+        [getPointFromState, isSelecting, selection, updateSelectionEnd]
     );
 
     const handleChartMouseUp = useCallback<CategoricalChartFunc>(
@@ -1983,6 +2038,43 @@ function PriceChart({
                     )}
                 </ResponsiveContainer>
             </div>
+            {showBrushControls && brushChartData && (
+                <div className="h-24 rounded-lg border border-soft bg-surface px-2 py-2">
+                    <ResponsiveContainer width="100%" height="100%">
+                        <AreaChart data={brushChartData} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+                            <XAxis
+                                dataKey="date"
+                                tickFormatter={brushTickFormatter}
+                                tick={{ fontSize: 10, fill: "#64748B" }}
+                                axisLine={false}
+                                tickLine={false}
+                                minTickGap={32}
+                            />
+                            <YAxis hide domain={["auto", "auto"]} />
+                            <Area
+                                type="monotone"
+                                dataKey="close"
+                                stroke={strokeColor}
+                                fill={primaryColor}
+                                fillOpacity={0.15}
+                                isAnimationActive={false}
+                                dot={false}
+                            />
+                            <Brush
+                                dataKey="date"
+                                height={22}
+                                travellerWidth={10}
+                                stroke="#2563EB"
+                                fill="#E2E8F0"
+                                startIndex={brushRange?.startIndex}
+                                endIndex={brushRange?.endIndex}
+                                onChange={handleBrushUpdate}
+                                onDragEnd={handleBrushUpdate}
+                            />
+                        </AreaChart>
+                    </ResponsiveContainer>
+                </div>
+            )}
         </div>
     );
 }
@@ -2009,11 +2101,13 @@ function RsiChart({ rows }: { rows: RowRSI[] }) {
 export default function Page() {
     const [watch, setWatch] = useState<string[]>([]);
     const [symbol, setSymbol] = useState<string | null>(null);
-    const [period, setPeriod] = useState<90 | 180 | 365>(365);
+    const [period, setPeriod] = useState<ChartPeriod>(365);
     const [area, setArea] = useState(true);
     const [smaOn, setSmaOn] = useState(true);
 
     const [rows, setRows] = useState<Row[]>([]);
+    const [allRows, setAllRows] = useState<Row[]>([]);
+    const [brushRange, setBrushRange] = useState<BrushStartEndIndex | null>(null);
     const [loading, setLoading] = useState(false);
     const [err, setErr] = useState("");
 
@@ -2087,6 +2181,8 @@ export default function Page() {
         let live = true;
         if (!symbol) {
             setRows([]);
+            setAllRows([]);
+            setBrushRange(null);
             setErr("");
             setLoading(false);
             return;
@@ -2096,23 +2192,20 @@ export default function Page() {
             try {
                 setLoading(true);
                 setErr("");
-                const startISO =
-                    period === 90
-                        ? new Date(Date.now() - 90 * 24 * 3600 * 1000)
-                            .toISOString()
-                            .slice(0, 10)
-                        : period === 180
-                            ? new Date(Date.now() - 180 * 24 * 3600 * 1000)
-                                .toISOString()
-                                .slice(0, 10)
-                            : "2015-01-01";
+                const startISO = computeStartISOForPeriod(period);
                 const data = await fetchQuotes(symbol, startISO);
-                if (live) setRows(data);
+                if (live) {
+                    setAllRows(data);
+                    setRows(data);
+                    setBrushRange(null);
+                }
             } catch (e: unknown) {
                 const message = e instanceof Error ? e.message : String(e);
                 if (live) {
                     setErr(message);
                     setRows([]);
+                    setAllRows([]);
+                    setBrushRange(null);
                 }
             } finally {
                 if (live) setLoading(false);
@@ -2128,6 +2221,27 @@ export default function Page() {
         [rows, smaOn]
     );
     const withRsi: RowRSI[] = useMemo(() => rsi(rows, 14), [rows]);
+
+    const brushRows: RowSMA[] = useMemo(
+        () => allRows.map((row) => ({ ...row, sma: null })),
+        [allRows]
+    );
+
+    const handleBrushSelectionChange = useCallback(
+        (range: BrushStartEndIndex) => {
+            if (period !== "max" || !allRows.length) return;
+            const safeStart = Math.max(0, Math.min(range.startIndex, allRows.length - 1));
+            const safeEnd = Math.max(safeStart, Math.min(range.endIndex, allRows.length - 1));
+            setBrushRange((current) => {
+                if (current && current.startIndex === safeStart && current.endIndex === safeEnd) {
+                    return current;
+                }
+                return { startIndex: safeStart, endIndex: safeEnd };
+            });
+            setRows(allRows.slice(safeStart, safeEnd + 1));
+        },
+        [allRows, period]
+    );
 
     const symbolLabel = symbol ?? "—";
     const navItems = [
@@ -2410,6 +2524,12 @@ export default function Page() {
                                         <Chip active={period === 365} onClick={() => setPeriod(365)}>
                                             1R
                                         </Chip>
+                                        <Chip active={period === 1825} onClick={() => setPeriod(1825)}>
+                                            5L
+                                        </Chip>
+                                        <Chip active={period === "max"} onClick={() => setPeriod("max")}>
+                                            MAX
+                                        </Chip>
                                         <Chip active={area} onClick={() => setArea(!area)}>
                                             Area
                                         </Chip>
@@ -2431,7 +2551,16 @@ export default function Page() {
                                     <>
                                         <Stats data={rows} />
                                         <div className="h-2" />
-                                        <PriceChart rows={withSma} showArea={area} showSMA={smaOn} />
+                                        <PriceChart
+                                            rows={withSma}
+                                            showArea={area}
+                                            showSMA={smaOn}
+                                            brushDataRows={period === "max" ? brushRows : undefined}
+                                            brushRange={period === "max" ? brushRange : null}
+                                            onBrushChange={
+                                                period === "max" ? handleBrushSelectionChange : undefined
+                                            }
+                                        />
                                     </>
                                 ) : (
                                     <div className="p-6 text-sm text-subtle">
