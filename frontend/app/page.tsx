@@ -162,6 +162,9 @@ type Row = {
 type RowSMA = Row & { sma?: number | null };
 type RowRSI = Row & { rsi: number | null };
 type PriceChartPoint = RowSMA & { change: number; changePct: number };
+type ComparisonValueKey = `${string}__pct` | `${string}__close`;
+type PriceChartComparisonPoint =
+    PriceChartPoint & Partial<Record<ComparisonValueKey, number | null>>;
 
 type ChartPeriod = 90 | 180 | 365 | 1825 | "max";
 
@@ -1669,27 +1672,28 @@ function PriceChart({
         });
     }, [comparisonSeries]);
 
-    const chartData: (PriceChartPoint & Record<string, number | null>)[] = useMemo(() => {
+    const chartData: PriceChartComparisonPoint[] = useMemo(() => {
         if (!rows.length) return [];
         const base = rows[0].close || 0;
         return rows.map((row) => {
             const change = row.close - base;
             const changePct = base !== 0 ? (change / base) * 100 : 0;
-            const merged: PriceChartPoint & Record<string, number | null> = {
+            const merged: PriceChartComparisonPoint = {
                 ...row,
                 change,
                 changePct,
             };
             for (const descriptor of comparisonDescriptors) {
                 const match = descriptor.map.get(row.date) ?? null;
+                const pctKey = `${descriptor.symbol}__pct` as ComparisonValueKey;
+                const closeKey = `${descriptor.symbol}__close` as ComparisonValueKey;
                 if (match) {
                     const diff = match.close - (descriptor.start || 0);
-                    merged[`${descriptor.symbol}__pct`] =
-                        descriptor.start !== 0 ? (diff / descriptor.start) * 100 : 0;
-                    merged[`${descriptor.symbol}__close`] = match.close;
+                    merged[pctKey] = descriptor.start !== 0 ? (diff / descriptor.start) * 100 : 0;
+                    merged[closeKey] = match.close;
                 } else {
-                    merged[`${descriptor.symbol}__pct`] = null;
-                    merged[`${descriptor.symbol}__close`] = null;
+                    merged[pctKey] = null;
+                    merged[closeKey] = null;
                 }
             }
             return merged;
