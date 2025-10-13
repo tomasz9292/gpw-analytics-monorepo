@@ -1625,6 +1625,8 @@ function PriceChart({
 
     type ChartMouseState = MouseHandlerDataParam & {
         activePayload?: Array<{ payload?: PriceChartPoint }>;
+        chartX?: number;
+        chartY?: number;
     };
 
     type SelectionPoint = {
