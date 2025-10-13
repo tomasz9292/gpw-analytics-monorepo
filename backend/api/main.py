@@ -314,6 +314,11 @@ class PortfolioStats(BaseModel):
     volatility: float
     sharpe: float
     last_value: float
+    total_return: Optional[float] = None
+    turnover: Optional[float] = None
+    trades: Optional[float] = None
+    initial_value: Optional[float] = None
+    final_value: Optional[float] = None
 
 
 class PortfolioTrade(BaseModel):
@@ -322,6 +327,9 @@ class PortfolioTrade(BaseModel):
     weight_change: Optional[float] = None
     value_change: Optional[float] = None
     target_weight: Optional[float] = None
+    shares_change: Optional[float] = None
+    price: Optional[float] = None
+    shares_after: Optional[float] = None
     note: Optional[str] = None
 
 
@@ -418,7 +426,12 @@ class AutoSelectionConfig(BaseModel):
 
 class BacktestPortfolioRequest(BaseModel):
     start: date = Field(default=date(2015, 1, 1))
+    end: Optional[date] = Field(default=None)
     rebalance: str = Field("monthly", pattern="^(none|monthly|quarterly|yearly)$")
+    initial_capital: float = Field(default=10000.0, gt=0)
+    fee_pct: float = Field(default=0.0, ge=0.0)
+    threshold_pct: float = Field(default=0.0, ge=0.0)
+    benchmark: Optional[str] = Field(default=None)
     manual: Optional[ManualPortfolioConfig] = None
     auto: Optional[AutoSelectionConfig] = None
 
@@ -605,18 +618,30 @@ def quotes(symbol: str, start: Optional[str] = None):
 # /backtest/portfolio
 # =========================
 
-def _fetch_close_series(ch_client, raw_symbol: str, start: date) -> List[Tuple[str, float]]:
+def _fetch_close_series(
+    ch_client,
+    raw_symbol: str,
+    start: date,
+    end: Optional[date] = None,
+) -> List[Tuple[str, float]]:
     """
-    Pobiera (date, close) dla symbolu od daty start.
+    Pobiera (date, close) dla symbolu od daty start (opcjonalnie do daty końcowej).
     """
+
+    where_clause = "symbol = %(sym)s AND date >= %(dt_start)s"
+    params: Dict[str, object] = {"sym": raw_symbol, "dt_start": start}
+    if end is not None:
+        where_clause += " AND date <= %(dt_end)s"
+        params["dt_end"] = end
+
     rows = ch_client.query(
         f"""
         SELECT toString(date) AS date, close
         FROM {TABLE_OHLC}
-        WHERE symbol = %(sym)s AND date >= %(dt)s
+        WHERE {where_clause}
         ORDER BY date
         """,
-        parameters={"sym": raw_symbol, "dt": start},
+        parameters=params,
     ).result_rows
     return [(str(d), float(c)) for (d, c) in rows]
 
@@ -917,6 +942,11 @@ def _compute_backtest(
     weights_pct: List[float],
     start: date,
     rebalance: str,
+    *,
+    end: Optional[date] = None,
+    initial_capital: float = 10000.0,
+    fee_pct: float = 0.0,
+    threshold_pct: float = 0.0,
 ) -> Tuple[List[PortfolioPoint], PortfolioStats, List[PortfolioRebalanceEvent]]:
     """
     Prosty backtest na dziennych close'ach z rebalancingiem.
@@ -924,9 +954,17 @@ def _compute_backtest(
     wśród dostępnych składników i wymusza rebalans w dniu wejścia na giełdę.
     """
 
+    _ = fee_pct  # parametr zarezerwowany na przyszłe uwzględnienie kosztów transakcyjnych
+
     start_iso = start.isoformat()
+    end_iso = end.isoformat() if end is not None else None
     all_dates = sorted(
-        {d for series in closes_map.values() for (d, _) in series if d >= start_iso}
+        {
+            d
+            for series in closes_map.values()
+            for (d, _) in series
+            if d >= start_iso and (end_iso is None or d <= end_iso)
+        }
     )
     if not all_dates:
         raise HTTPException(404, "Brak wspólnych notowań")
@@ -949,7 +987,14 @@ def _compute_backtest(
     rebalances: List[PortfolioRebalanceEvent] = []
     shares: Dict[str, float] = {sym: 0.0 for sym in closes_map.keys()}
 
-    portfolio_value = 1.0
+    def _to_ratio(value: float) -> float:
+        return value / 100.0 if abs(value) > 1 else value
+
+    portfolio_initial = initial_capital if initial_capital > 0 else 1.0
+    portfolio_value = portfolio_initial
+    threshold_ratio = max(_to_ratio(threshold_pct), 0.0)
+    total_turnover_ratio = 0.0
+    total_trades = 0
 
     for ds in all_dates:
         prices_today: Dict[str, float] = {}
@@ -981,7 +1026,7 @@ def _compute_backtest(
                     continue
                 portfolio_value += qty * price
             if portfolio_value <= 0:
-                portfolio_value = 1.0
+                portfolio_value = portfolio_initial
 
         is_first_point = not equity
         scheduled_rebalance = ds in rebal_dates
@@ -1019,9 +1064,15 @@ def _compute_backtest(
                 target_value = portfolio_value * target_weight
                 delta_value = target_value - current_value
 
+                if threshold_ratio > 0 and abs(target_weight - current_weight) < threshold_ratio:
+                    shares[sym] = current_qty
+                    continue
+
                 if abs(delta_value) > 1e-9:
                     action = "buy" if delta_value > 0 else "sell"
-                    shares[sym] = target_value / price if price > 0 else 0.0
+                    target_qty = target_value / price if price > 0 else 0.0
+                    shares_delta = target_qty - current_qty
+                    shares[sym] = target_qty
                     turnover_abs += abs(delta_value)
                     note = None
                     if sym in newly_available:
@@ -1033,6 +1084,9 @@ def _compute_backtest(
                             weight_change=target_weight - current_weight,
                             value_change=delta_value,
                             target_weight=target_weight,
+                            shares_change=shares_delta,
+                            price=price,
+                            shares_after=target_qty,
                             note=note,
                         )
                     )
@@ -1051,6 +1105,8 @@ def _compute_backtest(
                     reasons.append("Planowy rebalansing")
 
                 turnover = turnover_abs / portfolio_value if portfolio_value > 0 else 0.0
+                total_turnover_ratio += turnover
+                total_trades += len(trades)
                 rebalances.append(
                     PortfolioRebalanceEvent(
                         date=ds,
@@ -1072,12 +1128,15 @@ def _compute_backtest(
                 continue
             portfolio_value += qty * price
 
+        if portfolio_value <= 0:
+            portfolio_value = portfolio_initial
+
         equity.append(PortfolioPoint(date=ds, value=portfolio_value))
 
     if not equity:
         raise HTTPException(404, "Brak notowań do zbudowania portfela")
 
-    if len(equity) >= 2:
+    if len(equity) >= 1:
         first_v = equity[0].value
         last_v = equity[-1].value
         days = max(
@@ -1088,7 +1147,8 @@ def _compute_backtest(
             ).days,
         )
         years = days / 365.25
-        cagr = (last_v / first_v) ** (1 / years) - 1 if years > 0 else 0.0
+        ratio = last_v / first_v if first_v > 0 else 1.0
+        cagr = ratio ** (1 / years) - 1 if years > 0 else 0.0
 
         peak = -1e9
         max_dd = 0.0
@@ -1110,20 +1170,32 @@ def _compute_backtest(
 
         sharpe = (cagr - 0.0) / vol_annual if vol_annual > 1e-12 else 0.0
 
+        total_return = ratio - 1 if first_v > 0 else 0.0
         stats = PortfolioStats(
             cagr=cagr,
             max_drawdown=max_dd,
             volatility=vol_annual,
             sharpe=sharpe,
             last_value=last_v,
+            initial_value=first_v,
+            final_value=last_v,
+            total_return=total_return,
+            turnover=total_turnover_ratio,
+            trades=float(total_trades),
         )
     else:
+        last_v = equity[-1].value
         stats = PortfolioStats(
             cagr=0.0,
             max_drawdown=0.0,
             volatility=0.0,
             sharpe=0.0,
-            last_value=equity[-1].value,
+            last_value=last_v,
+            initial_value=last_v,
+            final_value=last_v,
+            total_return=0.0,
+            turnover=total_turnover_ratio,
+            trades=float(total_trades),
         )
 
     return equity, stats, rebalances
@@ -1168,13 +1240,20 @@ def _run_backtest(req: BacktestPortfolioRequest) -> PortfolioResp:
 
     closes_map: Dict[str, List[Tuple[str, float]]] = {}
     for rs in raw_syms:
-        series = _fetch_close_series(ch, rs, dt_start)
+        series = _fetch_close_series(ch, rs, dt_start, req.end)
         if not series:
             raise HTTPException(404, f"Brak danych historycznych dla {rs}")
         closes_map[rs] = series
 
     equity, stats, rebalances = _compute_backtest(
-        closes_map, weights_list, dt_start, req.rebalance
+        closes_map,
+        weights_list,
+        dt_start,
+        req.rebalance,
+        end=req.end,
+        initial_capital=req.initial_capital,
+        fee_pct=req.fee_pct,
+        threshold_pct=req.threshold_pct,
     )
     return PortfolioResp(
         equity=equity,

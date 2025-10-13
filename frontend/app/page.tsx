@@ -11,7 +11,6 @@ import {
     CartesianGrid,
     Area,
     AreaChart,
-    Legend,
     ReferenceLine,
     ReferenceDot,
     Brush,
@@ -168,6 +167,14 @@ type PriceChartComparisonPoint =
 
 type ChartPeriod = 90 | 180 | 365 | 1825 | "max";
 
+const PERIOD_OPTIONS: { label: string; value: ChartPeriod }[] = [
+    { label: "3M", value: 90 },
+    { label: "6M", value: 180 },
+    { label: "1R", value: 365 },
+    { label: "5L", value: 1825 },
+    { label: "MAX", value: "max" },
+];
+
 const DAY_MS = 24 * 3600 * 1000;
 
 const computeStartISOForPeriod = (period: ChartPeriod): string => {
@@ -176,6 +183,28 @@ const computeStartISOForPeriod = (period: ChartPeriod): string => {
     }
     const startDate = new Date(Date.now() - period * DAY_MS);
     return startDate.toISOString().slice(0, 10);
+};
+
+const computeVisibleRangeForRows = (
+    rows: Row[],
+    period: ChartPeriod
+): { start: string; end: string } | null => {
+    if (!rows.length) return null;
+    const end = rows[rows.length - 1]?.date;
+    const start = rows[0]?.date;
+    if (!end || !start) return null;
+    if (period === "max") {
+        return { start, end };
+    }
+    const endDate = new Date(end);
+    if (Number.isNaN(endDate.getTime())) {
+        return { start, end };
+    }
+    const candidateStart = new Date(endDate.getTime() - period * DAY_MS)
+        .toISOString()
+        .slice(0, 10);
+    const matchedStart = rows.find((row) => row.date >= candidateStart)?.date ?? start;
+    return { start: matchedStart, end };
 };
 
 const COMPARISON_COLORS = [
@@ -292,6 +321,9 @@ type PortfolioRebalanceTrade = {
     weight_change?: number;
     value_change?: number;
     target_weight?: number;
+    shares_change?: number;
+    price?: number;
+    shares_after?: number;
     note?: string;
 };
 
@@ -309,6 +341,16 @@ type PortfolioResp = {
     rebalances?: PortfolioRebalanceEvent[];
     benchmark?: PortfolioPoint[];
 };
+
+const portfolioPointsToRows = (points: PortfolioPoint[]): Row[] =>
+    points.map((point) => ({
+        date: point.date,
+        open: point.value,
+        high: point.value,
+        low: point.value,
+        close: point.value,
+        volume: 0,
+    }));
 
 /** =========================
  *  API helpers
@@ -334,7 +376,8 @@ async function backtestPortfolio(
     weightsPct: number[],
     options: BacktestOptions
 ): Promise<PortfolioResp> {
-    const { start, rebalance } = options;
+    const { start, end, rebalance, initialCapital, feePct, thresholdPct, benchmark } =
+        options;
 
     const prepared = symbols
         .map((symbol, idx) => ({
@@ -363,7 +406,12 @@ async function backtestPortfolio(
 
     const payload = removeUndefined({
         start,
+        end,
         rebalance,
+        initial_capital: initialCapital,
+        fee_pct: feePct,
+        threshold_pct: thresholdPct,
+        benchmark: benchmark?.trim() ? benchmark.trim() : undefined,
         manual: manualPayload,
     });
 
@@ -692,6 +740,35 @@ function normalizePortfolioResponse(raw: unknown): PortfolioResp {
                 ["value_change", "delta_value", "value", "amount"]
             );
             if (valueChange !== undefined) normalizedTrade.value_change = valueChange;
+
+            const price = pickNumber(
+                [tradeRecord],
+                ["price", "trade_price", "execution_price", "share_price"]
+            );
+            if (price !== undefined) normalizedTrade.price = price;
+
+            const sharesChange = pickNumber(
+                [tradeRecord],
+                [
+                    "shares_change",
+                    "shares_delta",
+                    "delta_shares",
+                    "quantity_change",
+                    "shares",
+                ]
+            );
+            if (sharesChange !== undefined) normalizedTrade.shares_change = sharesChange;
+
+            const sharesAfter = pickNumber(
+                [tradeRecord],
+                [
+                    "shares_after",
+                    "quantity_after",
+                    "position_size",
+                    "target_quantity",
+                ]
+            );
+            if (sharesAfter !== undefined) normalizedTrade.shares_after = sharesAfter;
 
             const targetWeight = pickNumber(
                 [tradeRecord],
@@ -1136,6 +1213,20 @@ const toRatio = (value: number) => {
 const formatPercent = (value: number, fractionDigits = 2) =>
     `${(toRatio(value) * 100).toFixed(fractionDigits)}%`;
 
+const formatNumber = (value: number, fractionDigits = 2) =>
+    value.toLocaleString("pl-PL", {
+        minimumFractionDigits: fractionDigits,
+        maximumFractionDigits: fractionDigits,
+    });
+
+const formatSignedNumber = (value: number, fractionDigits = 2) => {
+    if (Math.abs(value) < 1e-9) {
+        return formatNumber(0, fractionDigits);
+    }
+    const sign = value > 0 ? "+" : "-";
+    return `${sign}${formatNumber(Math.abs(value), fractionDigits)}`;
+};
+
 function PortfolioStatsGrid({ stats }: { stats: PortfolioStats }) {
     const config: { key: keyof PortfolioStats; label: string; format?: (value: number) => string }[] = [
         { key: "cagr", label: "CAGR" },
@@ -1230,132 +1321,325 @@ function AllocationTable({ allocations }: { allocations: PortfolioAllocation[] }
     );
 }
 
-function RebalanceTimeline({ events }: { events: PortfolioRebalanceEvent[] }) {
-    if (!events.length) return null;
+type RebalanceTimelineItem = {
+    event: PortfolioRebalanceEvent;
+    date: Date | null;
+    value?: number;
+    change?: number;
+    changePct?: number;
+};
+
+type RebalanceTimelineGroup = {
+    year: string;
+    items: RebalanceTimelineItem[];
+};
+
+function RebalanceTimeline({
+    events,
+    equity,
+}: {
+    events: PortfolioRebalanceEvent[];
+    equity: PortfolioPoint[];
+}) {
+    const [selected, setSelected] = useState<RebalanceTimelineItem | null>(null);
+
+    const dateFormatter = useMemo(
+        () =>
+            new Intl.DateTimeFormat("en-US", {
+                month: "long",
+                day: "numeric",
+                year: "numeric",
+            }),
+        []
+    );
+
+    const groups = useMemo<RebalanceTimelineGroup[]>(() => {
+        if (!events.length) return [];
+
+        const parseDate = (value?: string): Date | null => {
+            if (!value) return null;
+            const direct = new Date(value);
+            if (!Number.isNaN(direct.getTime())) return direct;
+            const normalized = new Date(`${value}T00:00:00`);
+            if (!Number.isNaN(normalized.getTime())) return normalized;
+            return null;
+        };
+
+        const equityPoints = equity
+            .map((point) => {
+                const date = parseDate(point.date);
+                if (!date) return null;
+                const key = point.date.slice(0, 10);
+                return { ...point, date, key };
+            })
+            .filter(Boolean) as { date: Date; key: string; value: number }[];
+
+        equityPoints.sort((a, b) => a.date.getTime() - b.date.getTime());
+
+        const valueByKey = new Map<string, number>();
+        equityPoints.forEach((point) => {
+            if (!valueByKey.has(point.key)) {
+                valueByKey.set(point.key, point.value);
+            }
+        });
+
+        const enriched = events.map((event) => {
+            const date = parseDate(event.date);
+            const key = event.date?.slice(0, 10);
+            let value = key ? valueByKey.get(key) : undefined;
+
+            if (value === undefined && date) {
+                let candidateValue: number | undefined;
+                let candidateTime = -Infinity;
+                equityPoints.forEach((point) => {
+                    const time = point.date.getTime();
+                    if (time <= date.getTime() && time > candidateTime) {
+                        candidateTime = time;
+                        candidateValue = point.value;
+                    }
+                });
+                value = candidateValue;
+            }
+
+            return { event, date, value };
+        });
+
+        enriched.sort((a, b) => {
+            const timeA = a.date ? a.date.getTime() : Number.POSITIVE_INFINITY;
+            const timeB = b.date ? b.date.getTime() : Number.POSITIVE_INFINITY;
+            return timeA - timeB;
+        });
+
+        let previousValue: number | undefined;
+        const grouped = new Map<string, RebalanceTimelineItem[]>();
+
+        enriched.forEach((item) => {
+            const { event, date, value } = item;
+
+            let change: number | undefined;
+            let changePct: number | undefined;
+
+            if (value !== undefined && previousValue !== undefined) {
+                change = value - previousValue;
+                if (Math.abs(previousValue) > 1e-9) {
+                    changePct = change / previousValue;
+                }
+            }
+
+            if (value !== undefined) {
+                previousValue = value;
+            }
+
+            const yearKey = date ? String(date.getFullYear()) : "Pozostałe";
+            if (!grouped.has(yearKey)) {
+                grouped.set(yearKey, []);
+            }
+            grouped.get(yearKey)!.push({ event, date, value, change, changePct });
+        });
+
+        const sortedGroups = Array.from(grouped.entries())
+            .map(([year, items]) => ({ year, items }))
+            .sort((a, b) => {
+                const aNum = Number(a.year);
+                const bNum = Number(b.year);
+                const aIsNum = Number.isFinite(aNum);
+                const bIsNum = Number.isFinite(bNum);
+                if (aIsNum && bIsNum) return aNum - bNum;
+                if (aIsNum) return -1;
+                if (bIsNum) return 1;
+                return a.year.localeCompare(b.year);
+            });
+
+        return sortedGroups;
+    }, [equity, events]);
+
+    useEffect(() => {
+        if (!selected) return;
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (event.key === "Escape") {
+                setSelected(null);
+            }
+        };
+        window.addEventListener("keydown", onKeyDown);
+        const previousOverflow = document.body.style.overflow;
+        document.body.style.overflow = "hidden";
+        return () => {
+            window.removeEventListener("keydown", onKeyDown);
+            document.body.style.overflow = previousOverflow;
+        };
+    }, [selected]);
+
+    if (!groups.length) return null;
+
+    const closeModal = () => setSelected(null);
 
     return (
-        <div className="space-y-3">
-            <div className="text-sm text-muted font-medium">Harmonogram rebalansingu</div>
-            <div className="space-y-3">
-                {events.map((event, idx) => (
-                    <div key={`${event.date}-${idx}`} className="rounded-xl border border-soft bg-soft-surface p-4">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div className="text-sm font-semibold text-primary">{event.date}</div>
-                            <div className="text-xs text-subtle">
-                                {event.reason || "Planowy rebalansing"}
-                                {typeof event.turnover === "number"
-                                    ? ` • obrót ${formatPercent(event.turnover, 1)}`
-                                    : ""}
-                            </div>
+        <div className="space-y-4">
+            <div className="text-sm text-muted font-medium">Historia transakcji</div>
+            <div className="space-y-6">
+                {groups.map((group) => (
+                    <div key={group.year} className="space-y-3">
+                        <div className="text-lg font-semibold text-primary">{group.year}</div>
+                        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                            {group.items.map((item, idx) => {
+                                const { event, value, change, changePct, date } = item;
+                                const formattedDate = date ? dateFormatter.format(date) : event.date;
+                                const changeClass =
+                                    changePct === undefined
+                                        ? "text-subtle"
+                                        : changePct > 0
+                                            ? "text-accent"
+                                            : changePct < 0
+                                                ? "text-negative"
+                                                : "text-subtle";
+                                const hasChange = changePct !== undefined;
+                                const changeText = hasChange
+                                    ? `${formatSignedNumber(change ?? 0)} (${formatPercent(changePct, 2)})`
+                                    : null;
+                                const turnoverText =
+                                    typeof event.turnover === "number"
+                                        ? `Obrót ${formatPercent(event.turnover, 1)}`
+                                        : null;
+
+                                return (
+                                    <button
+                                        key={`${event.date}-${idx}`}
+                                        type="button"
+                                        onClick={() => setSelected(item)}
+                                        className="group w-full rounded-2xl border border-soft bg-soft-surface/70 p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-[var(--color-primary)] hover:bg-white hover:shadow-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]/40"
+                                    >
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div className="text-sm font-semibold text-primary">{formattedDate}</div>
+                                            {changeText && (
+                                                <div className={`text-xs font-semibold ${changeClass}`}>
+                                                    {changeText}
+                                                </div>
+                                            )}
+                                        </div>
+                                        <div className="mt-3 text-2xl font-semibold text-neutral">
+                                            {typeof value === "number" ? formatNumber(value, 2) : "—"}
+                                        </div>
+                                        {event.reason && (
+                                            <div className="mt-2 line-clamp-2 text-xs text-muted">{event.reason}</div>
+                                        )}
+                                        <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-subtle">
+                                            <span>{event.trades?.length ?? 0} trans.</span>
+                                            {turnoverText && <span>• {turnoverText}</span>}
+                                        </div>
+                                        <div className="mt-4 inline-flex items-center gap-1 text-sm font-semibold text-primary transition group-hover:gap-2">
+                                            <span>Transakcje</span>
+                                            <span aria-hidden>→</span>
+                                        </div>
+                                    </button>
+                                );
+                            })}
                         </div>
-                        {event.trades && event.trades.length > 0 && (
-                            <div className="mt-3 overflow-x-auto">
+                    </div>
+                ))}
+            </div>
+
+            {selected && (
+                <div className="fixed inset-0 z-40 flex items-center justify-center px-4 py-8">
+                    <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={closeModal} />
+                    <div className="relative z-50 max-h-[90vh] w-full max-w-5xl overflow-hidden rounded-3xl bg-white p-6 shadow-2xl">
+                        <div className="flex flex-wrap items-start justify-between gap-4">
+                            <div>
+                                <div className="text-xs uppercase tracking-wide text-muted">{selected.event.date}</div>
+                                <div className="mt-1 text-2xl font-semibold text-neutral">
+                                    {typeof selected.value === "number"
+                                        ? formatNumber(selected.value, 2)
+                                        : "—"}
+                                </div>
+                                {selected.changePct !== undefined && (
+                                    <div
+                                        className={`mt-2 text-sm font-semibold ${
+                                            selected.changePct > 0
+                                                ? "text-accent"
+                                                : selected.changePct < 0
+                                                    ? "text-negative"
+                                                    : "text-subtle"
+                                        }`}
+                                    >
+                                        {formatSignedNumber(selected.change ?? 0)} (
+                                        {formatPercent(selected.changePct, 2)})
+                                    </div>
+                                )}
+                                {selected.event.reason && (
+                                    <div className="mt-3 text-sm text-muted">{selected.event.reason}</div>
+                                )}
+                                {typeof selected.event.turnover === "number" && (
+                                    <div className="mt-1 text-xs text-subtle">
+                                        Obrót: {formatPercent(selected.event.turnover, 2)}
+                                    </div>
+                                )}
+                            </div>
+                            <button
+                                type="button"
+                                onClick={closeModal}
+                                className="rounded-full border border-soft px-3 py-1 text-sm font-medium text-muted transition hover:border-[var(--color-primary)] hover:text-primary"
+                            >
+                                Zamknij
+                            </button>
+                        </div>
+                        <div className="mt-6 overflow-x-auto">
+                            {selected.event.trades && selected.event.trades.length > 0 ? (
                                 <table className="min-w-full text-xs md:text-sm">
                                     <thead className="text-left text-subtle">
                                         <tr>
-                                            <th className="py-1 pr-3 font-medium">Spółka</th>
-                                            <th className="py-1 pr-3 font-medium">Akcja</th>
-                                            <th className="py-1 pr-3 font-medium">Zmiana wagi</th>
-                                            <th className="py-1 pr-3 font-medium">Zmiana wartości</th>
-                                            <th className="py-1 pr-3 font-medium">Waga docelowa</th>
-                                            <th className="py-1 pr-3 font-medium">Notatka</th>
+                                            <th className="py-2 pr-4 font-medium">Spółka</th>
+                                            <th className="py-2 pr-4 font-medium">Akcja</th>
+                                            <th className="py-2 pr-4 font-medium">Wartość</th>
+                                            <th className="py-2 pr-4 font-medium">Cena</th>
+                                            <th className="py-2 pr-4 font-medium">Zmiana akcji</th>
+                                            <th className="py-2 pr-4 font-medium">Doc. akcji</th>
+                                            <th className="py-2 pr-4 font-medium">Waga docelowa</th>
+                                            <th className="py-2 pr-4 font-medium">Notatka</th>
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {event.trades.map((trade, tradeIdx) => (
+                                        {selected.event.trades.map((trade, tradeIdx) => (
                                             <tr key={`${trade.symbol}-${tradeIdx}`} className="border-t border-soft">
-                                                <td className="py-1 pr-3 font-medium text-primary">{trade.symbol}</td>
-                                                <td className="py-1 pr-3 capitalize">{trade.action ?? "—"}</td>
-                                                <td className="py-1 pr-3">
-                                                    {typeof trade.weight_change === "number"
-                                                        ? formatPercent(trade.weight_change, 1)
-                                                        : "—"}
-                                                </td>
-                                                <td className="py-1 pr-3">
+                                                <td className="py-2 pr-4 font-semibold text-primary">{trade.symbol}</td>
+                                                <td className="py-2 pr-4 capitalize">{trade.action ?? "—"}</td>
+                                                <td className="py-2 pr-4">
                                                     {typeof trade.value_change === "number"
-                                                        ? trade.value_change.toFixed(2)
+                                                        ? formatSignedNumber(trade.value_change, 2)
                                                         : "—"}
                                                 </td>
-                                                <td className="py-1 pr-3">
+                                                <td className="py-2 pr-4">
+                                                    {typeof trade.price === "number"
+                                                        ? formatNumber(trade.price, 2)
+                                                        : "—"}
+                                                </td>
+                                                <td className="py-2 pr-4">
+                                                    {typeof trade.shares_change === "number"
+                                                        ? formatSignedNumber(trade.shares_change, 2)
+                                                        : "—"}
+                                                </td>
+                                                <td className="py-2 pr-4">
+                                                    {typeof trade.shares_after === "number"
+                                                        ? formatNumber(trade.shares_after, 2)
+                                                        : "—"}
+                                                </td>
+                                                <td className="py-2 pr-4">
                                                     {typeof trade.target_weight === "number"
-                                                        ? formatPercent(trade.target_weight, 1)
+                                                        ? formatPercent(trade.target_weight, 2)
                                                         : "—"}
                                                 </td>
-                                                <td className="py-1 pr-3 text-subtle">
-                                                    {trade.note ?? "—"}
-                                                </td>
+                                                <td className="py-2 pr-4 text-subtle">{trade.note ?? "—"}</td>
                                             </tr>
                                         ))}
                                     </tbody>
                                 </table>
-                            </div>
-                        )}
+                            ) : (
+                                <div className="rounded-2xl border border-soft bg-soft-surface p-4 text-sm text-muted">
+                                    Brak szczegółów transakcji dla tego dnia.
+                                </div>
+                            )}
+                        </div>
                     </div>
-                ))}
-            </div>
-        </div>
-    );
-}
-
-function TransactionHistory({ events }: { events: PortfolioRebalanceEvent[] }) {
-    const rows = events.flatMap((event) =>
-        (event.trades ?? []).map((trade) => ({
-            date: event.date,
-            reason: event.reason,
-            ...trade,
-        }))
-    );
-
-    if (!rows.length) return null;
-
-    return (
-        <div className="space-y-3">
-            <div className="text-sm text-muted font-medium">Historia transakcji</div>
-            <div className="overflow-x-auto">
-                <table className="min-w-full text-xs md:text-sm">
-                    <thead className="text-left text-subtle">
-                        <tr>
-                            <th className="py-1 pr-3 font-medium">Data</th>
-                            <th className="py-1 pr-3 font-medium">Spółka</th>
-                            <th className="py-1 pr-3 font-medium">Akcja</th>
-                            <th className="py-1 pr-3 font-medium">Zmiana wagi</th>
-                            <th className="py-1 pr-3 font-medium">Zmiana wartości</th>
-                            <th className="py-1 pr-3 font-medium">Waga docelowa</th>
-                            <th className="py-1 pr-3 font-medium">Notatka</th>
-                            <th className="py-1 pr-3 font-medium">Powód</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {rows.map((row, idx) => (
-                            <tr
-                                key={`${row.date}-${row.symbol}-${idx}`}
-                                className="border-t border-soft"
-                            >
-                                <td className="py-1 pr-3 font-medium text-primary">{row.date}</td>
-                                <td className="py-1 pr-3 font-medium">{row.symbol}</td>
-                                <td className="py-1 pr-3 capitalize">{row.action ?? "—"}</td>
-                                <td className="py-1 pr-3">
-                                    {typeof row.weight_change === "number"
-                                        ? formatPercent(row.weight_change, 1)
-                                        : "—"}
-                                </td>
-                                <td className="py-1 pr-3">
-                                    {typeof row.value_change === "number"
-                                        ? row.value_change.toFixed(2)
-                                        : "—"}
-                                </td>
-                                <td className="py-1 pr-3">
-                                    {typeof row.target_weight === "number"
-                                        ? formatPercent(row.target_weight, 1)
-                                        : "—"}
-                                </td>
-                                <td className="py-1 pr-3 text-subtle">{row.note ?? "—"}</td>
-                                <td className="py-1 pr-3 text-subtle">{row.reason ?? "—"}</td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-            </div>
+                </div>
+            )}
         </div>
     );
 }
@@ -2418,8 +2702,8 @@ export default function Page() {
     const [pfMode, setPfMode] = useState<"manual" | "score">("manual");
     const [pfRows, setPfRows] = useState<{ symbol: string; weight: number }[]>([
         { symbol: "CDR.WA", weight: 40 },
-        { symbol: "ORLEN.WA", weight: 30 },
-        { symbol: "PKO.WA", weight: 30 },
+        { symbol: "PKN.WA", weight: 30 },
+        { symbol: "PKOBP", weight: 30 },
     ]);
     const [pfStart, setPfStart] = useState("2015-01-01");
     const [pfEnd, setPfEnd] = useState(() => new Date().toISOString().slice(0, 10));
@@ -2430,6 +2714,8 @@ export default function Page() {
     const [pfLastBenchmark, setPfLastBenchmark] = useState<string | null>(null);
     const [pfFreq, setPfFreq] = useState<Rebalance>("monthly");
     const [pfRes, setPfRes] = useState<PortfolioResp | null>(null);
+    const [pfBrushRange, setPfBrushRange] = useState<BrushStartEndIndex | null>(null);
+    const [pfTimelineOpen, setPfTimelineOpen] = useState(false);
     const [pfScoreName, setPfScoreName] = useState("quality_score");
     const [pfScoreLimit, setPfScoreLimit] = useState(10);
     const [pfScoreWeighting, setPfScoreWeighting] = useState("equal");
@@ -2437,6 +2723,10 @@ export default function Page() {
     const [pfScoreUniverse, setPfScoreUniverse] = useState("");
     const [pfScoreMin, setPfScoreMin] = useState("");
     const [pfScoreMax, setPfScoreMax] = useState("");
+    const [pfComparisonSymbols, setPfComparisonSymbols] = useState<string[]>([]);
+    const [pfComparisonAllRows, setPfComparisonAllRows] = useState<Record<string, Row[]>>({});
+    const [pfComparisonErrors, setPfComparisonErrors] = useState<Record<string, string>>({});
+    const [pfPeriod, setPfPeriod] = useState<ChartPeriod>("max");
     const pfTotal = pfRows.reduce((a, b) => a + (Number(b.weight) || 0), 0);
     const pfRangeInvalid = pfStart > pfEnd;
     const [pfLoading, setPfLoading] = useState(false);
@@ -2459,6 +2749,82 @@ export default function Page() {
         pfLoading || pfInitial <= 0 || pfRangeInvalid || pfScoreNameInvalid || pfScoreLimitInvalid;
     const pfDisableSimulation =
         pfMode === "manual" ? pfDisableManualSimulation : pfDisableScoreSimulation;
+
+    useEffect(() => {
+        if (pfPeriod !== "max") {
+            setPfBrushRange(null);
+        }
+    }, [pfPeriod]);
+
+    useEffect(() => {
+        setPfBrushRange(null);
+    }, [pfRes]);
+
+    useEffect(() => {
+        setPfTimelineOpen(false);
+    }, [pfRes]);
+
+    const pfPortfolioAllRows = useMemo<Row[]>(
+        () => (pfRes ? portfolioPointsToRows(pfRes.equity) : []),
+        [pfRes]
+    );
+
+    const pfBrushRows = useMemo<RowSMA[]>(
+        () => pfPortfolioAllRows.map((row) => ({ ...row, sma: null })),
+        [pfPortfolioAllRows]
+    );
+
+    const pfVisibleRange = useMemo(() => {
+        const baseRange = computeVisibleRangeForRows(pfPortfolioAllRows, pfPeriod);
+        if (!baseRange) return null;
+        if (pfPeriod !== "max") {
+            return baseRange;
+        }
+        if (!pfBrushRange || !pfPortfolioAllRows.length) {
+            return baseRange;
+        }
+        const total = pfPortfolioAllRows.length;
+        const safeStart = Math.max(0, Math.min(pfBrushRange.startIndex, total - 1));
+        const safeEnd = Math.max(safeStart, Math.min(pfBrushRange.endIndex, total - 1));
+        const startDate = pfPortfolioAllRows[safeStart]?.date ?? baseRange.start;
+        const endDate = pfPortfolioAllRows[safeEnd]?.date ?? baseRange.end;
+        return { start: startDate, end: endDate };
+    }, [pfBrushRange, pfPeriod, pfPortfolioAllRows]);
+
+    const pfPortfolioVisibleRows = useMemo<Row[]>(() => {
+        if (!pfVisibleRange) return [];
+        return pfPortfolioAllRows.filter(
+            (row) => row.date >= pfVisibleRange.start && row.date <= pfVisibleRange.end
+        );
+    }, [pfPortfolioAllRows, pfVisibleRange]);
+
+    const pfPortfolioRowsWithSma = useMemo<RowSMA[]>(
+        () => pfPortfolioVisibleRows.map((row) => ({ ...row, sma: null })),
+        [pfPortfolioVisibleRows]
+    );
+
+    const pfBenchmarkAllRows = useMemo<Row[]>(
+        () => (pfRes?.benchmark?.length ? portfolioPointsToRows(pfRes.benchmark) : []),
+        [pfRes]
+    );
+
+    const pfBenchmarkVisibleRows = useMemo<Row[]>(() => {
+        if (!pfVisibleRange) return [];
+        return pfBenchmarkAllRows.filter(
+            (row) => row.date >= pfVisibleRange.start && row.date <= pfVisibleRange.end
+        );
+    }, [pfBenchmarkAllRows, pfVisibleRange]);
+
+    const pfBenchmarkSeries = useMemo<ComparisonSeries | null>(() => {
+        if (!pfBenchmarkVisibleRows.length) return null;
+        const label = pfLastBenchmark ?? "Benchmark";
+        return {
+            symbol: label,
+            label,
+            color: "#2563EB",
+            rows: pfBenchmarkVisibleRows,
+        };
+    }, [pfBenchmarkVisibleRows, pfLastBenchmark]);
 
     // Quotes loader
     useEffect(() => {
@@ -2632,6 +2998,57 @@ export default function Page() {
         });
     }, []);
 
+    const handleAddPfComparison = useCallback(
+        (candidate: string) => {
+            const normalized = candidate.trim().toUpperCase();
+            if (!normalized) return;
+            if (pfLastBenchmark && normalized === pfLastBenchmark.toUpperCase()) return;
+            setPfComparisonSymbols((prev) => {
+                if (prev.includes(normalized) || prev.length >= MAX_COMPARISONS) {
+                    return prev;
+                }
+                return [...prev, normalized];
+            });
+        },
+        [pfLastBenchmark]
+    );
+
+    const handleRemovePfComparison = useCallback((sym: string) => {
+        setPfComparisonSymbols((prev) => prev.filter((item) => item !== sym));
+        setPfComparisonAllRows((prev) => {
+            if (!(sym in prev)) return prev;
+            const next = { ...prev };
+            delete next[sym];
+            return next;
+        });
+        setPfComparisonErrors((prev) => {
+            if (!(sym in prev)) return prev;
+            const next = { ...prev };
+            delete next[sym];
+            return next;
+        });
+    }, []);
+
+    const handlePfBrushSelectionChange = useCallback(
+        (range: BrushStartEndIndex) => {
+            if (pfPeriod !== "max" || !pfPortfolioAllRows.length) return;
+            const total = pfPortfolioAllRows.length;
+            const safeStart = Math.max(0, Math.min(range.startIndex, total - 1));
+            const safeEnd = Math.max(safeStart, Math.min(range.endIndex, total - 1));
+            setPfBrushRange((current) => {
+                if (
+                    current &&
+                    current.startIndex === safeStart &&
+                    current.endIndex === safeEnd
+                ) {
+                    return current;
+                }
+                return { startIndex: safeStart, endIndex: safeEnd };
+            });
+        },
+        [pfPeriod, pfPortfolioAllRows]
+    );
+
     const handleBrushSelectionChange = useCallback(
         (range: BrushStartEndIndex) => {
             if (period !== "max" || !allRows.length) return;
@@ -2662,30 +3079,100 @@ export default function Page() {
     );
     const comparisonLimitReached = comparisonSymbols.length >= MAX_COMPARISONS;
 
-    const pfChartData = useMemo(() => {
-        if (!pfRes) return [];
-
-        const merged = new Map<
-            string,
-            { date: string; portfolio?: number; benchmark?: number }
-        >();
-
-        for (const point of pfRes.equity) {
-            merged.set(point.date, { date: point.date, portfolio: point.value });
+    useEffect(() => {
+        let live = true;
+        if (!pfRes || !pfRes.equity.length || pfComparisonSymbols.length === 0) {
+            setPfComparisonAllRows({});
+            setPfComparisonErrors({});
+            return () => {
+                live = false;
+            };
         }
 
-        const benchmarkSeries = pfRes.benchmark ?? [];
-        for (const point of benchmarkSeries) {
-            const existing = merged.get(point.date);
-            if (existing) {
-                existing.benchmark = point.value;
-            } else {
-                merged.set(point.date, { date: point.date, benchmark: point.value });
-            }
-        }
+        const startISO = pfRes.equity[0]?.date ?? pfStart;
 
-        return Array.from(merged.values()).sort((a, b) => a.date.localeCompare(b.date));
-    }, [pfRes]);
+        (async () => {
+            const results = await Promise.allSettled(
+                pfComparisonSymbols.map((sym) =>
+                    fetchQuotes(sym, startISO).then((data) => ({ symbol: sym, data }))
+                )
+            );
+
+            if (!live) return;
+
+            const nextAll: Record<string, Row[]> = {};
+            const nextErrors: Record<string, string> = {};
+
+            results.forEach((result, idx) => {
+                const sym = pfComparisonSymbols[idx];
+                if (!sym) return;
+                if (result.status === "fulfilled") {
+                    nextAll[sym] = result.value.data;
+                } else {
+                    const reason = result.reason;
+                    const message =
+                        reason instanceof Error
+                            ? reason.message
+                            : typeof reason === "string"
+                                ? reason
+                                : `Nie udało się pobrać danych dla ${sym}`;
+                    nextErrors[sym] = message;
+                }
+            });
+
+            setPfComparisonAllRows(nextAll);
+            setPfComparisonErrors(nextErrors);
+        })();
+
+        return () => {
+            live = false;
+        };
+    }, [pfComparisonSymbols, pfRes, pfStart]);
+
+    const pfComparisonVisibleRows = useMemo(() => {
+        if (!pfVisibleRange) return {} as Record<string, Row[]>;
+        const next: Record<string, Row[]> = {};
+        for (const sym of pfComparisonSymbols) {
+            const series = pfComparisonAllRows[sym];
+            if (!series?.length) continue;
+            next[sym] = series.filter(
+                (row) => row.date >= pfVisibleRange.start && row.date <= pfVisibleRange.end
+            );
+        }
+        return next;
+    }, [pfComparisonAllRows, pfComparisonSymbols, pfVisibleRange]);
+
+    const pfComparisonSeriesForChart = useMemo<ComparisonSeries[]>(() => {
+        const series: ComparisonSeries[] = [];
+        if (pfBenchmarkSeries) {
+            series.push(pfBenchmarkSeries);
+        }
+        const offset = pfBenchmarkSeries ? 1 : 0;
+        pfComparisonSymbols.forEach((sym, idx) => {
+            series.push({
+                symbol: sym,
+                label: sym,
+                color: COMPARISON_COLORS[(idx + offset) % COMPARISON_COLORS.length],
+                rows: pfComparisonVisibleRows[sym] ?? [],
+            });
+        });
+        return series;
+    }, [pfBenchmarkSeries, pfComparisonSymbols, pfComparisonVisibleRows]);
+
+    const pfComparisonColorMap = useMemo(() => {
+        const map: Record<string, string> = {};
+        for (const series of pfComparisonSeriesForChart) {
+            map[series.symbol] = series.color;
+        }
+        return map;
+    }, [pfComparisonSeriesForChart]);
+
+    const pfComparisonLimitReached = pfComparisonSymbols.length >= MAX_COMPARISONS;
+
+    const pfComparisonErrorEntries = useMemo(
+        () => Object.entries(pfComparisonErrors),
+        [pfComparisonErrors]
+    );
 
     const parseUniverseValue = (value: string): string | string[] | null => {
         const trimmed = value.trim();
@@ -2926,21 +3413,15 @@ export default function Page() {
                                 title={symbol ? `${symbol} – wykres cenowy` : "Wykres cenowy"}
                                 right={
                                     <>
-                                        <Chip active={period === 90} onClick={() => setPeriod(90)}>
-                                            3M
-                                        </Chip>
-                                        <Chip active={period === 180} onClick={() => setPeriod(180)}>
-                                            6M
-                                        </Chip>
-                                        <Chip active={period === 365} onClick={() => setPeriod(365)}>
-                                            1R
-                                        </Chip>
-                                        <Chip active={period === 1825} onClick={() => setPeriod(1825)}>
-                                            5L
-                                        </Chip>
-                                        <Chip active={period === "max"} onClick={() => setPeriod("max")}>
-                                            MAX
-                                        </Chip>
+                                        {PERIOD_OPTIONS.map(({ label, value }) => (
+                                            <Chip
+                                                key={value}
+                                                active={period === value}
+                                                onClick={() => setPeriod(value)}
+                                            >
+                                                {label}
+                                            </Chip>
+                                        ))}
                                         <Chip active={area} onClick={() => setArea(!area)}>
                                             Area
                                         </Chip>
@@ -3837,42 +4318,136 @@ export default function Page() {
                                                 <AllocationTable allocations={pfRes.allocations} />
                                             </div>
                                         )}
-                                        <div className="h-72">
-                                            <ResponsiveContainer width="100%" height="100%">
-                                                <LineChart data={pfChartData}>
-                                                    <CartesianGrid strokeDasharray="3 3" stroke="#BDC3C7" />
-                                                    <XAxis dataKey="date" tick={{ fontSize: 12 }} tickMargin={8} />
-                                                    <YAxis tick={{ fontSize: 12 }} width={60} />
-                                                    <Tooltip
-                                                        formatter={(value: number) =>
-                                                            typeof value === "number" ? value.toFixed(2) : value
-                                                        }
-                                                    />
-                                                    <Legend verticalAlign="top" height={36} />
-                                                    <Line
-                                                        type="monotone"
-                                                        dataKey="portfolio"
-                                                        name="Portfel"
-                                                        stroke="#0A2342"
-                                                        dot={false}
-                                                    />
-                                                    {pfRes.benchmark && pfRes.benchmark.length > 0 && (
-                                                        <Line
-                                                            type="monotone"
-                                                            dataKey="benchmark"
-                                                            name="Benchmark"
-                                                            stroke="#3498DB"
-                                                            strokeDasharray="4 2"
-                                                            dot={false}
+                                        {pfPortfolioVisibleRows.length > 0 && (
+                                            <div className="mt-6 space-y-4">
+                                                <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                                                    <div className="flex-1">
+                                                        <Stats data={pfPortfolioVisibleRows} />
+                                                    </div>
+                                                    <div className="flex flex-wrap items-center gap-2 md:justify-end">
+                                                        {PERIOD_OPTIONS.map(({ label, value }) => (
+                                                            <Chip
+                                                                key={`pf-${value}`}
+                                                                active={pfPeriod === value}
+                                                                onClick={() => setPfPeriod(value)}
+                                                            >
+                                                                {label}
+                                                            </Chip>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                                <div className="rounded-lg border border-dashed border-soft/70 bg-white/60 p-3">
+                                                    <div className="flex flex-wrap items-center gap-3">
+                                                        <div className="text-xs font-semibold uppercase tracking-wide text-muted">
+                                                            Porównania benchmarków
+                                                        </div>
+                                                        <TickerAutosuggest
+                                                            onPick={handleAddPfComparison}
+                                                            placeholder={
+                                                                pfComparisonLimitReached
+                                                                    ? "Osiągnięto limit porównań"
+                                                                    : "Dodaj benchmark (np. WIG20.WA)"
+                                                            }
+                                                            inputClassName="w-60"
+                                                            disabled={pfComparisonLimitReached}
                                                         />
-                                                    )}
-                                                </LineChart>
-                                            </ResponsiveContainer>
-                                        </div>
+                                                        {pfComparisonLimitReached && (
+                                                            <span className="text-[11px] text-subtle">
+                                                                Maksymalnie {MAX_COMPARISONS} serii.
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                    <div className="mt-3 space-y-2">
+                                                        {pfBenchmarkSeries && (
+                                                            <div className="inline-flex items-center gap-2 rounded-full border border-soft bg-white/80 px-3 py-1 text-xs font-medium text-neutral shadow-sm">
+                                                                <span
+                                                                    className="h-2.5 w-2.5 rounded-full"
+                                                                    style={{ backgroundColor: pfBenchmarkSeries.color }}
+                                                                />
+                                                                {pfBenchmarkSeries.label}
+                                                                <span className="text-[11px] text-subtle">(z symulacji)</span>
+                                                            </div>
+                                                        )}
+                                                        {pfComparisonSymbols.length ? (
+                                                            <div className="flex flex-wrap gap-2">
+                                                                {pfComparisonSymbols.map((sym) => {
+                                                                    const color = pfComparisonColorMap[sym] ?? "#475569";
+                                                                    return (
+                                                                        <span
+                                                                            key={sym}
+                                                                            className="inline-flex items-center gap-2 rounded-full border border-soft bg-white/80 px-3 py-1 text-xs font-medium text-neutral shadow-sm"
+                                                                        >
+                                                                            <span
+                                                                                className="h-2.5 w-2.5 rounded-full"
+                                                                                style={{ backgroundColor: color }}
+                                                                            />
+                                                                            {sym}
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={() => handleRemovePfComparison(sym)}
+                                                                                className="text-subtle transition hover:text-negative focus-visible:text-negative"
+                                                                                aria-label={`Usuń ${sym} z porównań`}
+                                                                            >
+                                                                                ×
+                                                                            </button>
+                                                                        </span>
+                                                                    );
+                                                                })}
+                                                            </div>
+                                                        ) : !pfBenchmarkSeries ? (
+                                                            <p className="text-xs text-subtle">
+                                                                Dodaj indeks lub ETF, aby zestawić portfel z rynkowymi benchmarkami.
+                                                            </p>
+                                                        ) : null}
+                                                        {pfComparisonErrorEntries.map(([sym, message]) => (
+                                                            <div key={sym} className="text-xs text-negative">
+                                                                {sym}: {message}
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                                <PriceChart
+                                                    rows={pfPortfolioRowsWithSma}
+                                                    showArea
+                                                    showSMA={false}
+                                                    brushDataRows={
+                                                        pfPeriod === "max" ? pfBrushRows : undefined
+                                                    }
+                                                    brushRange={
+                                                        pfPeriod === "max" ? pfBrushRange : null
+                                                    }
+                                                    onBrushChange={
+                                                        pfPeriod === "max"
+                                                            ? handlePfBrushSelectionChange
+                                                            : undefined
+                                                    }
+                                                    primarySymbol="Portfel"
+                                                    comparisonSeries={pfComparisonSeriesForChart}
+                                                />
+                                            </div>
+                                        )}
                                         {pfRes.rebalances && pfRes.rebalances.length > 0 && (
-                                            <div className="mt-6 space-y-6">
-                                                <RebalanceTimeline events={pfRes.rebalances} />
-                                                <TransactionHistory events={pfRes.rebalances} />
+                                            <div className="mt-6 space-y-4">
+                                                <button
+                                                    type="button"
+                                                    onClick={() =>
+                                                        setPfTimelineOpen((prev) => !prev)
+                                                    }
+                                                    className="inline-flex items-center gap-2 rounded-full border border-soft bg-white px-4 py-2 text-sm font-semibold text-primary transition hover:border-[var(--color-primary)] hover:text-[var(--color-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]/40"
+                                                    aria-expanded={pfTimelineOpen}
+                                                >
+                                                    {pfTimelineOpen
+                                                        ? "Ukryj historię transakcji"
+                                                        : "Historia transakcji"}
+                                                </button>
+                                                {pfTimelineOpen && (
+                                                    <div className="space-y-6">
+                                                        <RebalanceTimeline
+                                                            events={pfRes.rebalances}
+                                                            equity={pfRes.equity}
+                                                        />
+                                                    </div>
+                                                )}
                                             </div>
                                         )}
                                         <div className="text-xs text-subtle mt-2 space-y-1">
@@ -3888,9 +4463,12 @@ export default function Page() {
                                                     : ` ${pfInitial.toFixed(2)}`} {" "}• Wagi są normalizowane do 100%.
                                             </div>
                                             <div>
-                                                {pfRes.benchmark && pfRes.benchmark.length > 0
-                                                    ? `Benchmark: ${pfLastBenchmark ?? "dostarczony w odpowiedzi"}.`
+                                                {pfBenchmarkSeries
+                                                    ? `Benchmark: ${pfBenchmarkSeries.label}.`
                                                     : "Bez benchmarku."}
+                                                {pfComparisonSymbols.length > 0
+                                                    ? ` Dodatkowe porównania: ${pfComparisonSymbols.join(", ")}.`
+                                                    : ""}
                                             </div>
                                         </div>
                                     </>
