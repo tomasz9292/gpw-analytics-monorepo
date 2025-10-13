@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState, useEffect, useId, useCallback } from "react";
+import React, { useMemo, useState, useEffect, useId, useCallback, useRef } from "react";
 import {
     LineChart,
     Line,
@@ -12,6 +12,8 @@ import {
     Area,
     AreaChart,
     Legend,
+    ReferenceLine,
+    ReferenceDot,
 } from "recharts";
 import type { TooltipContentProps } from "recharts";
 import type { CategoricalChartFunc } from "recharts/types/chart/types";
@@ -1625,27 +1627,74 @@ function PriceChart({
         activePayload?: Array<{ payload?: PriceChartPoint }>;
     };
 
+    type SelectionPoint = {
+        point: PriceChartPoint;
+        x: number;
+    };
+
     const [selection, setSelection] = useState<{
-        start: PriceChartPoint;
-        end: PriceChartPoint;
+        start: SelectionPoint;
+        end: SelectionPoint;
     } | null>(null);
     const [isSelecting, setIsSelecting] = useState(false);
 
-    const getPointFromState = useCallback((state: MouseHandlerDataParam): PriceChartPoint | null => {
-        const payload = (state as ChartMouseState)?.activePayload?.[0]?.payload;
-        if (payload && typeof payload === "object" && "close" in payload) {
-            return payload as PriceChartPoint;
+    const chartContainerRef = useRef<HTMLDivElement | null>(null);
+    const [containerWidth, setContainerWidth] = useState(0);
+
+    useEffect(() => {
+        const node = chartContainerRef.current;
+        if (!node) return;
+
+        const updateSize = () => {
+            const width = node.getBoundingClientRect().width;
+            if (Number.isFinite(width)) {
+                setContainerWidth(width);
+            }
+        };
+
+        updateSize();
+
+        if (typeof ResizeObserver === "undefined") {
+            window.addEventListener("resize", updateSize);
+            return () => {
+                window.removeEventListener("resize", updateSize);
+            };
         }
-        return null;
+
+        const observer = new ResizeObserver(() => updateSize());
+        observer.observe(node);
+
+        return () => {
+            observer.disconnect();
+        };
     }, []);
 
-    const updateSelectionEnd = useCallback((point: PriceChartPoint) => {
-        setSelection((current) => (current ? { start: current.start, end: point } : current));
+    const getPointFromState = useCallback(
+        (state: MouseHandlerDataParam): SelectionPoint | null => {
+            const payload = (state as ChartMouseState)?.activePayload?.[0]?.payload;
+            const chartX = (state as ChartMouseState)?.chartX;
+
+            if (
+                payload &&
+                typeof payload === "object" &&
+                "close" in payload &&
+                typeof chartX === "number"
+            ) {
+                return { point: payload as PriceChartPoint, x: chartX };
+            }
+            return null;
+        },
+        []
+    );
+
+    const updateSelectionEnd = useCallback((nextPoint: SelectionPoint) => {
+        setSelection((current) => (current ? { start: current.start, end: nextPoint } : current));
     }, []);
 
     const handleChartMouseDown = useCallback<CategoricalChartFunc>(
         (state) => {
-            const point = getPointFromState(state);
+            if (!state) return;
+            const point = getPointFromState(state as MouseHandlerDataParam);
             if (!point) return;
             setSelection({ start: point, end: point });
             setIsSelecting(true);
@@ -1656,7 +1705,8 @@ function PriceChart({
     const handleChartMouseMove = useCallback<CategoricalChartFunc>(
         (state) => {
             if (!isSelecting) return;
-            const point = getPointFromState(state);
+            if (!state) return;
+            const point = getPointFromState(state as MouseHandlerDataParam);
             if (!point) return;
             updateSelectionEnd(point);
         },
@@ -1666,7 +1716,8 @@ function PriceChart({
     const handleChartMouseUp = useCallback<CategoricalChartFunc>(
         (state) => {
             if (!isSelecting) return;
-            const point = getPointFromState(state);
+            if (!state) return;
+            const point = getPointFromState(state as MouseHandlerDataParam);
             if (point) {
                 updateSelectionEnd(point);
             }
@@ -1686,12 +1737,14 @@ function PriceChart({
 
     const selectionStart = selection?.start ?? null;
     const selectionEnd = selection?.end ?? null;
+    const selectionStartPoint = selectionStart?.point ?? null;
+    const selectionEndPoint = selectionEnd?.point ?? null;
     const hasSelection = Boolean(selectionStart && selectionEnd);
     const selectionChange =
-        hasSelection && selectionStart && selectionEnd
-            ? selectionEnd.close - selectionStart.close
+        hasSelection && selectionStartPoint && selectionEndPoint
+            ? selectionEndPoint.close - selectionStartPoint.close
             : 0;
-    const selectionBase = selectionStart?.close ?? 0;
+    const selectionBase = selectionStartPoint?.close ?? 0;
     const selectionPct = selectionBase !== 0 ? (selectionChange / selectionBase) * 100 : 0;
     const selectionIsZero = Math.abs(selectionChange) < 1e-10;
     const selectionSign = selectionChange > 0 ? "+" : selectionChange < 0 ? "-" : "";
@@ -1706,12 +1759,24 @@ function PriceChart({
     const selectionPctText = selectionIsZero
         ? percentFormatter.format(0)
         : `${selectionSign}${percentFormatter.format(Math.abs(selectionPct))}`;
-    const selectionStartLabel = selectionStart
-        ? tooltipDateFormatter.format(new Date(selectionStart.date))
+    const selectionStartLabel = selectionStartPoint
+        ? tooltipDateFormatter.format(new Date(selectionStartPoint.date))
         : "";
-    const selectionEndLabel = selectionEnd
-        ? tooltipDateFormatter.format(new Date(selectionEnd.date))
+    const selectionEndLabel = selectionEndPoint
+        ? tooltipDateFormatter.format(new Date(selectionEndPoint.date))
         : "";
+    const selectionStartPrice = selectionStartPoint ? priceFormatter.format(selectionStartPoint.close) : "";
+    const selectionEndPrice = selectionEndPoint ? priceFormatter.format(selectionEndPoint.close) : "";
+    const selectionColor = selectionIsZero
+        ? "#94A3B8"
+        : selectionChange > 0
+            ? "#1DB954"
+            : "#EA4335";
+    const tooltipLeft = selectionEnd?.x ?? null;
+    const tooltipLeftClamped =
+        tooltipLeft !== null && containerWidth > 0
+            ? Math.min(Math.max(tooltipLeft, 72), containerWidth - 72)
+            : tooltipLeft;
 
     const priceLine = (
         <Line
@@ -1739,16 +1804,29 @@ function PriceChart({
 
     return (
         <div className="space-y-4">
-            <div className="relative h-80">
-                {hasSelection && selectionStart && selectionEnd && (
-                    <div className="pointer-events-none absolute left-4 top-4 z-10 max-w-xs rounded-lg border border-soft bg-white/95 px-3 py-2 text-xs shadow">
+            <div ref={chartContainerRef} className="relative h-80">
+                {hasSelection && selectionStartPoint && selectionEndPoint && tooltipLeftClamped !== null && (
+                    <div
+                        className="pointer-events-none absolute top-3 z-10 max-w-xs -translate-x-1/2 rounded-lg border border-soft bg-white/95 px-3 py-2 text-xs shadow backdrop-blur"
+                        style={{ left: tooltipLeftClamped }}
+                    >
                         <div className={`font-semibold ${selectionClass}`}>
                             {selectionChangeText} ({selectionPctText}%)
                         </div>
-                        <div className="mt-1 text-[11px] text-muted">
-                            {selectionStartLabel}
-                            {selectionStartLabel && selectionEndLabel ? " → " : ""}
-                            {selectionEndLabel}
+                        <div className="mt-1 space-y-1 text-[11px] text-muted">
+                            <div className="flex items-center justify-between gap-3">
+                                <span>Start</span>
+                                <span className="font-medium text-foreground">{selectionStartPrice}</span>
+                            </div>
+                            <div className="flex items-center justify-between gap-3">
+                                <span>Koniec</span>
+                                <span className="font-medium text-foreground">{selectionEndPrice}</span>
+                            </div>
+                            <div>
+                                {selectionStartLabel}
+                                {selectionStartLabel && selectionEndLabel ? " → " : ""}
+                                {selectionEndLabel}
+                            </div>
                         </div>
                     </div>
                 )}
@@ -1809,6 +1887,28 @@ function PriceChart({
                                 fillOpacity={1}
                                 isAnimationActive={false}
                             />
+                            {hasSelection && selectionStartPoint && selectionEndPoint && (
+                                <>
+                                    <ReferenceLine x={selectionStartPoint.date} stroke="#CBD5F0" strokeDasharray="4 4" />
+                                    <ReferenceLine x={selectionEndPoint.date} stroke="#CBD5F0" strokeDasharray="4 4" />
+                                    <ReferenceDot
+                                        x={selectionStartPoint.date}
+                                        y={selectionStartPoint.close}
+                                        r={4}
+                                        fill={selectionColor}
+                                        stroke="#ffffff"
+                                        strokeWidth={2}
+                                    />
+                                    <ReferenceDot
+                                        x={selectionEndPoint.date}
+                                        y={selectionEndPoint.close}
+                                        r={4}
+                                        fill={selectionColor}
+                                        stroke="#ffffff"
+                                        strokeWidth={2}
+                                    />
+                                </>
+                            )}
                             {priceLine}
                             {smaLine}
                         </AreaChart>
@@ -1853,6 +1953,28 @@ function PriceChart({
                                 wrapperStyle={{ outline: "none" }}
                                 position={{ y: 24 }}
                             />
+                            {hasSelection && selectionStartPoint && selectionEndPoint && (
+                                <>
+                                    <ReferenceLine x={selectionStartPoint.date} stroke="#CBD5F0" strokeDasharray="4 4" />
+                                    <ReferenceLine x={selectionEndPoint.date} stroke="#CBD5F0" strokeDasharray="4 4" />
+                                    <ReferenceDot
+                                        x={selectionStartPoint.date}
+                                        y={selectionStartPoint.close}
+                                        r={4}
+                                        fill={selectionColor}
+                                        stroke="#ffffff"
+                                        strokeWidth={2}
+                                    />
+                                    <ReferenceDot
+                                        x={selectionEndPoint.date}
+                                        y={selectionEndPoint.close}
+                                        r={4}
+                                        fill={selectionColor}
+                                        stroke="#ffffff"
+                                        strokeWidth={2}
+                                    />
+                                </>
+                            )}
                             {priceLine}
                             {smaLine}
                         </LineChart>
