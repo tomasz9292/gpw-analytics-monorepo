@@ -2664,6 +2664,14 @@ function RsiChart({ rows }: { rows: RowRSI[] }) {
  *  Strona główna
  *  ========================= */
 export default function Page() {
+    return <AnalyticsDashboard view="analysis" />;
+}
+
+export function AnalyticsDashboard({
+    view,
+}: {
+    view: "analysis" | "score" | "portfolio";
+}) {
     const [watch, setWatch] = useState<string[]>([]);
     const [symbol, setSymbol] = useState<string | null>(null);
     const [period, setPeriod] = useState<ChartPeriod>(365);
@@ -3067,10 +3075,12 @@ export default function Page() {
 
     const symbolLabel = symbol ?? "—";
     const navItems = [
-        { href: "#watchlist", label: "Watchlista" },
-        { href: "#analysis", label: "Analiza techniczna" },
-        { href: "#score", label: "Ranking score" },
-        { href: "#portfolio", label: "Symulacja portfela" },
+        { href: view === "analysis" ? "#analysis" : "/", label: "Analiza techniczna" },
+        { href: view === "score" ? "#score" : "/ranking-score", label: "Ranking score" },
+        {
+            href: view === "portfolio" ? "#portfolio" : "/symulator-portfela",
+            label: "Symulacja portfela",
+        },
     ];
 
     const comparisonErrorEntries = useMemo(
@@ -3372,215 +3382,214 @@ export default function Page() {
             </header>
 
             <main className="max-w-6xl mx-auto px-4 md:px-8 py-12 space-y-16">
-                <Section
-                    id="watchlist"
-                    kicker="Krok 1"
-                    title="Monitoruj swoje spółki"
-                    description="Dodawaj tickery z GPW, aby szybko przełączać wykresy oraz sekcje analityczne na stronie."
-                    actions={
-                        <TickerAutosuggest
-                            onPick={(sym) => {
-                                setWatch((w) => (w.includes(sym) ? w : [sym, ...w]));
-                                setSymbol(sym);
-                            }}
-                        />
-                    }
-                >
-                    <Card>
-                        <div className="space-y-4">
-                            <p className="text-sm text-muted">
-                                Kliknij na ticker, aby przełączyć moduły poniżej. Usuń zbędne pozycje przyciskiem ×.
-                            </p>
-                            <Watchlist
-                                items={watch}
-                                current={symbol}
-                                onPick={(sym) => setSymbol(sym)}
-                                onRemove={removeFromWatch}
+                {view === "analysis" && (
+                    <Section
+                        id="analysis"
+                        title="Analiza techniczna i kontekst"
+                        description="Dodawaj tickery z GPW do listy obserwacyjnej i analizuj wykres wraz z kluczowymi statystykami, wskaźnikami momentum oraz podglądem fundamentów."
+                        actions={
+                            <TickerAutosuggest
+                                onPick={(sym) => {
+                                    setWatch((w) => (w.includes(sym) ? w : [sym, ...w]));
+                                    setSymbol(sym);
+                                }}
                             />
-                        </div>
-                    </Card>
-                </Section>
+                        }
+                    >
+                        <div className="space-y-10">
+                            <Card>
+                                <div className="space-y-4">
+                                    <h3 className="text-lg font-semibold text-primary">
+                                        Monitoruj swoje spółki
+                                    </h3>
+                                    <p className="text-sm text-muted">
+                                        Kliknij na ticker, aby przełączyć moduły analizy poniżej. Usuń zbędne pozycje przyciskiem ×.
+                                    </p>
+                                    <Watchlist
+                                        items={watch}
+                                        current={symbol}
+                                        onPick={(sym) => setSymbol(sym)}
+                                        onRemove={removeFromWatch}
+                                    />
+                                </div>
+                            </Card>
 
-                <Section
-                    id="analysis"
-                    kicker="Krok 2"
-                    title="Analiza techniczna i kontekst"
-                    description="Przeglądaj kluczowe statystyki, wykres cenowy oraz wskaźniki momentum, a obok miej szybki podgląd fundamentów."
-                >
-                    <div className="grid md:grid-cols-3 gap-6">
-                        <div className="md:col-span-2 space-y-6">
-                            <Card
-                                title={symbol ? `${symbol} – wykres cenowy` : "Wykres cenowy"}
-                                right={
-                                    <>
-                                        {PERIOD_OPTIONS.map(({ label, value }) => (
-                                            <Chip
-                                                key={value}
-                                                active={period === value}
-                                                onClick={() => setPeriod(value)}
-                                            >
-                                                {label}
-                                            </Chip>
-                                        ))}
-                                        <Chip active={area} onClick={() => setArea(!area)}>
-                                            Area
-                                        </Chip>
-                                        <Chip active={smaOn} onClick={() => setSmaOn(!smaOn)}>
-                                            SMA 20
-                                        </Chip>
-                                    </>
-                                }
-                            >
-                                {!symbol ? (
-                                    <div className="p-6 text-sm text-subtle">
-                                        Dodaj spółkę do listy obserwacyjnej, aby zobaczyć wykres.
-                                    </div>
-                                ) : loading ? (
-                                    <div className="p-6 text-sm text-subtle">
-                                        Ładowanie danych z API…
-                                    </div>
-                                ) : rows.length ? (
-                                    <>
-                                        <Stats data={rows} />
-                                        <div className="h-2" />
-                                        {symbol && (
-                                            <div className="rounded-lg border border-dashed border-soft/70 bg-white/60 p-3">
-                                                <div className="flex flex-wrap items-center gap-3">
-                                                    <div className="text-xs font-semibold uppercase tracking-wide text-muted">
-                                                        Porównania
+                            <div className="grid md:grid-cols-3 gap-6">
+                                <div className="md:col-span-2 space-y-6">
+                                    <Card
+                                        title={symbol ? `${symbol} – wykres cenowy` : "Wykres cenowy"}
+                                        right={
+                                            <>
+                                                {PERIOD_OPTIONS.map(({ label, value }) => (
+                                                    <Chip
+                                                        key={value}
+                                                        active={period === value}
+                                                        onClick={() => setPeriod(value)}
+                                                    >
+                                                        {label}
+                                                    </Chip>
+                                                ))}
+                                                <Chip active={area} onClick={() => setArea(!area)}>
+                                                    Area
+                                                </Chip>
+                                                <Chip active={smaOn} onClick={() => setSmaOn(!smaOn)}>
+                                                    SMA 20
+                                                </Chip>
+                                            </>
+                                        }
+                                    >
+                                        {!symbol ? (
+                                            <div className="p-6 text-sm text-subtle">
+                                                Dodaj spółkę do listy obserwacyjnej, aby zobaczyć wykres.
+                                            </div>
+                                        ) : loading ? (
+                                            <div className="p-6 text-sm text-subtle">
+                                                Ładowanie danych z API…
+                                            </div>
+                                        ) : rows.length ? (
+                                            <>
+                                                <Stats data={rows} />
+                                                <div className="h-2" />
+                                                {symbol && (
+                                                    <div className="rounded-lg border border-dashed border-soft/70 bg-white/60 p-3">
+                                                        <div className="flex flex-wrap items-center gap-3">
+                                                            <div className="text-xs font-semibold uppercase tracking-wide text-muted">
+                                                                Porównania
+                                                            </div>
+                                                            <TickerAutosuggest
+                                                                onPick={handleAddComparison}
+                                                                placeholder={
+                                                                    comparisonLimitReached
+                                                                        ? "Osiągnięto limit porównań"
+                                                                        : "Dodaj spółkę do porównania"
+                                                                }
+                                                                inputClassName="w-56"
+                                                                disabled={comparisonLimitReached}
+                                                            />
+                                                            {comparisonLimitReached && (
+                                                                <span className="text-[11px] text-subtle">
+                                                                    Maksymalnie {MAX_COMPARISONS} spółek.
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                        <div className="mt-3 space-y-2">
+                                                            {comparisonSymbols.length ? (
+                                                                <div className="flex flex-wrap gap-2">
+                                                                    {comparisonSymbols.map((sym) => {
+                                                                        const color = comparisonColorMap[sym] ?? "#475569";
+                                                                        return (
+                                                                            <span
+                                                                                key={sym}
+                                                                                className="inline-flex items-center gap-2 rounded-full border border-soft bg-white/80 px-3 py-1 text-xs font-medium text-neutral shadow-sm"
+                                                                            >
+                                                                                <span
+                                                                                    className="h-2.5 w-2.5 rounded-full"
+                                                                                    style={{ backgroundColor: color }}
+                                                                                />
+                                                                                {sym}
+                                                                                <button
+                                                                                    type="button"
+                                                                                    onClick={() => handleRemoveComparison(sym)}
+                                                                                    className="text-subtle transition hover:text-negative focus-visible:text-negative"
+                                                                                    aria-label={`Usuń ${sym} z porównań`}
+                                                                                >
+                                                                                    ×
+                                                                                </button>
+                                                                            </span>
+                                                                        );
+                                                                    })}
+                                                                </div>
+                                                            ) : (
+                                                                <p className="text-xs text-subtle">
+                                                                    Dodaj spółkę, aby porównać zachowanie kursu z innymi instrumentami.
+                                                                </p>
+                                                            )}
+                                                            {comparisonErrorEntries.map(([sym, message]) => (
+                                                                <div key={sym} className="text-xs text-negative">
+                                                                    {sym}: {message}
+                                                                </div>
+                                                            ))}
+                                                        </div>
                                                     </div>
-                                                    <TickerAutosuggest
-                                                        onPick={handleAddComparison}
-                                                        placeholder={
-                                                            comparisonLimitReached
-                                                                ? "Osiągnięto limit porównań"
-                                                                : "Dodaj spółkę do porównania"
-                                                        }
-                                                        inputClassName="w-56"
-                                                        disabled={comparisonLimitReached}
-                                                    />
-                                                    {comparisonLimitReached && (
-                                                        <span className="text-[11px] text-subtle">
-                                                            Maksymalnie {MAX_COMPARISONS} spółek.
-                                                        </span>
-                                                    )}
-                                                </div>
-                                                <div className="mt-3 space-y-2">
-                                                    {comparisonSymbols.length ? (
-                                                        <div className="flex flex-wrap gap-2">
-                                                            {comparisonSymbols.map((sym) => {
-                                                                const color = comparisonColorMap[sym] ?? "#475569";
-                                                                return (
-                                                                    <span
-                                                                        key={sym}
-                                                                        className="inline-flex items-center gap-2 rounded-full border border-soft bg-white/80 px-3 py-1 text-xs font-medium text-neutral shadow-sm"
-                                                                    >
-                                                                        <span
-                                                                            className="h-2.5 w-2.5 rounded-full"
-                                                                            style={{ backgroundColor: color }}
-                                                                        />
-                                                                        {sym}
-                                                                        <button
-                                                                            type="button"
-                                                                            onClick={() => handleRemoveComparison(sym)}
-                                                                            className="text-subtle transition hover:text-negative focus-visible:text-negative"
-                                                                            aria-label={`Usuń ${sym} z porównań`}
-                                                                        >
-                                                                            ×
-                                                                        </button>
-                                                                    </span>
-                                                                );
-                                                            })}
-                                                        </div>
-                                                    ) : (
-                                                        <p className="text-xs text-subtle">
-                                                            Dodaj spółkę, aby porównać zachowanie kursu z innymi instrumentami.
-                                                        </p>
-                                                    )}
-                                                    {comparisonErrorEntries.map(([sym, message]) => (
-                                                        <div key={sym} className="text-xs text-negative">
-                                                            {sym}: {message}
-                                                        </div>
-                                                    ))}
-                                                </div>
+                                                )}
+                                                <PriceChart
+                                                    rows={withSma}
+                                                    showArea={area}
+                                                    showSMA={smaOn}
+                                                    brushDataRows={period === "max" ? brushRows : undefined}
+                                                    brushRange={period === "max" ? brushRange : null}
+                                                    onBrushChange={
+                                                        period === "max" ? handleBrushSelectionChange : undefined
+                                                    }
+                                                    primarySymbol={symbol}
+                                                    comparisonSeries={comparisonSeriesForChart}
+                                                />
+                                            </>
+                                        ) : (
+                                            <div className="p-6 text-sm text-subtle">
+                                                Brak danych do wyświetlenia
                                             </div>
                                         )}
-                                        <PriceChart
-                                            rows={withSma}
-                                            showArea={area}
-                                            showSMA={smaOn}
-                                            brushDataRows={period === "max" ? brushRows : undefined}
-                                            brushRange={period === "max" ? brushRange : null}
-                                            onBrushChange={
-                                                period === "max" ? handleBrushSelectionChange : undefined
-                                            }
-                                            primarySymbol={symbol}
-                                            comparisonSeries={comparisonSeriesForChart}
-                                        />
-                                    </>
-                                ) : (
-                                    <div className="p-6 text-sm text-subtle">
-                                        Brak danych do wyświetlenia
-                                    </div>
-                                )}
-                                {err && symbol && (
-                                    <div className="mt-3 text-sm text-negative">Błąd: {err}</div>
-                                )}
-                            </Card>
+                                        {err && symbol && (
+                                            <div className="mt-3 text-sm text-negative">Błąd: {err}</div>
+                                        )}
+                                    </Card>
 
-                            <Card title="RSI (14)">
-                                {!symbol ? (
-                                    <div className="p-6 text-sm text-subtle">
-                                        Dodaj spółkę, aby zobaczyć wskaźnik RSI.
-                                    </div>
-                                ) : (
-                                    <RsiChart rows={withRsi} />
-                                )}
-                            </Card>
-                        </div>
-
-                        <div className="space-y-6">
-                            <Card title={`Fundamenty – ${symbolLabel}`}>
-                                <div className="text-sm text-subtle">
-                                    {symbol
-                                        ? "Dane przykładowe — podłączymy realne API fundamentów w kolejnym kroku."
-                                        : "Dodaj spółkę, aby zobaczyć sekcję fundamentów."}
+                                    <Card title="RSI (14)">
+                                        {!symbol ? (
+                                            <div className="p-6 text-sm text-subtle">
+                                                Dodaj spółkę, aby zobaczyć wskaźnik RSI.
+                                            </div>
+                                        ) : (
+                                            <RsiChart rows={withRsi} />
+                                        )}
+                                    </Card>
                                 </div>
-                                {symbol && (
-                                    <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-y-2 sm:gap-x-4 text-sm">
-                                        <div className="text-subtle">Kapitalizacja</div>
-                                        <div>$—</div>
-                                        <div className="text-subtle">P/E (TTM)</div>
-                                        <div>—</div>
-                                        <div className="text-subtle">Przychody</div>
-                                        <div>—</div>
-                                        <div className="text-subtle">Marża netto</div>
-                                        <div>—</div>
-                                    </div>
-                                )}
-                            </Card>
 
-                            <Card title="Skaner (demo)" right={<Chip active>Beta</Chip>}>
-                                <ul className="text-sm list-disc pl-5 space-y-1">
-                                    <li>Wysoki wolumen vs 20-sesyjna średnia</li>
-                                    <li>RSI &lt; 30 (wyprzedanie)</li>
-                                    <li>Przebicie SMA50 od dołu</li>
-                                    <li>Nowe 52-tygodniowe maksimum</li>
-                                </ul>
-                                <p className="text-xs text-subtle mt-3">
-                                    Podmienimy na realny backend skanera.
-                                </p>
-                            </Card>
+                                <div className="space-y-6">
+                                    <Card title={`Fundamenty – ${symbolLabel}`}>
+                                        <div className="text-sm text-subtle">
+                                            {symbol
+                                                ? "Dane przykładowe — podłączymy realne API fundamentów w kolejnym kroku."
+                                                : "Dodaj spółkę, aby zobaczyć sekcję fundamentów."}
+                                        </div>
+                                        {symbol && (
+                                            <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-y-2 sm:gap-x-4 text-sm">
+                                                <div className="text-subtle">Kapitalizacja</div>
+                                                <div>$—</div>
+                                                <div className="text-subtle">P/E (TTM)</div>
+                                                <div>—</div>
+                                                <div className="text-subtle">Przychody</div>
+                                                <div>—</div>
+                                                <div className="text-subtle">Marża netto</div>
+                                                <div>—</div>
+                                            </div>
+                                        )}
+                                    </Card>
+
+                                    <Card title="Skaner (demo)" right={<Chip active>Beta</Chip>}>
+                                        <ul className="text-sm list-disc pl-5 space-y-1">
+                                            <li>Wysoki wolumen vs 20-sesyjna średnia</li>
+                                            <li>RSI &lt; 30 (wyprzedanie)</li>
+                                            <li>Przebicie SMA50 od dołu</li>
+                                            <li>Nowe 52-tygodniowe maksimum</li>
+                                        </ul>
+                                        <p className="text-xs text-subtle mt-3">
+                                            Podmienimy na realny backend skanera.
+                                        </p>
+                                    </Card>
+                                </div>
+                            </div>
                         </div>
-                    </div>
-                </Section>
+                    </Section>
+                )}
 
-                <Section
-                    id="score"
-                    kicker="Krok 3"
-                    title="Konfigurator score"
-                    description="Skonfiguruj zasady rankingu i pobierz wynik z backendu jednym kliknięciem."
-                >
+                {view === "score" && (
+                    <Section
+                        id="score"
+                        title="Konfigurator score"
+                        description="Skonfiguruj zasady rankingu i pobierz wynik z backendu jednym kliknięciem."
+                    >
                     <Card title="Konfigurator score" right={<Chip active>Nowość</Chip>}>
                         <div className="space-y-5 text-sm">
                             <div className="grid gap-4 md:grid-cols-2">
@@ -3955,16 +3964,17 @@ export default function Page() {
                         </div>
                     </Card>
                 </Section>
+                )}
 
-                <Section
-                    id="portfolio"
-                    kicker="Krok 4"
-                    title="Portfel – symulacja i rebalansing"
-                    description="Porównaj strategie z realnymi wagami lub rankingiem score, w tym statystyki, wykres i log rebalansingu."
-                >
-                    <Card>
-                        <div className="space-y-8">
-                            <div className="space-y-4">
+                {view === "portfolio" && (
+                    <Section
+                        id="portfolio"
+                        title="Portfel – symulacja i rebalansing"
+                        description="Porównaj strategie z realnymi wagami lub rankingiem score, w tym statystyki, wykres i log rebalansingu."
+                    >
+                        <Card>
+                            <div className="space-y-8">
+                                <div className="space-y-4">
                                 <div className="flex flex-wrap gap-2">
                                     <Chip active={pfMode === "manual"} onClick={() => setPfMode("manual")}>
                                         Własne wagi
@@ -4477,6 +4487,7 @@ export default function Page() {
                         </div>
                     </Card>
                 </Section>
+                )}
 
                 <footer className="pt-6 text-center text-sm text-subtle">
                     © {new Date().getFullYear()} Analityka Rynków • MVP
