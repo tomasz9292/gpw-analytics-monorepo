@@ -126,6 +126,19 @@ const SCORE_METRIC_OPTIONS: ScoreMetricOption[] = [
     },
 ];
 
+const SCORE_UNIVERSE_FALLBACK: string[] = [
+    "CDR.WA",
+    "PKN.WA",
+    "PEO.WA",
+    "KGH.WA",
+    "PGE.WA",
+    "ALE.WA",
+    "DNP.WA",
+    "LPP.WA",
+    "OPL.WA",
+    "MRC.WA",
+];
+
 const getDefaultScoreRules = (): ScoreBuilderRule[] => {
     const picks: { option: ScoreMetricOption; weight: number }[] = [
         { option: SCORE_METRIC_OPTIONS[2], weight: 40 },
@@ -2694,6 +2707,9 @@ export function AnalyticsDashboard({
     const [scoreLimit, setScoreLimit] = useState(10);
     const [scoreSort, setScoreSort] = useState<"asc" | "desc">("desc");
     const [scoreUniverse, setScoreUniverse] = useState("");
+    const [scoreUniverseFallback, setScoreUniverseFallback] = useState<string[]>(
+        () => [...SCORE_UNIVERSE_FALLBACK]
+    );
     const [scoreAsOf, setScoreAsOf] = useState(() => new Date().toISOString().slice(0, 10));
     const [scoreMinMcap, setScoreMinMcap] = useState("");
     const [scoreMinTurnover, setScoreMinTurnover] = useState("");
@@ -2705,6 +2721,44 @@ export function AnalyticsDashboard({
     const scoreTotalWeight = scoreComponents.reduce((acc, component) => acc + component.weight, 0);
     const scoreLimitInvalid = !Number.isFinite(scoreLimit) || scoreLimit <= 0;
     const scoreDisabled = scoreLoading || scoreLimitInvalid || !scoreComponents.length;
+
+    useEffect(() => {
+        let active = true;
+        const loadDefaultUniverse = async () => {
+            try {
+                const response = await fetch("/api/symbols?limit=50");
+                if (!response.ok) {
+                    return;
+                }
+                const data: unknown = await response.json();
+                if (!Array.isArray(data)) {
+                    return;
+                }
+                const extracted = data
+                    .map((item) => {
+                        if (!item || typeof item !== "object") return null;
+                        const symbol = (item as { symbol?: unknown }).symbol;
+                        if (typeof symbol !== "string") return null;
+                        const normalized = symbol.trim().toUpperCase();
+                        return normalized ? normalized : null;
+                    })
+                    .filter((sym): sym is string => Boolean(sym));
+                if (!extracted.length || !active) {
+                    return;
+                }
+                setScoreUniverseFallback((prev) => {
+                    const merged = new Set<string>([...prev, ...extracted]);
+                    return Array.from(merged).slice(0, 100);
+                });
+            } catch {
+                // ignoruj chwilowe błędy sieciowe – fallback pozostanie statyczny
+            }
+        };
+        void loadDefaultUniverse();
+        return () => {
+            active = false;
+        };
+    }, []);
 
     // Portfel
     const [pfMode, setPfMode] = useState<"manual" | "score">("manual");
@@ -3250,12 +3304,17 @@ export function AnalyticsDashboard({
                 ? Math.floor(Number(scoreLimit))
                 : undefined;
 
+            const parsedUniverse = parseUniverseValue(scoreUniverse);
+            const resolvedUniverse =
+                parsedUniverse ??
+                (scoreUniverseFallback.length ? [...scoreUniverseFallback] : undefined);
+
             const payload: ScorePreviewRequest = {
                 name: scoreNameInput.trim() || undefined,
                 description: scoreDescription.trim() || undefined,
                 rules: rulePayload,
                 limit: limitValue,
-                universe: parseUniverseValue(scoreUniverse),
+                universe: resolvedUniverse,
                 sort: scoreSort,
             };
 
@@ -3630,6 +3689,13 @@ export function AnalyticsDashboard({
                                         className={inputBaseClasses}
                                         placeholder="np. WIG20.WA, WIG40.WA"
                                     />
+                                    <span className="text-xs text-subtle">
+                                        Pozostaw puste, aby automatycznie użyć listy
+                                        {" "}
+                                        {scoreUniverseFallback.length}
+                                        {" "}
+                                        najpłynniejszych spółek GPW z backendu.
+                                    </span>
                                 </label>
                                 <label className="flex flex-col gap-2">
                                     <span className="text-muted text-xs uppercase tracking-wide">
