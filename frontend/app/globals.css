@@ -89,3 +89,8 @@ body {
     border-color: var(--color-border);
   }
 }
+
+.recharts-wrapper:focus,
+.recharts-wrapper:focus-visible {
+  outline: none;
+}

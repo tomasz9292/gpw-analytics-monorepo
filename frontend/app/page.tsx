@@ -175,6 +175,18 @@ const computeStartISOForPeriod = (period: ChartPeriod): string => {
     return startDate.toISOString().slice(0, 10);
 };
 
+const COMPARISON_COLORS = [
+    "#2563EB",
+    "#F59E0B",
+    "#8B5CF6",
+    "#EC4899",
+    "#0EA5E9",
+    "#16A34A",
+    "#F97316",
+];
+
+const MAX_COMPARISONS = COMPARISON_COLORS.length;
+
 type Rebalance = "none" | "monthly" | "quarterly" | "yearly";
 
 type BacktestOptions = {
@@ -1105,7 +1117,7 @@ const Chip = ({
 );
 
 const inputBaseClasses =
-    "rounded-xl border border-soft bg-surface px-3 py-2 text-neutral focus:outline-none focus:border-[var(--color-tech)] focus:ring-2 focus:ring-[rgba(52,152,219,0.15)]";
+    "rounded-xl border border-soft bg-surface px-3 py-2 text-neutral focus:outline-none focus:border-[var(--color-tech)] focus:ring-2 focus:ring-[rgba(52,152,219,0.15)] disabled:cursor-not-allowed disabled:opacity-60";
 
 const toRatio = (value: number) => {
     const abs = Math.abs(value);
@@ -1412,10 +1424,12 @@ function TickerAutosuggest({
     onPick,
     placeholder = "Dodaj ticker (np. CDR.WA)",
     inputClassName = "",
+    disabled = false,
 }: {
     onPick: (symbol: string) => void;
     placeholder?: string;
     inputClassName?: string;
+    disabled?: boolean;
 }) {
     const [q, setQ] = useState("");
     const [list, setList] = useState<SymbolRow[]>([]);
@@ -1425,6 +1439,12 @@ function TickerAutosuggest({
 
     // debounce
     useEffect(() => {
+        if (disabled) {
+            setList([]);
+            setOpen(false);
+            setIdx(-1);
+            return;
+        }
         if (!q.trim()) {
             setList([]);
             setOpen(false);
@@ -1443,7 +1463,12 @@ function TickerAutosuggest({
             }
         }, 200);
         return () => clearTimeout(h);
-    }, [q]);
+    }, [disabled, q]);
+
+    useEffect(() => {
+        if (!disabled) return;
+        setQ("");
+    }, [disabled]);
 
     function choose(s: string) {
         onPick(s);
@@ -1474,9 +1499,11 @@ function TickerAutosuggest({
             <input
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
-                onFocus={() => list.length && setOpen(true)}
+                onFocus={() => !disabled && list.length && setOpen(true)}
                 onKeyDown={onKeyDown}
                 placeholder={placeholder}
+                disabled={disabled}
+                aria-disabled={disabled}
                 className={[
                     inputBaseClasses,
                     inputClassName || "w-56",
@@ -1565,6 +1592,13 @@ function ChartTooltipContent({
     );
 }
 
+type ComparisonSeries = {
+    symbol: string;
+    label?: string;
+    color: string;
+    rows: Row[];
+};
+
 function PriceChart({
     rows,
     showArea,
@@ -1572,6 +1606,8 @@ function PriceChart({
     brushDataRows,
     brushRange,
     onBrushChange,
+    primarySymbol,
+    comparisonSeries,
 }: {
     rows: RowSMA[];
     showArea: boolean;
@@ -1579,6 +1615,8 @@ function PriceChart({
     brushDataRows?: RowSMA[];
     brushRange?: BrushStartEndIndex | null;
     onBrushChange?: (range: BrushStartEndIndex) => void;
+    primarySymbol?: string | null;
+    comparisonSeries?: ComparisonSeries[];
 }) {
     const gradientId = useId();
     const priceFormatter = useMemo(
@@ -1615,15 +1653,48 @@ function PriceChart({
         []
     );
 
-    const chartData: PriceChartPoint[] = useMemo(() => {
+    const comparisonDescriptors = useMemo(() => {
+        if (!comparisonSeries?.length) return [];
+        return comparisonSeries.map((series) => {
+            const map = new Map<string, Row>();
+            for (const row of series.rows) {
+                map.set(row.date, row);
+            }
+            return {
+                ...series,
+                start: series.rows[0]?.close ?? 0,
+                map,
+                hasData: series.rows.length > 0,
+            };
+        });
+    }, [comparisonSeries]);
+
+    const chartData: (PriceChartPoint & Record<string, number | null>)[] = useMemo(() => {
         if (!rows.length) return [];
         const base = rows[0].close || 0;
         return rows.map((row) => {
             const change = row.close - base;
             const changePct = base !== 0 ? (change / base) * 100 : 0;
-            return { ...row, change, changePct };
+            const merged: PriceChartPoint & Record<string, number | null> = {
+                ...row,
+                change,
+                changePct,
+            };
+            for (const descriptor of comparisonDescriptors) {
+                const match = descriptor.map.get(row.date) ?? null;
+                if (match) {
+                    const diff = match.close - (descriptor.start || 0);
+                    merged[`${descriptor.symbol}__pct`] =
+                        descriptor.start !== 0 ? (diff / descriptor.start) * 100 : 0;
+                    merged[`${descriptor.symbol}__close`] = match.close;
+                } else {
+                    merged[`${descriptor.symbol}__pct`] = null;
+                    merged[`${descriptor.symbol}__close`] = null;
+                }
+            }
+            return merged;
         });
-    }, [rows]);
+    }, [comparisonDescriptors, rows]);
 
     const brushChartData: PriceChartPoint[] | null = useMemo(() => {
         if (!brushDataRows?.length) return null;
@@ -1634,6 +1705,8 @@ function PriceChart({
             return { ...row, change, changePct };
         });
     }, [brushDataRows]);
+
+    const hasComparisons = comparisonDescriptors.some((descriptor) => descriptor.hasData);
 
     const showBrushControls = Boolean(brushChartData && brushChartData.length > 1 && onBrushChange);
 
@@ -1667,8 +1740,9 @@ function PriceChart({
     );
 
     const yTickFormatter = useCallback(
-        (value: number) => priceFormatter.format(value),
-        [priceFormatter]
+        (value: number) =>
+            hasComparisons ? `${percentFormatter.format(value)}%` : priceFormatter.format(value),
+        [hasComparisons, percentFormatter, priceFormatter]
     );
 
     const handleBrushUpdate = useCallback(
@@ -1693,6 +1767,7 @@ function PriceChart({
         start: SelectionPoint;
         end: SelectionPoint;
     } | null>(null);
+    const [hoverPoint, setHoverPoint] = useState<SelectionPoint | null>(null);
     const [isSelecting, setIsSelecting] = useState(false);
 
     const chartContainerRef = useRef<HTMLDivElement | null>(null);
@@ -1761,11 +1836,16 @@ function PriceChart({
 
     const handleChartMouseMove = useCallback<CategoricalChartFunc>(
         (state) => {
-            if (!state) return;
-            if (!isSelecting && !selection) return;
+            if (!state) {
+                setHoverPoint(null);
+                return;
+            }
             const point = getPointFromState(state as MouseHandlerDataParam);
             if (!point) return;
-            updateSelectionEnd(point);
+            setHoverPoint(point);
+            if (isSelecting || selection) {
+                updateSelectionEnd(point);
+            }
         },
         [getPointFromState, isSelecting, selection, updateSelectionEnd]
     );
@@ -1785,10 +1865,12 @@ function PriceChart({
 
     const handleChartMouseLeave = useCallback(() => {
         setIsSelecting(false);
+        setHoverPoint(null);
     }, []);
 
     useEffect(() => {
         setSelection(null);
+        setHoverPoint(null);
         setIsSelecting(false);
     }, [rows]);
 
@@ -1796,12 +1878,15 @@ function PriceChart({
     const selectionEnd = selection?.end ?? null;
     const selectionStartPoint = selectionStart?.point ?? null;
     const selectionEndPoint = selectionEnd?.point ?? null;
-    const hasSelection = Boolean(selectionStart && selectionEnd);
+    const hoverSelectionPoint = hoverPoint?.point ?? null;
+    const explicitSelection = Boolean(selectionStart && selectionEnd);
+    const baseStartPoint = rows.length ? rows[0] : null;
+    const anchorPoint = selectionStartPoint ?? baseStartPoint;
+    const targetPoint = selectionEndPoint ?? hoverSelectionPoint;
+    const hasComparisonRange = Boolean(anchorPoint && targetPoint);
     const selectionChange =
-        hasSelection && selectionStartPoint && selectionEndPoint
-            ? selectionEndPoint.close - selectionStartPoint.close
-            : 0;
-    const selectionBase = selectionStartPoint?.close ?? 0;
+        anchorPoint && targetPoint ? targetPoint.close - anchorPoint.close : 0;
+    const selectionBase = anchorPoint?.close ?? 0;
     const selectionPct = selectionBase !== 0 ? (selectionChange / selectionBase) * 100 : 0;
     const selectionIsZero = Math.abs(selectionChange) < 1e-10;
     const selectionSign = selectionChange > 0 ? "+" : selectionChange < 0 ? "-" : "";
@@ -1816,38 +1901,85 @@ function PriceChart({
     const selectionPctText = selectionIsZero
         ? percentFormatter.format(0)
         : `${selectionSign}${percentFormatter.format(Math.abs(selectionPct))}`;
-    const selectionStartLabel = selectionStartPoint
-        ? tooltipDateFormatter.format(new Date(selectionStartPoint.date))
+    const selectionStartLabel = anchorPoint
+        ? tooltipDateFormatter.format(new Date(anchorPoint.date))
         : "";
-    const selectionEndLabel = selectionEndPoint
-        ? tooltipDateFormatter.format(new Date(selectionEndPoint.date))
+    const selectionEndLabel = targetPoint
+        ? tooltipDateFormatter.format(new Date(targetPoint.date))
         : "";
-    const selectionStartPrice = selectionStartPoint ? priceFormatter.format(selectionStartPoint.close) : "";
-    const selectionEndPrice = selectionEndPoint ? priceFormatter.format(selectionEndPoint.close) : "";
+    const selectionStartPrice = anchorPoint ? priceFormatter.format(anchorPoint.close) : "";
+    const selectionEndPrice = targetPoint ? priceFormatter.format(targetPoint.close) : "";
     const selectionColor = selectionIsZero
         ? "#94A3B8"
         : selectionChange > 0
             ? "#1DB954"
             : "#EA4335";
-    const tooltipLeft = selectionEnd?.x ?? null;
+    const tooltipLeft = selectionEnd?.x ?? hoverPoint?.x ?? null;
     const tooltipLeftClamped =
         tooltipLeft !== null && containerWidth > 0
             ? Math.min(Math.max(tooltipLeft, 72), containerWidth - 72)
             : tooltipLeft;
 
+    type SummaryItem = {
+        key: string;
+        symbol: string;
+        label: string;
+        price: number;
+        change: number;
+        changePct: number;
+        color: string;
+    };
+
+    const summaryItems: SummaryItem[] = useMemo(() => {
+        const items: SummaryItem[] = [];
+        if (primarySymbol && rows.length) {
+            const first = rows[0].close;
+            const last = rows[rows.length - 1].close;
+            items.push({
+                key: primarySymbol,
+                symbol: primarySymbol,
+                label: primarySymbol,
+                price: last,
+                change: last - first,
+                changePct: first !== 0 ? ((last - first) / first) * 100 : 0,
+                color: strokeColor,
+            });
+        }
+        for (const descriptor of comparisonDescriptors) {
+            if (!descriptor.rows.length) continue;
+            const first = descriptor.rows[0].close;
+            const last = descriptor.rows[descriptor.rows.length - 1].close;
+            items.push({
+                key: descriptor.symbol,
+                symbol: descriptor.symbol,
+                label: descriptor.label ?? descriptor.symbol,
+                price: last,
+                change: last - first,
+                changePct: first !== 0 ? ((last - first) / first) * 100 : 0,
+                color: descriptor.color,
+            });
+        }
+        return items;
+    }, [comparisonDescriptors, primarySymbol, rows, strokeColor]);
+
+    const baseDataKey = hasComparisons ? "changePct" : "close";
+    const effectiveShowArea = showArea && !hasComparisons;
+    const effectiveShowSma = showSMA && !hasComparisons;
+
     const priceLine = (
         <Line
             type="monotone"
-            dataKey="close"
+            dataKey={baseDataKey}
             stroke={strokeColor}
             strokeWidth={2}
             dot={false}
             activeDot={{ r: 4, strokeWidth: 2, stroke: "#fff" }}
+            connectNulls
             isAnimationActive={false}
         />
     );
     const smaLine =
-        showSMA && (
+        effectiveShowSma && (
             <Line
                 type="monotone"
                 dataKey="sma"
@@ -1858,11 +1990,27 @@ function PriceChart({
                 isAnimationActive={false}
             />
         );
+    const comparisonLines = hasComparisons
+        ? comparisonDescriptors
+              .filter((descriptor) => descriptor.hasData)
+              .map((descriptor) => (
+                <Line
+                    key={descriptor.symbol}
+                    type="monotone"
+                    dataKey={`${descriptor.symbol}__pct`}
+                    stroke={descriptor.color}
+                    strokeWidth={2}
+                    dot={false}
+                    connectNulls
+                    isAnimationActive={false}
+                />
+            ))
+        : null;
 
     return (
         <div className="space-y-4">
             <div ref={chartContainerRef} className="relative h-80">
-                {hasSelection && selectionStartPoint && selectionEndPoint && tooltipLeftClamped !== null && (
+                {hasComparisonRange && tooltipLeftClamped !== null && (
                     <div
                         className="pointer-events-none absolute top-3 z-10 max-w-xs -translate-x-1/2 rounded-lg border border-soft bg-white/95 px-3 py-2 text-xs shadow backdrop-blur"
                         style={{ left: tooltipLeftClamped }}
@@ -1888,7 +2036,7 @@ function PriceChart({
                     </div>
                 )}
                 <ResponsiveContainer width="100%" height="100%">
-                    {showArea ? (
+                    {effectiveShowArea ? (
                         <AreaChart
                             data={chartData}
                             margin={{ top: 10, right: 16, left: 0, bottom: 0 }}
@@ -1944,7 +2092,7 @@ function PriceChart({
                                 fillOpacity={1}
                                 isAnimationActive={false}
                             />
-                            {hasSelection && selectionStartPoint && selectionEndPoint && (
+                            {explicitSelection && selectionStartPoint && selectionEndPoint && (
                                 <>
                                     <ReferenceLine x={selectionStartPoint.date} stroke="#CBD5F0" strokeDasharray="4 4" />
                                     <ReferenceLine x={selectionEndPoint.date} stroke="#CBD5F0" strokeDasharray="4 4" />
@@ -2010,7 +2158,7 @@ function PriceChart({
                                 wrapperStyle={{ outline: "none" }}
                                 position={{ y: 24 }}
                             />
-                            {hasSelection && selectionStartPoint && selectionEndPoint && (
+                            {explicitSelection && selectionStartPoint && selectionEndPoint && (
                                 <>
                                     <ReferenceLine x={selectionStartPoint.date} stroke="#CBD5F0" strokeDasharray="4 4" />
                                     <ReferenceLine x={selectionEndPoint.date} stroke="#CBD5F0" strokeDasharray="4 4" />
@@ -2033,11 +2181,59 @@ function PriceChart({
                                 </>
                             )}
                             {priceLine}
+                            {comparisonLines}
                             {smaLine}
                         </LineChart>
                     )}
                 </ResponsiveContainer>
             </div>
+            {summaryItems.length > 0 && (
+                <div className="rounded-lg border border-soft bg-white/90 p-4 text-sm shadow-sm">
+                    <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">
+                        Porównanie wyników
+                    </div>
+                    <div className="space-y-2">
+                        {summaryItems.map((item) => {
+                            const changeIsZero = Math.abs(item.change) < 1e-10;
+                            const changeSign = item.change > 0 ? "+" : item.change < 0 ? "-" : "";
+                            const changeColor = changeIsZero
+                                ? "text-subtle"
+                                : item.change > 0
+                                    ? "text-accent"
+                                    : "text-negative";
+                            const changeValue = changeIsZero
+                                ? priceFormatter.format(0)
+                                : `${changeSign}${priceFormatter.format(Math.abs(item.change))}`;
+                            const changePctValue = changeIsZero
+                                ? percentFormatter.format(0)
+                                : `${changeSign}${percentFormatter.format(Math.abs(item.changePct))}`;
+                            return (
+                                <div
+                                    key={item.key}
+                                    className="flex flex-wrap items-center gap-x-6 gap-y-2"
+                                >
+                                    <div className="flex min-w-[120px] items-center gap-2">
+                                        <span
+                                            className="h-2.5 w-2.5 rounded-full"
+                                            style={{ backgroundColor: item.color }}
+                                        />
+                                        <span className="font-semibold text-neutral">{item.label}</span>
+                                    </div>
+                                    <div className="text-muted">
+                                        {priceFormatter.format(item.price)}
+                                    </div>
+                                    <div className={`font-medium ${changeColor}`}>
+                                        {changeValue}
+                                    </div>
+                                    <div className={`font-medium ${changeColor}`}>
+                                        {changePctValue}%
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            )}
             {showBrushControls && brushChartData && (
                 <div className="h-24 rounded-lg border border-soft bg-surface px-2 py-2">
                     <ResponsiveContainer width="100%" height="100%">
@@ -2108,6 +2304,9 @@ export default function Page() {
     const [rows, setRows] = useState<Row[]>([]);
     const [allRows, setAllRows] = useState<Row[]>([]);
     const [brushRange, setBrushRange] = useState<BrushStartEndIndex | null>(null);
+    const [comparisonSymbols, setComparisonSymbols] = useState<string[]>([]);
+    const [comparisonAllRows, setComparisonAllRows] = useState<Record<string, Row[]>>({});
+    const [comparisonErrors, setComparisonErrors] = useState<Record<string, string>>({});
     const [loading, setLoading] = useState(false);
     const [err, setErr] = useState("");
 
@@ -2183,6 +2382,9 @@ export default function Page() {
             setRows([]);
             setAllRows([]);
             setBrushRange(null);
+            setComparisonAllRows({});
+            setComparisonErrors({});
+            setComparisonSymbols([]);
             setErr("");
             setLoading(false);
             return;
@@ -2216,16 +2418,134 @@ export default function Page() {
         };
     }, [symbol, period]);
 
+    useEffect(() => {
+        if (!symbol) return;
+        const normalized = symbol.toUpperCase();
+        setComparisonSymbols((prev) => prev.filter((sym) => sym !== normalized));
+    }, [symbol]);
+
+    useEffect(() => {
+        let live = true;
+        if (!symbol || comparisonSymbols.length === 0) {
+            setComparisonAllRows({});
+            setComparisonErrors({});
+            return () => {
+                live = false;
+            };
+        }
+
+        const startISO = computeStartISOForPeriod(period);
+
+        (async () => {
+            const results = await Promise.allSettled(
+                comparisonSymbols.map((sym) =>
+                    fetchQuotes(sym, startISO).then((data) => ({ symbol: sym, data }))
+                )
+            );
+            if (!live) return;
+
+            const nextAll: Record<string, Row[]> = {};
+            const nextErrors: Record<string, string> = {};
+
+            results.forEach((result, idx) => {
+                const sym = comparisonSymbols[idx];
+                if (!sym) return;
+                if (result.status === "fulfilled") {
+                    nextAll[sym] = result.value.data;
+                } else {
+                    const reason = result.reason;
+                    const message =
+                        reason instanceof Error
+                            ? reason.message
+                            : typeof reason === "string"
+                                ? reason
+                                : `Nie udało się pobrać danych dla ${sym}`;
+                    nextErrors[sym] = message;
+                }
+            });
+
+            setComparisonAllRows(nextAll);
+            setComparisonErrors(nextErrors);
+        })();
+
+        return () => {
+            live = false;
+        };
+    }, [comparisonSymbols, period, symbol]);
+
     const withSma: RowSMA[] = useMemo(
         () => (smaOn ? sma(rows, 20) : rows.map((r) => ({ ...r, sma: undefined }))),
         [rows, smaOn]
     );
     const withRsi: RowRSI[] = useMemo(() => rsi(rows, 14), [rows]);
 
+    const visibleComparisonRows = useMemo(() => {
+        if (!rows.length) return {} as Record<string, Row[]>;
+        const startDate = rows[0].date;
+        const endDate = rows[rows.length - 1].date;
+        const next: Record<string, Row[]> = {};
+        for (const sym of comparisonSymbols) {
+            const series = comparisonAllRows[sym];
+            if (!series?.length) continue;
+            next[sym] = series.filter((row) => row.date >= startDate && row.date <= endDate);
+        }
+        return next;
+    }, [comparisonAllRows, comparisonSymbols, rows]);
+
+    const comparisonSeriesForChart: ComparisonSeries[] = useMemo(
+        () =>
+            comparisonSymbols.map((sym, idx) => ({
+                symbol: sym,
+                label: sym,
+                color: COMPARISON_COLORS[idx % COMPARISON_COLORS.length],
+                rows: visibleComparisonRows[sym] ?? [],
+            })),
+        [comparisonSymbols, visibleComparisonRows]
+    );
+
+    const comparisonColorMap = useMemo(() => {
+        const map: Record<string, string> = {};
+        for (const series of comparisonSeriesForChart) {
+            map[series.symbol] = series.color;
+        }
+        return map;
+    }, [comparisonSeriesForChart]);
+
     const brushRows: RowSMA[] = useMemo(
         () => allRows.map((row) => ({ ...row, sma: null })),
         [allRows]
     );
+
+    const handleAddComparison = useCallback(
+        (candidate: string) => {
+            const normalized = candidate.trim().toUpperCase();
+            if (!normalized || !symbol) return;
+            if (normalized === symbol.toUpperCase()) return;
+            setComparisonSymbols((prev) => {
+                if (prev.includes(normalized) || prev.length >= MAX_COMPARISONS) {
+                    return prev;
+                }
+                return [...prev, normalized];
+            });
+        },
+        [symbol]
+    );
+
+    const handleRemoveComparison = useCallback((sym: string) => {
+        setComparisonSymbols((prev) => prev.filter((item) => item !== sym));
+        setComparisonAllRows((prev) => {
+            if (!(sym in prev)) return prev;
+            const next = { ...prev };
+            delete next[sym];
+            return next;
+        });
+        setComparisonErrors((prev) => {
+            if (!(sym in prev)) return prev;
+            const next = { ...prev };
+            delete next[sym];
+            return next;
+        });
+    }, []);
 
     const handleBrushSelectionChange = useCallback(
         (range: BrushStartEndIndex) => {
@@ -2250,6 +2570,12 @@ export default function Page() {
         { href: "#score", label: "Ranking score" },
         { href: "#portfolio", label: "Symulacja portfela" },
     ];
+
+    const comparisonErrorEntries = useMemo(
+        () => Object.entries(comparisonErrors),
+        [comparisonErrors]
+    );
+    const comparisonLimitReached = comparisonSymbols.length >= MAX_COMPARISONS;
 
     const pfChartData = useMemo(() => {
         if (!pfRes) return [];
@@ -2551,6 +2877,68 @@ export default function Page() {
                                     <>
                                         <Stats data={rows} />
                                         <div className="h-2" />
+                                        {symbol && (
+                                            <div className="rounded-lg border border-dashed border-soft/70 bg-white/60 p-3">
+                                                <div className="flex flex-wrap items-center gap-3">
+                                                    <div className="text-xs font-semibold uppercase tracking-wide text-muted">
+                                                        Porównania
+                                                    </div>
+                                                    <TickerAutosuggest
+                                                        onPick={handleAddComparison}
+                                                        placeholder={
+                                                            comparisonLimitReached
+                                                                ? "Osiągnięto limit porównań"
+                                                                : "Dodaj spółkę do porównania"
+                                                        }
+                                                        inputClassName="w-56"
+                                                        disabled={comparisonLimitReached}
+                                                    />
+                                                    {comparisonLimitReached && (
+                                                        <span className="text-[11px] text-subtle">
+                                                            Maksymalnie {MAX_COMPARISONS} spółek.
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <div className="mt-3 space-y-2">
+                                                    {comparisonSymbols.length ? (
+                                                        <div className="flex flex-wrap gap-2">
+                                                            {comparisonSymbols.map((sym) => {
+                                                                const color = comparisonColorMap[sym] ?? "#475569";
+                                                                return (
+                                                                    <span
+                                                                        key={sym}
+                                                                        className="inline-flex items-center gap-2 rounded-full border border-soft bg-white/80 px-3 py-1 text-xs font-medium text-neutral shadow-sm"
+                                                                    >
+                                                                        <span
+                                                                            className="h-2.5 w-2.5 rounded-full"
+                                                                            style={{ backgroundColor: color }}
+                                                                        />
+                                                                        {sym}
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={() => handleRemoveComparison(sym)}
+                                                                            className="text-subtle transition hover:text-negative focus-visible:text-negative"
+                                                                            aria-label={`Usuń ${sym} z porównań`}
+                                                                        >
+                                                                            ×
+                                                                        </button>
+                                                                    </span>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                    ) : (
+                                                        <p className="text-xs text-subtle">
+                                                            Dodaj spółkę, aby porównać zachowanie kursu z innymi instrumentami.
+                                                        </p>
+                                                    )}
+                                                    {comparisonErrorEntries.map(([sym, message]) => (
+                                                        <div key={sym} className="text-xs text-negative">
+                                                            {sym}: {message}
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
                                         <PriceChart
                                             rows={withSma}
                                             showArea={area}
@@ -2560,6 +2948,8 @@ export default function Page() {
                                             onBrushChange={
                                                 period === "max" ? handleBrushSelectionChange : undefined
                                             }
+                                            primarySymbol={symbol}
+                                            comparisonSeries={comparisonSeriesForChart}
                                         />
                                     </>
                                 ) : (
