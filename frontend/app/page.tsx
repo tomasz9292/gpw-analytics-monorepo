@@ -292,6 +292,9 @@ type PortfolioRebalanceTrade = {
     weight_change?: number;
     value_change?: number;
     target_weight?: number;
+    shares_change?: number;
+    price?: number;
+    shares_after?: number;
     note?: string;
 };
 
@@ -692,6 +695,35 @@ function normalizePortfolioResponse(raw: unknown): PortfolioResp {
                 ["value_change", "delta_value", "value", "amount"]
             );
             if (valueChange !== undefined) normalizedTrade.value_change = valueChange;
+
+            const price = pickNumber(
+                [tradeRecord],
+                ["price", "trade_price", "execution_price", "share_price"]
+            );
+            if (price !== undefined) normalizedTrade.price = price;
+
+            const sharesChange = pickNumber(
+                [tradeRecord],
+                [
+                    "shares_change",
+                    "shares_delta",
+                    "delta_shares",
+                    "quantity_change",
+                    "shares",
+                ]
+            );
+            if (sharesChange !== undefined) normalizedTrade.shares_change = sharesChange;
+
+            const sharesAfter = pickNumber(
+                [tradeRecord],
+                [
+                    "shares_after",
+                    "quantity_after",
+                    "position_size",
+                    "target_quantity",
+                ]
+            );
+            if (sharesAfter !== undefined) normalizedTrade.shares_after = sharesAfter;
 
             const targetWeight = pickNumber(
                 [tradeRecord],
@@ -1136,6 +1168,20 @@ const toRatio = (value: number) => {
 const formatPercent = (value: number, fractionDigits = 2) =>
     `${(toRatio(value) * 100).toFixed(fractionDigits)}%`;
 
+const formatNumber = (value: number, fractionDigits = 2) =>
+    value.toLocaleString("pl-PL", {
+        minimumFractionDigits: fractionDigits,
+        maximumFractionDigits: fractionDigits,
+    });
+
+const formatSignedNumber = (value: number, fractionDigits = 2) => {
+    if (Math.abs(value) < 1e-9) {
+        return formatNumber(0, fractionDigits);
+    }
+    const sign = value > 0 ? "+" : "-";
+    return `${sign}${formatNumber(Math.abs(value), fractionDigits)}`;
+};
+
 function PortfolioStatsGrid({ stats }: { stats: PortfolioStats }) {
     const config: { key: keyof PortfolioStats; label: string; format?: (value: number) => string }[] = [
         { key: "cagr", label: "CAGR" },
@@ -1230,69 +1276,325 @@ function AllocationTable({ allocations }: { allocations: PortfolioAllocation[] }
     );
 }
 
-function RebalanceTimeline({ events }: { events: PortfolioRebalanceEvent[] }) {
-    if (!events.length) return null;
+type RebalanceTimelineItem = {
+    event: PortfolioRebalanceEvent;
+    date: Date | null;
+    value?: number;
+    change?: number;
+    changePct?: number;
+};
+
+type RebalanceTimelineGroup = {
+    year: string;
+    items: RebalanceTimelineItem[];
+};
+
+function RebalanceTimeline({
+    events,
+    equity,
+}: {
+    events: PortfolioRebalanceEvent[];
+    equity: PortfolioPoint[];
+}) {
+    const [selected, setSelected] = useState<RebalanceTimelineItem | null>(null);
+
+    const dateFormatter = useMemo(
+        () =>
+            new Intl.DateTimeFormat("en-US", {
+                month: "long",
+                day: "numeric",
+                year: "numeric",
+            }),
+        []
+    );
+
+    const groups = useMemo<RebalanceTimelineGroup[]>(() => {
+        if (!events.length) return [];
+
+        const parseDate = (value?: string): Date | null => {
+            if (!value) return null;
+            const direct = new Date(value);
+            if (!Number.isNaN(direct.getTime())) return direct;
+            const normalized = new Date(`${value}T00:00:00`);
+            if (!Number.isNaN(normalized.getTime())) return normalized;
+            return null;
+        };
+
+        const equityPoints = equity
+            .map((point) => {
+                const date = parseDate(point.date);
+                if (!date) return null;
+                const key = point.date.slice(0, 10);
+                return { ...point, date, key };
+            })
+            .filter(Boolean) as { date: Date; key: string; value: number }[];
+
+        equityPoints.sort((a, b) => a.date.getTime() - b.date.getTime());
+
+        const valueByKey = new Map<string, number>();
+        equityPoints.forEach((point) => {
+            if (!valueByKey.has(point.key)) {
+                valueByKey.set(point.key, point.value);
+            }
+        });
+
+        const enriched = events.map((event) => {
+            const date = parseDate(event.date);
+            const key = event.date?.slice(0, 10);
+            let value = key ? valueByKey.get(key) : undefined;
+
+            if (value === undefined && date) {
+                let candidateValue: number | undefined;
+                let candidateTime = -Infinity;
+                equityPoints.forEach((point) => {
+                    const time = point.date.getTime();
+                    if (time <= date.getTime() && time > candidateTime) {
+                        candidateTime = time;
+                        candidateValue = point.value;
+                    }
+                });
+                value = candidateValue;
+            }
+
+            return { event, date, value };
+        });
+
+        enriched.sort((a, b) => {
+            const timeA = a.date ? a.date.getTime() : Number.POSITIVE_INFINITY;
+            const timeB = b.date ? b.date.getTime() : Number.POSITIVE_INFINITY;
+            return timeA - timeB;
+        });
+
+        let previousValue: number | undefined;
+        const grouped = new Map<string, RebalanceTimelineItem[]>();
+
+        enriched.forEach((item) => {
+            const { event, date, value } = item;
+
+            let change: number | undefined;
+            let changePct: number | undefined;
+
+            if (value !== undefined && previousValue !== undefined) {
+                change = value - previousValue;
+                if (Math.abs(previousValue) > 1e-9) {
+                    changePct = change / previousValue;
+                }
+            }
+
+            if (value !== undefined) {
+                previousValue = value;
+            }
+
+            const yearKey = date ? String(date.getFullYear()) : "Pozostałe";
+            if (!grouped.has(yearKey)) {
+                grouped.set(yearKey, []);
+            }
+            grouped.get(yearKey)!.push({ event, date, value, change, changePct });
+        });
+
+        const sortedGroups = Array.from(grouped.entries())
+            .map(([year, items]) => ({ year, items }))
+            .sort((a, b) => {
+                const aNum = Number(a.year);
+                const bNum = Number(b.year);
+                const aIsNum = Number.isFinite(aNum);
+                const bIsNum = Number.isFinite(bNum);
+                if (aIsNum && bIsNum) return aNum - bNum;
+                if (aIsNum) return -1;
+                if (bIsNum) return 1;
+                return a.year.localeCompare(b.year);
+            });
+
+        return sortedGroups;
+    }, [equity, events]);
+
+    useEffect(() => {
+        if (!selected) return;
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (event.key === "Escape") {
+                setSelected(null);
+            }
+        };
+        window.addEventListener("keydown", onKeyDown);
+        const previousOverflow = document.body.style.overflow;
+        document.body.style.overflow = "hidden";
+        return () => {
+            window.removeEventListener("keydown", onKeyDown);
+            document.body.style.overflow = previousOverflow;
+        };
+    }, [selected]);
+
+    if (!groups.length) return null;
+
+    const closeModal = () => setSelected(null);
 
     return (
-        <div className="space-y-3">
+        <div className="space-y-4">
             <div className="text-sm text-muted font-medium">Harmonogram rebalansingu</div>
-            <div className="space-y-3">
-                {events.map((event, idx) => (
-                    <div key={`${event.date}-${idx}`} className="rounded-xl border border-soft bg-soft-surface p-4">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div className="text-sm font-semibold text-primary">{event.date}</div>
-                            <div className="text-xs text-subtle">
-                                {event.reason || "Planowy rebalansing"}
-                                {typeof event.turnover === "number"
-                                    ? ` • obrót ${formatPercent(event.turnover, 1)}`
-                                    : ""}
-                            </div>
+            <div className="space-y-6">
+                {groups.map((group) => (
+                    <div key={group.year} className="space-y-3">
+                        <div className="text-lg font-semibold text-primary">{group.year}</div>
+                        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                            {group.items.map((item, idx) => {
+                                const { event, value, change, changePct, date } = item;
+                                const formattedDate = date ? dateFormatter.format(date) : event.date;
+                                const changeClass =
+                                    changePct === undefined
+                                        ? "text-subtle"
+                                        : changePct > 0
+                                            ? "text-accent"
+                                            : changePct < 0
+                                                ? "text-negative"
+                                                : "text-subtle";
+                                const hasChange = changePct !== undefined;
+                                const changeText = hasChange
+                                    ? `${formatSignedNumber(change ?? 0)} (${formatPercent(changePct, 2)})`
+                                    : null;
+                                const turnoverText =
+                                    typeof event.turnover === "number"
+                                        ? `Obrót ${formatPercent(event.turnover, 1)}`
+                                        : null;
+
+                                return (
+                                    <button
+                                        key={`${event.date}-${idx}`}
+                                        type="button"
+                                        onClick={() => setSelected(item)}
+                                        className="group w-full rounded-2xl border border-soft bg-soft-surface/70 p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-[var(--color-primary)] hover:bg-white hover:shadow-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]/40"
+                                    >
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div className="text-sm font-semibold text-primary">{formattedDate}</div>
+                                            {changeText && (
+                                                <div className={`text-xs font-semibold ${changeClass}`}>
+                                                    {changeText}
+                                                </div>
+                                            )}
+                                        </div>
+                                        <div className="mt-3 text-2xl font-semibold text-neutral">
+                                            {typeof value === "number" ? formatNumber(value, 2) : "—"}
+                                        </div>
+                                        {event.reason && (
+                                            <div className="mt-2 line-clamp-2 text-xs text-muted">{event.reason}</div>
+                                        )}
+                                        <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-subtle">
+                                            <span>{event.trades?.length ?? 0} trans.</span>
+                                            {turnoverText && <span>• {turnoverText}</span>}
+                                        </div>
+                                        <div className="mt-4 inline-flex items-center gap-1 text-sm font-semibold text-primary transition group-hover:gap-2">
+                                            <span>Transakcje</span>
+                                            <span aria-hidden>→</span>
+                                        </div>
+                                    </button>
+                                );
+                            })}
                         </div>
-                        {event.trades && event.trades.length > 0 && (
-                            <div className="mt-3 overflow-x-auto">
+                    </div>
+                ))}
+            </div>
+
+            {selected && (
+                <div className="fixed inset-0 z-40 flex items-center justify-center px-4 py-8">
+                    <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={closeModal} />
+                    <div className="relative z-50 max-h-[90vh] w-full max-w-5xl overflow-hidden rounded-3xl bg-white p-6 shadow-2xl">
+                        <div className="flex flex-wrap items-start justify-between gap-4">
+                            <div>
+                                <div className="text-xs uppercase tracking-wide text-muted">{selected.event.date}</div>
+                                <div className="mt-1 text-2xl font-semibold text-neutral">
+                                    {typeof selected.value === "number"
+                                        ? formatNumber(selected.value, 2)
+                                        : "—"}
+                                </div>
+                                {selected.changePct !== undefined && (
+                                    <div
+                                        className={`mt-2 text-sm font-semibold ${
+                                            selected.changePct > 0
+                                                ? "text-accent"
+                                                : selected.changePct < 0
+                                                    ? "text-negative"
+                                                    : "text-subtle"
+                                        }`}
+                                    >
+                                        {formatSignedNumber(selected.change ?? 0)} (
+                                        {formatPercent(selected.changePct, 2)})
+                                    </div>
+                                )}
+                                {selected.event.reason && (
+                                    <div className="mt-3 text-sm text-muted">{selected.event.reason}</div>
+                                )}
+                                {typeof selected.event.turnover === "number" && (
+                                    <div className="mt-1 text-xs text-subtle">
+                                        Obrót: {formatPercent(selected.event.turnover, 2)}
+                                    </div>
+                                )}
+                            </div>
+                            <button
+                                type="button"
+                                onClick={closeModal}
+                                className="rounded-full border border-soft px-3 py-1 text-sm font-medium text-muted transition hover:border-[var(--color-primary)] hover:text-primary"
+                            >
+                                Zamknij
+                            </button>
+                        </div>
+                        <div className="mt-6 overflow-x-auto">
+                            {selected.event.trades && selected.event.trades.length > 0 ? (
                                 <table className="min-w-full text-xs md:text-sm">
                                     <thead className="text-left text-subtle">
                                         <tr>
-                                            <th className="py-1 pr-3 font-medium">Spółka</th>
-                                            <th className="py-1 pr-3 font-medium">Akcja</th>
-                                            <th className="py-1 pr-3 font-medium">Zmiana wagi</th>
-                                            <th className="py-1 pr-3 font-medium">Zmiana wartości</th>
-                                            <th className="py-1 pr-3 font-medium">Waga docelowa</th>
-                                            <th className="py-1 pr-3 font-medium">Notatka</th>
+                                            <th className="py-2 pr-4 font-medium">Spółka</th>
+                                            <th className="py-2 pr-4 font-medium">Akcja</th>
+                                            <th className="py-2 pr-4 font-medium">Wartość</th>
+                                            <th className="py-2 pr-4 font-medium">Cena</th>
+                                            <th className="py-2 pr-4 font-medium">Zmiana akcji</th>
+                                            <th className="py-2 pr-4 font-medium">Doc. akcji</th>
+                                            <th className="py-2 pr-4 font-medium">Waga docelowa</th>
+                                            <th className="py-2 pr-4 font-medium">Notatka</th>
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {event.trades.map((trade, tradeIdx) => (
+                                        {selected.event.trades.map((trade, tradeIdx) => (
                                             <tr key={`${trade.symbol}-${tradeIdx}`} className="border-t border-soft">
-                                                <td className="py-1 pr-3 font-medium text-primary">{trade.symbol}</td>
-                                                <td className="py-1 pr-3 capitalize">{trade.action ?? "—"}</td>
-                                                <td className="py-1 pr-3">
-                                                    {typeof trade.weight_change === "number"
-                                                        ? formatPercent(trade.weight_change, 1)
-                                                        : "—"}
-                                                </td>
-                                                <td className="py-1 pr-3">
+                                                <td className="py-2 pr-4 font-semibold text-primary">{trade.symbol}</td>
+                                                <td className="py-2 pr-4 capitalize">{trade.action ?? "—"}</td>
+                                                <td className="py-2 pr-4">
                                                     {typeof trade.value_change === "number"
-                                                        ? trade.value_change.toFixed(2)
+                                                        ? formatSignedNumber(trade.value_change, 2)
                                                         : "—"}
                                                 </td>
-                                                <td className="py-1 pr-3">
+                                                <td className="py-2 pr-4">
+                                                    {typeof trade.price === "number"
+                                                        ? formatNumber(trade.price, 2)
+                                                        : "—"}
+                                                </td>
+                                                <td className="py-2 pr-4">
+                                                    {typeof trade.shares_change === "number"
+                                                        ? formatSignedNumber(trade.shares_change, 4)
+                                                        : "—"}
+                                                </td>
+                                                <td className="py-2 pr-4">
+                                                    {typeof trade.shares_after === "number"
+                                                        ? formatNumber(trade.shares_after, 4)
+                                                        : "—"}
+                                                </td>
+                                                <td className="py-2 pr-4">
                                                     {typeof trade.target_weight === "number"
-                                                        ? formatPercent(trade.target_weight, 1)
+                                                        ? formatPercent(trade.target_weight, 2)
                                                         : "—"}
                                                 </td>
-                                                <td className="py-1 pr-3 text-subtle">
-                                                    {trade.note ?? "—"}
-                                                </td>
+                                                <td className="py-2 pr-4 text-subtle">{trade.note ?? "—"}</td>
                                             </tr>
                                         ))}
                                     </tbody>
                                 </table>
-                            </div>
-                        )}
+                            ) : (
+                                <div className="rounded-2xl border border-soft bg-soft-surface p-4 text-sm text-muted">
+                                    Brak szczegółów transakcji dla tego dnia.
+                                </div>
+                            )}
+                        </div>
                     </div>
-                ))}
-            </div>
+                </div>
+            )}
         </div>
     );
 }
@@ -1320,6 +1622,9 @@ function TransactionHistory({ events }: { events: PortfolioRebalanceEvent[] }) {
                             <th className="py-1 pr-3 font-medium">Akcja</th>
                             <th className="py-1 pr-3 font-medium">Zmiana wagi</th>
                             <th className="py-1 pr-3 font-medium">Zmiana wartości</th>
+                            <th className="py-1 pr-3 font-medium">Cena</th>
+                            <th className="py-1 pr-3 font-medium">Zmiana akcji</th>
+                            <th className="py-1 pr-3 font-medium">Doc. akcji</th>
                             <th className="py-1 pr-3 font-medium">Waga docelowa</th>
                             <th className="py-1 pr-3 font-medium">Notatka</th>
                             <th className="py-1 pr-3 font-medium">Powód</th>
@@ -1341,7 +1646,22 @@ function TransactionHistory({ events }: { events: PortfolioRebalanceEvent[] }) {
                                 </td>
                                 <td className="py-1 pr-3">
                                     {typeof row.value_change === "number"
-                                        ? row.value_change.toFixed(2)
+                                        ? formatSignedNumber(row.value_change, 2)
+                                        : "—"}
+                                </td>
+                                <td className="py-1 pr-3">
+                                    {typeof row.price === "number"
+                                        ? formatNumber(row.price, 2)
+                                        : "—"}
+                                </td>
+                                <td className="py-1 pr-3">
+                                    {typeof row.shares_change === "number"
+                                        ? formatSignedNumber(row.shares_change, 4)
+                                        : "—"}
+                                </td>
+                                <td className="py-1 pr-3">
+                                    {typeof row.shares_after === "number"
+                                        ? formatNumber(row.shares_after, 4)
                                         : "—"}
                                 </td>
                                 <td className="py-1 pr-3">
@@ -3871,7 +4191,10 @@ export default function Page() {
                                         </div>
                                         {pfRes.rebalances && pfRes.rebalances.length > 0 && (
                                             <div className="mt-6 space-y-6">
-                                                <RebalanceTimeline events={pfRes.rebalances} />
+                                                <RebalanceTimeline
+                                                    events={pfRes.rebalances}
+                                                    equity={pfRes.equity}
+                                                />
                                                 <TransactionHistory events={pfRes.rebalances} />
                                             </div>
                                         )}

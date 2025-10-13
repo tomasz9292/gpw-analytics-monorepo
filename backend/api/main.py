@@ -322,6 +322,9 @@ class PortfolioTrade(BaseModel):
     weight_change: Optional[float] = None
     value_change: Optional[float] = None
     target_weight: Optional[float] = None
+    shares_change: Optional[float] = None
+    price: Optional[float] = None
+    shares_after: Optional[float] = None
     note: Optional[str] = None
 
 
@@ -1021,7 +1024,9 @@ def _compute_backtest(
 
                 if abs(delta_value) > 1e-9:
                     action = "buy" if delta_value > 0 else "sell"
-                    shares[sym] = target_value / price if price > 0 else 0.0
+                    target_qty = target_value / price if price > 0 else 0.0
+                    shares_delta = target_qty - current_qty
+                    shares[sym] = target_qty
                     turnover_abs += abs(delta_value)
                     note = None
                     if sym in newly_available:
@@ -1033,6 +1038,9 @@ def _compute_backtest(
                             weight_change=target_weight - current_weight,
                             value_change=delta_value,
                             target_weight=target_weight,
+                            shares_change=shares_delta,
+                            price=price,
+                            shares_after=target_qty,
                             note=note,
                         )
                     )
