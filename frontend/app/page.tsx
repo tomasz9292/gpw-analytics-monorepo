@@ -2693,7 +2693,7 @@ export function AnalyticsDashboard({
     const [scoreDescription, setScoreDescription] = useState("Ranking jakościowy – przykład");
     const [scoreLimit, setScoreLimit] = useState(10);
     const [scoreSort, setScoreSort] = useState<"asc" | "desc">("desc");
-    const [scoreUniverse, setScoreUniverse] = useState("WIG20.WA");
+    const [scoreUniverse, setScoreUniverse] = useState("");
     const [scoreAsOf, setScoreAsOf] = useState(() => new Date().toISOString().slice(0, 10));
     const [scoreMinMcap, setScoreMinMcap] = useState("");
     const [scoreMinTurnover, setScoreMinTurnover] = useState("");
@@ -3220,7 +3220,7 @@ export function AnalyticsDashboard({
         setScoreDescription("Ranking jakościowy – przykład");
         setScoreLimit(10);
         setScoreSort("desc");
-        setScoreUniverse("WIG20.WA");
+        setScoreUniverse("");
         setScoreAsOf(new Date().toISOString().slice(0, 10));
         setScoreMinMcap("");
         setScoreMinTurnover("");
