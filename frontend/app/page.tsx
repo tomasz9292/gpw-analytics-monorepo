@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState, useEffect } from "react";
+import React, { useMemo, useState, useEffect, useId, useCallback } from "react";
 import {
     LineChart,
     Line,
@@ -13,6 +13,7 @@ import {
     AreaChart,
     Legend,
 } from "recharts";
+import type { TooltipProps } from "recharts";
 
 /** =========================
  *  API base (proxy w next.config.mjs)
@@ -154,6 +155,7 @@ type Row = {
 
 type RowSMA = Row & { sma?: number | null };
 type RowRSI = Row & { rsi: number | null };
+type PriceChartPoint = RowSMA & { change: number; changePct: number };
 
 type Rebalance = "none" | "monthly" | "quarterly" | "yearly";
 
@@ -341,7 +343,7 @@ async function backtestPortfolio(
         let message = "";
         try {
             message = await response.text();
-        } catch (e) {
+        } catch {
             // ignore
         }
         throw new Error(message || `API /backtest/portfolio ${response.status}`);
@@ -1498,6 +1500,63 @@ function TickerAutosuggest({
 /** =========================
  *  Wykresy
  *  ========================= */
+function ChartTooltipContent({
+    active,
+    payload,
+    label,
+    priceFormatter,
+    percentFormatter,
+    dateFormatter,
+    onHighlight,
+    showSMA,
+}: TooltipProps<number, string> & {
+    priceFormatter: Intl.NumberFormat;
+    percentFormatter: Intl.NumberFormat;
+    dateFormatter: Intl.DateTimeFormat;
+    onHighlight: (point: PriceChartPoint | null) => void;
+    showSMA: boolean;
+}) {
+    const point = active && payload?.length ? (payload[0]?.payload as PriceChartPoint) : null;
+
+    useEffect(() => {
+        onHighlight(point ?? null);
+    }, [point, onHighlight]);
+
+    useEffect(() => () => {
+        onHighlight(null);
+    }, [onHighlight]);
+
+    if (!active || !point || !label) return null;
+
+    const formattedDate = dateFormatter.format(new Date(label));
+    const isZeroChange = Math.abs(point.change) < 1e-10;
+    const changeColor = isZeroChange
+        ? "text-subtle"
+        : point.change > 0
+            ? "text-accent"
+            : "text-negative";
+    const changeSign = point.change > 0 ? "+" : point.change < 0 ? "-" : "";
+    const changeAbs = priceFormatter.format(Math.abs(point.change));
+    const changePct = percentFormatter.format(Math.abs(point.changePct));
+    const changeText = isZeroChange ? priceFormatter.format(0) : `${changeSign}${changeAbs}`;
+    const changePctText = isZeroChange ? percentFormatter.format(0) : `${changeSign}${changePct}`;
+
+    return (
+        <div className="rounded-xl border border-soft bg-white/95 px-4 py-3 text-xs shadow-xl backdrop-blur">
+            <div className="font-medium uppercase tracking-wide text-subtle">{formattedDate}</div>
+            <div className="mt-2 text-lg font-semibold text-neutral">
+                {priceFormatter.format(point.close)}
+            </div>
+            <div className={`mt-1 font-semibold ${changeColor}`}>
+                {changeText} ({changePctText}%)
+            </div>
+            {showSMA && typeof point.sma === "number" && (
+                <div className="mt-2 text-[11px] text-muted">SMA 20: {priceFormatter.format(point.sma)}</div>
+            )}
+        </div>
+    );
+}
+
 function PriceChart({
     rows,
     showArea,
@@ -1507,57 +1566,229 @@ function PriceChart({
     showArea: boolean;
     showSMA: boolean;
 }) {
+    const gradientId = useId();
+    const priceFormatter = useMemo(
+        () =>
+            new Intl.NumberFormat("pl-PL", {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+            }),
+        []
+    );
+    const percentFormatter = useMemo(
+        () =>
+            new Intl.NumberFormat("pl-PL", {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+            }),
+        []
+    );
+    const axisDateFormatter = useMemo(
+        () =>
+            new Intl.DateTimeFormat("pl-PL", {
+                month: "short",
+                year: "numeric",
+            }),
+        []
+    );
+    const tooltipDateFormatter = useMemo(
+        () =>
+            new Intl.DateTimeFormat("pl-PL", {
+                day: "numeric",
+                month: "long",
+                year: "numeric",
+            }),
+        []
+    );
+
+    const chartData: PriceChartPoint[] = useMemo(() => {
+        if (!rows.length) return [];
+        const base = rows[0].close || 0;
+        return rows.map((row) => {
+            const change = row.close - base;
+            const changePct = base !== 0 ? (change / base) * 100 : 0;
+            return { ...row, change, changePct };
+        });
+    }, [rows]);
+
+    const [highlight, setHighlight] = useState<PriceChartPoint | null>(null);
+    useEffect(() => {
+        setHighlight(null);
+    }, [rows]);
+
+    const handleHighlight = useCallback((point: PriceChartPoint | null) => {
+        setHighlight(point);
+    }, []);
+
+    const latestPoint = chartData.at(-1) ?? null;
+    const activePoint = highlight ?? latestPoint;
+    const isGrowing =
+        (latestPoint?.close ?? 0) >= (chartData[0]?.close ?? latestPoint?.close ?? 0);
+    const primaryColor = isGrowing ? "#1DB954" : "#EA4335";
+    const strokeColor = isGrowing ? "#0B8F47" : "#C5221F";
+    const axisTickFormatter = useCallback(
+        (value: string | number) => {
+            if (typeof value !== "string" && typeof value !== "number") return String(value ?? "");
+            return axisDateFormatter.format(new Date(value));
+        },
+        [axisDateFormatter]
+    );
+
+    const yTickFormatter = useCallback(
+        (value: number) => priceFormatter.format(value),
+        [priceFormatter]
+    );
+
+    const activeChange = activePoint?.change ?? 0;
+    const activeChangePct = activePoint?.changePct ?? 0;
+    const isActiveZero = Math.abs(activeChange) < 1e-10;
+    const activeChangeClass = isActiveZero
+        ? "text-subtle"
+        : activeChange > 0
+            ? "text-accent"
+            : "text-negative";
+    const activeChangeSign = activeChange > 0 ? "+" : activeChange < 0 ? "-" : "";
+    const activeChangeText = !activePoint
+        ? "—"
+        : isActiveZero
+            ? priceFormatter.format(0)
+            : `${activeChangeSign}${priceFormatter.format(Math.abs(activeChange))}`;
+    const activeChangePctText = !activePoint
+        ? "—"
+        : isActiveZero
+            ? percentFormatter.format(0)
+            : `${activeChangeSign}${percentFormatter.format(Math.abs(activeChangePct))}`;
+    const activeDateLabel = activePoint
+        ? tooltipDateFormatter.format(new Date(activePoint.date))
+        : "—";
+
+    const priceLine = (
+        <Line
+            type="monotone"
+            dataKey="close"
+            stroke={strokeColor}
+            strokeWidth={2}
+            dot={false}
+            activeDot={{ r: 4, strokeWidth: 2, stroke: "#fff" }}
+            isAnimationActive={false}
+        />
+    );
+    const smaLine =
+        showSMA && (
+            <Line
+                type="monotone"
+                dataKey="sma"
+                stroke="#0A2342"
+                strokeWidth={1.5}
+                dot={false}
+                strokeDasharray="4 4"
+                isAnimationActive={false}
+            />
+        );
+
     return (
-        <div className="h-72">
-            <ResponsiveContainer width="100%" height="100%">
-                {showArea ? (
-                    <AreaChart data={rows}>
-                        <defs>
-                            <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="5%" stopColor="#3498DB" stopOpacity={0.3} />
-                                <stop offset="95%" stopColor="#3498DB" stopOpacity={0} />
-                            </linearGradient>
-                        </defs>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#BDC3C7" />
-                        <XAxis dataKey="date" tick={{ fontSize: 12 }} tickMargin={8} />
-                        <YAxis tick={{ fontSize: 12 }} width={60} />
-                        <Tooltip />
-                        <Area
-                            type="monotone"
-                            dataKey="close"
-                            stroke="#3498DB"
-                            fill="url(#g)"
-                            fillOpacity={1}
-                        />
-                        {showSMA && (
-                            <Line
-                                type="monotone"
-                                dataKey="sma"
-                                stroke="#0A2342"
-                                dot={false}
-                                strokeDasharray="4 4"
+        <div className="space-y-4">
+            <div className="flex flex-wrap items-baseline gap-x-4 gap-y-2 px-1">
+                <div className="text-3xl font-semibold text-neutral">
+                    {activePoint ? priceFormatter.format(activePoint.close) : "—"}
+                </div>
+                <div className={`text-sm font-semibold ${activeChangeClass}`}>
+                    {activePoint ? `${activeChangeText} (${activeChangePctText}%)` : "—"}
+                </div>
+                <div className="text-xs uppercase tracking-wide text-muted">{activeDateLabel}</div>
+            </div>
+            <div className="h-80">
+                <ResponsiveContainer width="100%" height="100%">
+                    {showArea ? (
+                        <AreaChart data={chartData} margin={{ top: 10, right: 16, left: 0, bottom: 0 }}>
+                            <defs>
+                                <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="0%" stopColor={primaryColor} stopOpacity={0.3} />
+                                    <stop offset="95%" stopColor={primaryColor} stopOpacity={0} />
+                                </linearGradient>
+                            </defs>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" vertical={false} />
+                            <XAxis
+                                dataKey="date"
+                                tick={{ fontSize: 11 }}
+                                tickMargin={10}
+                                axisLine={false}
+                                tickLine={false}
+                                minTickGap={24}
+                                tickFormatter={axisTickFormatter}
                             />
-                        )}
-                    </AreaChart>
-                ) : (
-                    <LineChart data={rows}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#BDC3C7" />
-                        <XAxis dataKey="date" tick={{ fontSize: 12 }} tickMargin={8} />
-                        <YAxis tick={{ fontSize: 12 }} width={60} />
-                        <Tooltip />
-                        <Line type="monotone" dataKey="close" stroke="#3498DB" dot={false} />
-                        {showSMA && (
-                            <Line
-                                type="monotone"
-                                dataKey="sma"
-                                stroke="#0A2342"
-                                dot={false}
-                                strokeDasharray="4 4"
+                            <YAxis
+                                width={70}
+                                tick={{ fontSize: 11 }}
+                                axisLine={false}
+                                tickLine={false}
+                                tickFormatter={yTickFormatter}
+                                domain={["auto", "auto"]}
                             />
-                        )}
-                    </LineChart>
-                )}
-            </ResponsiveContainer>
+                            <Tooltip
+                                cursor={{ stroke: strokeColor, strokeOpacity: 0.2, strokeWidth: 1 }}
+                                content={(
+                                    <ChartTooltipContent
+                                        priceFormatter={priceFormatter}
+                                        percentFormatter={percentFormatter}
+                                        dateFormatter={tooltipDateFormatter}
+                                        onHighlight={handleHighlight}
+                                        showSMA={Boolean(showSMA)}
+                                    />
+                                )}
+                                wrapperStyle={{ outline: "none" }}
+                            />
+                            <Area
+                                type="monotone"
+                                dataKey="close"
+                                stroke={strokeColor}
+                                strokeWidth={2}
+                                fill={`url(#${gradientId})`}
+                                fillOpacity={1}
+                                isAnimationActive={false}
+                            />
+                            {priceLine}
+                            {smaLine}
+                        </AreaChart>
+                    ) : (
+                        <LineChart data={chartData} margin={{ top: 10, right: 16, left: 0, bottom: 0 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" vertical={false} />
+                            <XAxis
+                                dataKey="date"
+                                tick={{ fontSize: 11 }}
+                                tickMargin={10}
+                                axisLine={false}
+                                tickLine={false}
+                                minTickGap={24}
+                                tickFormatter={axisTickFormatter}
+                            />
+                            <YAxis
+                                width={70}
+                                tick={{ fontSize: 11 }}
+                                axisLine={false}
+                                tickLine={false}
+                                tickFormatter={yTickFormatter}
+                                domain={["auto", "auto"]}
+                            />
+                            <Tooltip
+                                cursor={{ stroke: strokeColor, strokeOpacity: 0.2, strokeWidth: 1 }}
+                                content={(
+                                    <ChartTooltipContent
+                                        priceFormatter={priceFormatter}
+                                        percentFormatter={percentFormatter}
+                                        dateFormatter={tooltipDateFormatter}
+                                        onHighlight={handleHighlight}
+                                        showSMA={Boolean(showSMA)}
+                                    />
+                                )}
+                                wrapperStyle={{ outline: "none" }}
+                            />
+                            {priceLine}
+                            {smaLine}
+                        </LineChart>
+                    )}
+                </ResponsiveContainer>
+            </div>
         </div>
     );
 }
@@ -1736,14 +1967,6 @@ export default function Page() {
 
         return Array.from(merged.values()).sort((a, b) => a.date.localeCompare(b.date));
     }, [pfRes]);
-
-    const parseScoreBound = (value?: string): number | null => {
-        if (!value) return null;
-        const trimmed = value.trim();
-        if (!trimmed) return null;
-        const numeric = Number(trimmed);
-        return Number.isFinite(numeric) ? numeric : null;
-    };
 
     const parseUniverseValue = (value: string): string | string[] | null => {
         const trimmed = value.trim();
