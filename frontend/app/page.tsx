@@ -1394,7 +1394,7 @@ function Stats({ data }: { data: Row[] }) {
     const ch = close - first;
     const chPct = (ch / first) * 100;
     return (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+        <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-[1fr_1.5fr_.75fr_.75fr]">
             <div>
                 <div className="text-subtle">Kurs</div>
                 <div className="text-xl font-semibold">{close.toFixed(2)}</div>
