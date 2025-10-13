@@ -1507,24 +1507,14 @@ function ChartTooltipContent({
     priceFormatter,
     percentFormatter,
     dateFormatter,
-    onHighlight,
     showSMA,
 }: TooltipContentProps<number, string> & {
     priceFormatter: Intl.NumberFormat;
     percentFormatter: Intl.NumberFormat;
     dateFormatter: Intl.DateTimeFormat;
-    onHighlight: (point: PriceChartPoint | null) => void;
     showSMA: boolean;
 }) {
     const point = active && payload?.length ? (payload[0]?.payload as PriceChartPoint) : null;
-
-    useEffect(() => {
-        onHighlight(point ?? null);
-    }, [point, onHighlight]);
-
-    useEffect(() => () => {
-        onHighlight(null);
-    }, [onHighlight]);
 
     if (!active || !point || !label) return null;
 
@@ -1611,17 +1601,7 @@ function PriceChart({
         });
     }, [rows]);
 
-    const [highlight, setHighlight] = useState<PriceChartPoint | null>(null);
-    useEffect(() => {
-        setHighlight(null);
-    }, [rows]);
-
-    const handleHighlight = useCallback((point: PriceChartPoint | null) => {
-        setHighlight(point);
-    }, []);
-
     const latestPoint = chartData.at(-1) ?? null;
-    const activePoint = highlight ?? latestPoint;
     const isGrowing =
         (latestPoint?.close ?? 0) >= (chartData[0]?.close ?? latestPoint?.close ?? 0);
     const primaryColor = isGrowing ? "#1DB954" : "#EA4335";
@@ -1639,28 +1619,97 @@ function PriceChart({
         [priceFormatter]
     );
 
-    const activeChange = activePoint?.change ?? 0;
-    const activeChangePct = activePoint?.changePct ?? 0;
-    const isActiveZero = Math.abs(activeChange) < 1e-10;
-    const activeChangeClass = isActiveZero
+    type ChartMouseEvent = {
+        activePayload?: Array<{ payload?: PriceChartPoint }>;
+    };
+
+    const [selection, setSelection] = useState<{
+        start: PriceChartPoint;
+        end: PriceChartPoint;
+    } | null>(null);
+    const [isSelecting, setIsSelecting] = useState(false);
+
+    const getPointFromEvent = useCallback((event: ChartMouseEvent): PriceChartPoint | null => {
+        const payload = event?.activePayload?.[0]?.payload;
+        if (payload && typeof payload === "object" && "close" in payload) {
+            return payload as PriceChartPoint;
+        }
+        return null;
+    }, []);
+
+    const updateSelectionEnd = useCallback((point: PriceChartPoint) => {
+        setSelection((current) => (current ? { start: current.start, end: point } : current));
+    }, []);
+
+    const handleChartMouseDown = useCallback(
+        (event: ChartMouseEvent) => {
+            const point = getPointFromEvent(event);
+            if (!point) return;
+            setSelection({ start: point, end: point });
+            setIsSelecting(true);
+        },
+        [getPointFromEvent]
+    );
+
+    const handleChartMouseMove = useCallback(
+        (event: ChartMouseEvent) => {
+            if (!isSelecting) return;
+            const point = getPointFromEvent(event);
+            if (!point) return;
+            updateSelectionEnd(point);
+        },
+        [getPointFromEvent, isSelecting, updateSelectionEnd]
+    );
+
+    const handleChartMouseUp = useCallback(
+        (event: ChartMouseEvent) => {
+            if (!isSelecting) return;
+            const point = getPointFromEvent(event);
+            if (point) {
+                updateSelectionEnd(point);
+            }
+            setIsSelecting(false);
+        },
+        [getPointFromEvent, isSelecting, updateSelectionEnd]
+    );
+
+    const handleChartMouseLeave = useCallback(() => {
+        setIsSelecting(false);
+    }, []);
+
+    useEffect(() => {
+        setSelection(null);
+        setIsSelecting(false);
+    }, [rows]);
+
+    const selectionStart = selection?.start ?? null;
+    const selectionEnd = selection?.end ?? null;
+    const hasSelection = Boolean(selectionStart && selectionEnd);
+    const selectionChange =
+        hasSelection && selectionStart && selectionEnd
+            ? selectionEnd.close - selectionStart.close
+            : 0;
+    const selectionBase = selectionStart?.close ?? 0;
+    const selectionPct = selectionBase !== 0 ? (selectionChange / selectionBase) * 100 : 0;
+    const selectionIsZero = Math.abs(selectionChange) < 1e-10;
+    const selectionSign = selectionChange > 0 ? "+" : selectionChange < 0 ? "-" : "";
+    const selectionClass = selectionIsZero
         ? "text-subtle"
-        : activeChange > 0
+        : selectionChange > 0
             ? "text-accent"
             : "text-negative";
-    const activeChangeSign = activeChange > 0 ? "+" : activeChange < 0 ? "-" : "";
-    const activeChangeText = !activePoint
-        ? "—"
-        : isActiveZero
-            ? priceFormatter.format(0)
-            : `${activeChangeSign}${priceFormatter.format(Math.abs(activeChange))}`;
-    const activeChangePctText = !activePoint
-        ? "—"
-        : isActiveZero
-            ? percentFormatter.format(0)
-            : `${activeChangeSign}${percentFormatter.format(Math.abs(activeChangePct))}`;
-    const activeDateLabel = activePoint
-        ? tooltipDateFormatter.format(new Date(activePoint.date))
-        : "—";
+    const selectionChangeText = selectionIsZero
+        ? priceFormatter.format(0)
+        : `${selectionSign}${priceFormatter.format(Math.abs(selectionChange))}`;
+    const selectionPctText = selectionIsZero
+        ? percentFormatter.format(0)
+        : `${selectionSign}${percentFormatter.format(Math.abs(selectionPct))}`;
+    const selectionStartLabel = selectionStart
+        ? tooltipDateFormatter.format(new Date(selectionStart.date))
+        : "";
+    const selectionEndLabel = selectionEnd
+        ? tooltipDateFormatter.format(new Date(selectionEnd.date))
+        : "";
 
     const priceLine = (
         <Line
@@ -1688,19 +1737,29 @@ function PriceChart({
 
     return (
         <div className="space-y-4">
-            <div className="flex flex-wrap items-baseline gap-x-4 gap-y-2 px-1">
-                <div className="text-3xl font-semibold text-neutral">
-                    {activePoint ? priceFormatter.format(activePoint.close) : "—"}
-                </div>
-                <div className={`text-sm font-semibold ${activeChangeClass}`}>
-                    {activePoint ? `${activeChangeText} (${activeChangePctText}%)` : "—"}
-                </div>
-                <div className="text-xs uppercase tracking-wide text-muted">{activeDateLabel}</div>
-            </div>
-            <div className="h-80">
+            <div className="relative h-80">
+                {hasSelection && selectionStart && selectionEnd && (
+                    <div className="pointer-events-none absolute left-4 top-4 z-10 max-w-xs rounded-lg border border-soft bg-white/95 px-3 py-2 text-xs shadow">
+                        <div className={`font-semibold ${selectionClass}`}>
+                            {selectionChangeText} ({selectionPctText}%)
+                        </div>
+                        <div className="mt-1 text-[11px] text-muted">
+                            {selectionStartLabel}
+                            {selectionStartLabel && selectionEndLabel ? " → " : ""}
+                            {selectionEndLabel}
+                        </div>
+                    </div>
+                )}
                 <ResponsiveContainer width="100%" height="100%">
                     {showArea ? (
-                        <AreaChart data={chartData} margin={{ top: 10, right: 16, left: 0, bottom: 0 }}>
+                        <AreaChart
+                            data={chartData}
+                            margin={{ top: 10, right: 16, left: 0, bottom: 0 }}
+                            onMouseDown={handleChartMouseDown}
+                            onMouseMove={handleChartMouseMove}
+                            onMouseUp={handleChartMouseUp}
+                            onMouseLeave={handleChartMouseLeave}
+                        >
                             <defs>
                                 <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
                                     <stop offset="0%" stopColor={primaryColor} stopOpacity={0.3} />
@@ -1733,11 +1792,11 @@ function PriceChart({
                                         priceFormatter={priceFormatter}
                                         percentFormatter={percentFormatter}
                                         dateFormatter={tooltipDateFormatter}
-                                        onHighlight={handleHighlight}
                                         showSMA={Boolean(showSMA)}
                                     />
                                 )}
                                 wrapperStyle={{ outline: "none" }}
+                                position={{ y: 24 }}
                             />
                             <Area
                                 type="monotone"
@@ -1752,7 +1811,14 @@ function PriceChart({
                             {smaLine}
                         </AreaChart>
                     ) : (
-                        <LineChart data={chartData} margin={{ top: 10, right: 16, left: 0, bottom: 0 }}>
+                        <LineChart
+                            data={chartData}
+                            margin={{ top: 10, right: 16, left: 0, bottom: 0 }}
+                            onMouseDown={handleChartMouseDown}
+                            onMouseMove={handleChartMouseMove}
+                            onMouseUp={handleChartMouseUp}
+                            onMouseLeave={handleChartMouseLeave}
+                        >
                             <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" vertical={false} />
                             <XAxis
                                 dataKey="date"
@@ -1779,11 +1845,11 @@ function PriceChart({
                                         priceFormatter={priceFormatter}
                                         percentFormatter={percentFormatter}
                                         dateFormatter={tooltipDateFormatter}
-                                        onHighlight={handleHighlight}
                                         showSMA={Boolean(showSMA)}
                                     />
                                 )}
                                 wrapperStyle={{ outline: "none" }}
+                                position={{ y: 24 }}
                             />
                             {priceLine}
                             {smaLine}
