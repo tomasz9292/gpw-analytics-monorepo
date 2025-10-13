@@ -1725,7 +1725,7 @@ function PriceChart({
                                 tickFormatter={yTickFormatter}
                                 domain={["auto", "auto"]}
                             />
-                            <Tooltip
+                            <Tooltip<number, string>
                                 cursor={{ stroke: strokeColor, strokeOpacity: 0.2, strokeWidth: 1 }}
                                 content={(tooltipProps) => (
                                     <ChartTooltipContent
@@ -1771,7 +1771,7 @@ function PriceChart({
                                 tickFormatter={yTickFormatter}
                                 domain={["auto", "auto"]}
                             />
-                            <Tooltip
+                            <Tooltip<number, string>
                                 cursor={{ stroke: strokeColor, strokeOpacity: 0.2, strokeWidth: 1 }}
                                 content={(tooltipProps) => (
                                     <ChartTooltipContent
