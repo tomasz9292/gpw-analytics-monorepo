@@ -1,6 +1,8 @@
 "use client";
 
 import React, { useMemo, useState, useEffect, useId, useCallback, useRef } from "react";
+import Image from "next/image";
+import Script from "next/script";
 import {
     LineChart,
     Line,
@@ -19,6 +21,26 @@ import type { TooltipContentProps } from "recharts";
 import type { CategoricalChartFunc } from "recharts/types/chart/types";
 import type { MouseHandlerDataParam } from "recharts/types/synchronisation/types";
 import type { BrushStartEndIndex } from "recharts/types/context/brushUpdateContext";
+
+declare global {
+    interface Window {
+        google?: {
+            accounts: {
+                id: {
+                    initialize: (options: {
+                        client_id: string;
+                        callback: (response: { credential?: string | undefined }) => void;
+                        ux_mode?: "popup" | "redirect";
+                        auto_select?: boolean;
+                        cancel_on_tap_outside?: boolean;
+                    }) => void;
+                    prompt: () => void;
+                    disableAutoSelect?: () => void;
+                };
+            };
+        };
+    }
+}
 
 /** =========================
  *  API base (proxy w next.config.mjs)
@@ -65,6 +87,9 @@ const buildScoreComponents = (rules: ScoreBuilderRule[]): ScoreComponentRequest[
 
 const createRuleId = () =>
     `rule-${Math.random().toString(36).slice(2, 8)}-${Date.now().toString(36)}`;
+
+const createTemplateId = () =>
+    `tpl-${Math.random().toString(36).slice(2, 8)}-${Date.now().toString(36)}`;
 
 type ScoreMetricOption = {
     value: string;
@@ -126,6 +151,60 @@ const SCORE_METRIC_OPTIONS: ScoreMetricOption[] = [
     },
 ];
 
+const SCORE_UNIVERSE_FALLBACK: string[] = [
+    "CDR.WA",
+    "PKN.WA",
+    "PEO.WA",
+    "KGH.WA",
+    "PGE.WA",
+    "ALE.WA",
+    "DNP.WA",
+    "LPP.WA",
+    "OPL.WA",
+    "MRC.WA",
+];
+
+const SCORE_TEMPLATE_STORAGE_KEY = "gpw_score_templates_v1";
+
+const resolveUniverseWithFallback = (
+    universe: ScorePreviewRequest["universe"],
+    fallback?: string[]
+): ScorePreviewRequest["universe"] => {
+    if (typeof universe === "string" && universe.trim()) {
+        return universe.trim();
+    }
+    if (Array.isArray(universe)) {
+        const cleaned = universe
+            .map((item) => (typeof item === "string" ? item.trim() : ""))
+            .filter(Boolean);
+        if (cleaned.length) {
+            return cleaned;
+        }
+    }
+    if (fallback && fallback.length) {
+        return [...fallback];
+    }
+    return undefined;
+};
+
+const toTemplateRule = (rule: ScoreBuilderRule): ScoreTemplateRule => ({
+    metric: rule.metric,
+    weight: Number(rule.weight) || 0,
+    direction: rule.direction === "asc" ? "asc" : "desc",
+    label: rule.label ?? null,
+    transform: rule.transform ?? "raw",
+});
+
+const fromTemplateRules = (rules: ScoreTemplateRule[]): ScoreBuilderRule[] =>
+    rules.map((rule) => ({
+        id: createRuleId(),
+        metric: rule.metric,
+        weight: Number(rule.weight) || 0,
+        direction: rule.direction === "asc" ? "asc" : "desc",
+        label: rule.label ?? findScoreMetric(rule.metric)?.label ?? undefined,
+        transform: rule.transform ?? "raw",
+    }));
+
 const getDefaultScoreRules = (): ScoreBuilderRule[] => {
     const picks: { option: ScoreMetricOption; weight: number }[] = [
         { option: SCORE_METRIC_OPTIONS[2], weight: 40 },
@@ -143,6 +222,103 @@ const getDefaultScoreRules = (): ScoreBuilderRule[] => {
         transform: "raw",
     }));
 };
+
+const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? "";
+const DEFAULT_WATCHLIST = ["CDR.WA", "PKN.WA", "PKOBP"];
+
+type ScoreDraftState = {
+    name: string;
+    description: string;
+    limit: number;
+    sort: "asc" | "desc";
+    universe: string;
+    minMcap: string;
+    minTurnover: string;
+    asOf: string;
+    rules: ScoreBuilderRule[];
+};
+
+type PortfolioDraftState = {
+    mode: "manual" | "score";
+    rows: { symbol: string; weight: number }[];
+    start: string;
+    end: string;
+    initial: number;
+    fee: number;
+    threshold: number;
+    benchmark: string | null;
+    frequency: Rebalance;
+    score: {
+        name: string;
+        limit: number;
+        weighting: string;
+        direction: "asc" | "desc";
+        universe: string;
+        min: string;
+        max: string;
+    };
+    comparisons: string[];
+};
+
+type AuthUser = {
+    id: string;
+    email: string | null;
+    name: string | null;
+    picture: string | null;
+    provider: "google";
+    createdAt: string;
+    updatedAt: string;
+};
+
+type PersistedPreferences = {
+    watchlist: string[];
+    scoreTemplates: ScoreTemplate[];
+    scoreDraft: ScoreDraftState;
+    portfolioDraft: PortfolioDraftState;
+};
+
+type PublicUserProfile = {
+    user: AuthUser;
+    preferences: PersistedPreferences;
+};
+
+const getDefaultScoreDraft = (): ScoreDraftState => ({
+    name: "custom_quality",
+    description: "Ranking jakościowy – przykład",
+    limit: 10,
+    sort: "desc",
+    universe: "",
+    minMcap: "",
+    minTurnover: "",
+    asOf: new Date().toISOString().slice(0, 10),
+    rules: getDefaultScoreRules(),
+});
+
+const getDefaultPortfolioDraft = (): PortfolioDraftState => ({
+    mode: "manual",
+    rows: [
+        { symbol: "CDR.WA", weight: 40 },
+        { symbol: "PKN.WA", weight: 30 },
+        { symbol: "PKOBP", weight: 30 },
+    ],
+    start: "2015-01-01",
+    end: new Date().toISOString().slice(0, 10),
+    initial: 10000,
+    fee: 0,
+    threshold: 0,
+    benchmark: null,
+    frequency: "monthly",
+    score: {
+        name: "quality_score",
+        limit: 10,
+        weighting: "equal",
+        direction: "desc",
+        universe: "",
+        min: "",
+        max: "",
+    },
+    comparisons: [],
+});
 
 /** =========================
  *  Typy danych
@@ -266,6 +442,28 @@ type ScorePreviewRequest = {
     limit?: number;
     universe?: string | string[] | null;
     sort?: "asc" | "desc" | null;
+};
+
+type ScoreTemplateRule = {
+    metric: string;
+    weight: number;
+    direction: "asc" | "desc";
+    label?: string | null;
+    transform?: "raw" | "zscore" | "percentile" | "";
+};
+
+type ScoreTemplate = {
+    id: string;
+    title: string;
+    name?: string;
+    description?: string;
+    rules: ScoreTemplateRule[];
+    limit: number;
+    sort: "asc" | "desc";
+    universe: string;
+    minMcap: string;
+    minTurnover: string;
+    createdAt: string;
 };
 
 type ScorePreviewRow = {
@@ -438,7 +636,8 @@ async function backtestPortfolio(
 
 async function backtestPortfolioByScore(
     options: ScorePortfolioOptions,
-    components: ScoreComponentRequest[]
+    components: ScoreComponentRequest[],
+    fallbackUniverse?: string[]
 ): Promise<PortfolioResp> {
     const {
         score,
@@ -473,11 +672,13 @@ async function backtestPortfolioByScore(
         label: component.label,
     }));
 
+    const resolvedUniverse = resolveUniverseWithFallback(universe, fallbackUniverse);
+
     const previewPayload: ScorePreviewRequest = {
         name: score && score.trim() ? score.trim() : undefined,
         rules: previewRules,
         limit: limitCandidate,
-        universe,
+        universe: resolvedUniverse,
         sort: direction ?? undefined,
     };
 
@@ -2664,8 +2865,31 @@ function RsiChart({ rows }: { rows: RowRSI[] }) {
  *  Strona główna
  *  ========================= */
 export default function Page() {
-    const [watch, setWatch] = useState<string[]>([]);
-    const [symbol, setSymbol] = useState<string | null>(null);
+    return <AnalyticsDashboard view="analysis" />;
+}
+
+export function AnalyticsDashboard({
+    view,
+}: {
+    view: "analysis" | "score" | "portfolio";
+}) {
+    const defaultScoreDraft = useMemo(() => getDefaultScoreDraft(), []);
+    const defaultPortfolioDraft = useMemo(() => getDefaultPortfolioDraft(), []);
+
+    const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+    const [authLoading, setAuthLoading] = useState(true);
+    const [authError, setAuthError] = useState<string | null>(null);
+    const [profileLoading, setProfileLoading] = useState(false);
+    const [profileError, setProfileError] = useState<string | null>(null);
+    const [profileHydrated, setProfileHydrated] = useState(false);
+    const [googleLoaded, setGoogleLoaded] = useState(false);
+    const googleInitializedRef = useRef(false);
+    const lastSavedPreferencesRef = useRef<string | null>(null);
+    const [authDialogOpen, setAuthDialogOpen] = useState(false);
+    const [authDialogMode, setAuthDialogMode] = useState<"login" | "signup">("login");
+
+    const [watch, setWatch] = useState<string[]>(() => [...DEFAULT_WATCHLIST]);
+    const [symbol, setSymbol] = useState<string | null>(DEFAULT_WATCHLIST[0] ?? null);
     const [period, setPeriod] = useState<ChartPeriod>(365);
     const [area, setArea] = useState(true);
     const [smaOn, setSmaOn] = useState(true);
@@ -2680,50 +2904,589 @@ export default function Page() {
     const [err, setErr] = useState("");
 
     // Score builder
-    const [scoreRules, setScoreRules] = useState<ScoreBuilderRule[]>(() => getDefaultScoreRules());
-    const [scoreNameInput, setScoreNameInput] = useState("custom_quality");
-    const [scoreDescription, setScoreDescription] = useState("Ranking jakościowy – przykład");
-    const [scoreLimit, setScoreLimit] = useState(10);
-    const [scoreSort, setScoreSort] = useState<"asc" | "desc">("desc");
-    const [scoreUniverse, setScoreUniverse] = useState("WIG20.WA");
-    const [scoreAsOf, setScoreAsOf] = useState(() => new Date().toISOString().slice(0, 10));
-    const [scoreMinMcap, setScoreMinMcap] = useState("");
-    const [scoreMinTurnover, setScoreMinTurnover] = useState("");
+    const [scoreRules, setScoreRules] = useState<ScoreBuilderRule[]>(() => defaultScoreDraft.rules);
+    const [scoreNameInput, setScoreNameInput] = useState(defaultScoreDraft.name);
+    const [scoreDescription, setScoreDescription] = useState(defaultScoreDraft.description);
+    const [scoreLimit, setScoreLimit] = useState(defaultScoreDraft.limit);
+    const [scoreSort, setScoreSort] = useState<"asc" | "desc">(defaultScoreDraft.sort);
+    const [scoreUniverse, setScoreUniverse] = useState(defaultScoreDraft.universe);
+    const [scoreUniverseFallback, setScoreUniverseFallback] = useState<string[]>(
+        () => [...SCORE_UNIVERSE_FALLBACK]
+    );
+    const [scoreAsOf, setScoreAsOf] = useState(defaultScoreDraft.asOf);
+    const [scoreMinMcap, setScoreMinMcap] = useState(defaultScoreDraft.minMcap);
+    const [scoreMinTurnover, setScoreMinTurnover] = useState(defaultScoreDraft.minTurnover);
     const [scoreResults, setScoreResults] = useState<ScorePreviewResult | null>(null);
     const [scoreLoading, setScoreLoading] = useState(false);
     const [scoreError, setScoreError] = useState("");
+    const [scoreTemplates, setScoreTemplates] = useState<ScoreTemplate[]>([]);
+    const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
+    const [scoreTemplateFeedback, setScoreTemplateFeedback] = useState<
+        { type: "success" | "error"; message: string } | null
+    >(null);
+    const templatesHydratedRef = useRef(false);
 
     const scoreComponents = useMemo(() => buildScoreComponents(scoreRules), [scoreRules]);
     const scoreTotalWeight = scoreComponents.reduce((acc, component) => acc + component.weight, 0);
     const scoreLimitInvalid = !Number.isFinite(scoreLimit) || scoreLimit <= 0;
     const scoreDisabled = scoreLoading || scoreLimitInvalid || !scoreComponents.length;
+    const editingTemplate = useMemo(
+        () =>
+            editingTemplateId
+                ? scoreTemplates.find((tpl) => tpl.id === editingTemplateId) ?? null
+                : null,
+        [editingTemplateId, scoreTemplates]
+    );
+
+    const isAuthenticated = Boolean(authUser);
+    useEffect(() => {
+        if (isAuthenticated) {
+            setAuthDialogOpen(false);
+        }
+    }, [isAuthenticated]);
+    const useLocalTemplates = !isAuthenticated;
+
+    const openAuthDialog = useCallback((mode: "login" | "signup") => {
+        setAuthDialogMode(mode);
+        setAuthDialogOpen(true);
+        setAuthError(null);
+        setProfileError(null);
+    }, []);
+
+    const closeAuthDialog = useCallback(() => {
+        setAuthDialogOpen(false);
+    }, []);
+
+    const resetToDefaults = useCallback(() => {
+        const freshScoreDraft = getDefaultScoreDraft();
+        const freshPortfolioDraft = getDefaultPortfolioDraft();
+        setWatch([...DEFAULT_WATCHLIST]);
+        setSymbol(DEFAULT_WATCHLIST[0] ?? null);
+        setScoreTemplates([]);
+        setScoreRules(freshScoreDraft.rules.map((rule) => ({ ...rule })));
+        setScoreNameInput(freshScoreDraft.name);
+        setScoreDescription(freshScoreDraft.description);
+        setScoreLimit(freshScoreDraft.limit);
+        setScoreSort(freshScoreDraft.sort);
+        setScoreUniverse(freshScoreDraft.universe);
+        setScoreAsOf(freshScoreDraft.asOf);
+        setScoreMinMcap(freshScoreDraft.minMcap);
+        setScoreMinTurnover(freshScoreDraft.minTurnover);
+        setPfMode(freshPortfolioDraft.mode);
+        setPfRows(freshPortfolioDraft.rows.map((row) => ({ ...row })));
+        setPfStart(freshPortfolioDraft.start);
+        setPfEnd(freshPortfolioDraft.end);
+        setPfInitial(freshPortfolioDraft.initial);
+        setPfFee(freshPortfolioDraft.fee);
+        setPfThreshold(freshPortfolioDraft.threshold);
+        setPfBenchmark(freshPortfolioDraft.benchmark);
+        setPfFreq(freshPortfolioDraft.frequency);
+        setPfScoreName(freshPortfolioDraft.score.name);
+        setPfScoreLimit(freshPortfolioDraft.score.limit);
+        setPfScoreWeighting(freshPortfolioDraft.score.weighting);
+        setPfScoreDirection(freshPortfolioDraft.score.direction);
+        setPfScoreUniverse(freshPortfolioDraft.score.universe);
+        setPfScoreMin(freshPortfolioDraft.score.min);
+        setPfScoreMax(freshPortfolioDraft.score.max);
+        setPfComparisonSymbols([...freshPortfolioDraft.comparisons]);
+        lastSavedPreferencesRef.current = null;
+        setProfileHydrated(false);
+        setProfileLoading(false);
+        setAuthLoading(false);
+    }, []);
+
+    const hydrateFromPreferences = useCallback(
+        (preferences: PersistedPreferences) => {
+            const safeWatch = preferences.watchlist.length
+                ? preferences.watchlist
+                : [...DEFAULT_WATCHLIST];
+            setWatch(safeWatch);
+            setSymbol((prev) => (prev && safeWatch.includes(prev) ? prev : safeWatch[0] ?? null));
+            setScoreTemplates(
+                preferences.scoreTemplates.map((tpl) => ({
+                    ...tpl,
+                    rules: tpl.rules.map((rule) => ({ ...rule })),
+                }))
+            );
+
+            const incomingScoreDraft = preferences.scoreDraft ?? defaultScoreDraft;
+            const scoreRulesSource =
+                incomingScoreDraft.rules && incomingScoreDraft.rules.length
+                    ? incomingScoreDraft.rules
+                    : defaultScoreDraft.rules;
+            setScoreRules(scoreRulesSource.map((rule) => ({ ...rule })));
+            setScoreNameInput(
+                incomingScoreDraft.name?.trim().length
+                    ? incomingScoreDraft.name
+                    : defaultScoreDraft.name
+            );
+            setScoreDescription(
+                incomingScoreDraft.description?.trim().length
+                    ? incomingScoreDraft.description
+                    : defaultScoreDraft.description
+            );
+            setScoreLimit(
+                incomingScoreDraft.limit && incomingScoreDraft.limit > 0
+                    ? incomingScoreDraft.limit
+                    : defaultScoreDraft.limit
+            );
+            setScoreSort(incomingScoreDraft.sort === "asc" ? "asc" : "desc");
+            setScoreUniverse(incomingScoreDraft.universe ?? "");
+            setScoreAsOf(incomingScoreDraft.asOf || defaultScoreDraft.asOf);
+            setScoreMinMcap(incomingScoreDraft.minMcap ?? "");
+            setScoreMinTurnover(incomingScoreDraft.minTurnover ?? "");
+
+            const incomingPortfolio = preferences.portfolioDraft ?? defaultPortfolioDraft;
+            const portfolioRowsSource =
+                incomingPortfolio.rows && incomingPortfolio.rows.length
+                    ? incomingPortfolio.rows
+                    : defaultPortfolioDraft.rows;
+            setPfMode(incomingPortfolio.mode === "score" ? "score" : "manual");
+            setPfRows(portfolioRowsSource.map((row) => ({ ...row })));
+            setPfStart(incomingPortfolio.start || defaultPortfolioDraft.start);
+            setPfEnd(incomingPortfolio.end || defaultPortfolioDraft.end);
+            setPfInitial(
+                incomingPortfolio.initial && incomingPortfolio.initial > 0
+                    ? incomingPortfolio.initial
+                    : defaultPortfolioDraft.initial
+            );
+            setPfFee(
+                typeof incomingPortfolio.fee === "number"
+                    ? incomingPortfolio.fee
+                    : defaultPortfolioDraft.fee
+            );
+            setPfThreshold(
+                typeof incomingPortfolio.threshold === "number"
+                    ? incomingPortfolio.threshold
+                    : defaultPortfolioDraft.threshold
+            );
+            setPfBenchmark(incomingPortfolio.benchmark ?? null);
+            setPfFreq(
+                incomingPortfolio.frequency === "none"
+                    ? "none"
+                    : incomingPortfolio.frequency === "quarterly"
+                    ? "quarterly"
+                    : incomingPortfolio.frequency === "yearly"
+                    ? "yearly"
+                    : "monthly"
+            );
+            const scoreSection = incomingPortfolio.score ?? defaultPortfolioDraft.score;
+            setPfScoreName(scoreSection.name || defaultPortfolioDraft.score.name);
+            setPfScoreLimit(
+                scoreSection.limit && scoreSection.limit > 0
+                    ? scoreSection.limit
+                    : defaultPortfolioDraft.score.limit
+            );
+            setPfScoreWeighting(scoreSection.weighting || defaultPortfolioDraft.score.weighting);
+            setPfScoreDirection(scoreSection.direction === "asc" ? "asc" : "desc");
+            setPfScoreUniverse(scoreSection.universe ?? "");
+            setPfScoreMin(scoreSection.min ?? "");
+            setPfScoreMax(scoreSection.max ?? "");
+            setPfComparisonSymbols(
+                scoreSection && incomingPortfolio.comparisons?.length
+                    ? Array.from(
+                          new Set(
+                              incomingPortfolio.comparisons.map((item) =>
+                                  (item ?? "").toString().trim().toUpperCase()
+                              )
+                          )
+                      ).filter((item) => item)
+                    : [...defaultPortfolioDraft.comparisons]
+            );
+
+            const snapshot: PersistedPreferences = {
+                watchlist: safeWatch,
+                scoreTemplates: preferences.scoreTemplates.map((tpl) => ({
+                    ...tpl,
+                    rules: tpl.rules.map((rule) => ({ ...rule })),
+                })),
+                scoreDraft: {
+                    name: incomingScoreDraft.name || defaultScoreDraft.name,
+                    description:
+                        incomingScoreDraft.description || defaultScoreDraft.description,
+                    limit:
+                        incomingScoreDraft.limit && incomingScoreDraft.limit > 0
+                            ? incomingScoreDraft.limit
+                            : defaultScoreDraft.limit,
+                    sort: incomingScoreDraft.sort === "asc" ? "asc" : "desc",
+                    universe: incomingScoreDraft.universe ?? "",
+                    minMcap: incomingScoreDraft.minMcap ?? "",
+                    minTurnover: incomingScoreDraft.minTurnover ?? "",
+                    asOf: incomingScoreDraft.asOf || defaultScoreDraft.asOf,
+                    rules: scoreRulesSource.map((rule) => ({ ...rule })),
+                },
+                portfolioDraft: {
+                    mode: incomingPortfolio.mode === "score" ? "score" : "manual",
+                    rows: portfolioRowsSource.map((row) => ({ ...row })),
+                    start: incomingPortfolio.start || defaultPortfolioDraft.start,
+                    end: incomingPortfolio.end || defaultPortfolioDraft.end,
+                    initial:
+                        incomingPortfolio.initial && incomingPortfolio.initial > 0
+                            ? incomingPortfolio.initial
+                            : defaultPortfolioDraft.initial,
+                    fee:
+                        typeof incomingPortfolio.fee === "number"
+                            ? incomingPortfolio.fee
+                            : defaultPortfolioDraft.fee,
+                    threshold:
+                        typeof incomingPortfolio.threshold === "number"
+                            ? incomingPortfolio.threshold
+                            : defaultPortfolioDraft.threshold,
+                    benchmark: incomingPortfolio.benchmark ?? null,
+                    frequency:
+                        incomingPortfolio.frequency === "none"
+                            ? "none"
+                            : incomingPortfolio.frequency === "quarterly"
+                            ? "quarterly"
+                            : incomingPortfolio.frequency === "yearly"
+                            ? "yearly"
+                            : "monthly",
+                    score: {
+                        name: scoreSection.name || defaultPortfolioDraft.score.name,
+                        limit:
+                            scoreSection.limit && scoreSection.limit > 0
+                                ? scoreSection.limit
+                                : defaultPortfolioDraft.score.limit,
+                        weighting: scoreSection.weighting || defaultPortfolioDraft.score.weighting,
+                        direction: scoreSection.direction === "asc" ? "asc" : "desc",
+                        universe: scoreSection.universe ?? "",
+                        min: scoreSection.min ?? "",
+                        max: scoreSection.max ?? "",
+                    },
+                    comparisons:
+                        incomingPortfolio.comparisons?.length
+                            ? Array.from(
+                                  new Set(
+                                      incomingPortfolio.comparisons.map((item) =>
+                                          (item ?? "").toString().trim().toUpperCase()
+                                      )
+                                  )
+                              ).filter((item) => item)
+                            : [...defaultPortfolioDraft.comparisons],
+                },
+            };
+            lastSavedPreferencesRef.current = JSON.stringify(snapshot);
+            setProfileHydrated(true);
+        },
+        [defaultPortfolioDraft, defaultScoreDraft]
+    );
+
+    const fetchProfile = useCallback(async () => {
+        setAuthLoading(true);
+        setProfileLoading(true);
+        try {
+            const response = await fetch("/api/account/profile", { cache: "no-store" });
+            if (!response.ok) {
+                if (response.status === 401) {
+                    setAuthUser(null);
+                    resetToDefaults();
+                    lastSavedPreferencesRef.current = null;
+                    return null;
+                }
+                const text = await response.text();
+                throw new Error(
+                    text?.trim()
+                        ? `Nie udało się pobrać profilu: ${text.trim()}`
+                        : `Nie udało się pobrać profilu (status ${response.status})`
+                );
+            }
+            const data = (await response.json()) as PublicUserProfile;
+            setAuthUser(data.user);
+            setAuthError(null);
+            setProfileError(null);
+            hydrateFromPreferences(data.preferences);
+            return data;
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : String(error);
+            setAuthError(message);
+            setProfileError(message);
+            return null;
+        } finally {
+            setAuthLoading(false);
+            setProfileLoading(false);
+        }
+    }, [hydrateFromPreferences, resetToDefaults]);
+
+    useEffect(() => {
+        void fetchProfile();
+    }, [fetchProfile]);
+
+    const handleGoogleCredential = useCallback(
+        async (credential: string | undefined) => {
+            if (!credential) {
+                setAuthError("Nie otrzymano tokenu Google.");
+                return;
+            }
+            setAuthError(null);
+            setProfileError(null);
+            try {
+                const response = await fetch("/api/auth/google", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ credential }),
+                });
+                const payload = (await response
+                    .json()
+                    .catch(() => null)) as { user?: AuthUser; error?: string } | null;
+                if (!response.ok || !payload?.user) {
+                    throw new Error(payload?.error ?? "Logowanie przez Google nie powiodło się.");
+                }
+                setAuthUser(payload.user);
+                setProfileHydrated(false);
+                await fetchProfile();
+            } catch (error: unknown) {
+                const message = error instanceof Error ? error.message : String(error);
+                setAuthError(message);
+            }
+        },
+        [fetchProfile]
+    );
+
+    const initializeGoogle = useCallback(() => {
+        if (googleInitializedRef.current) {
+            return Boolean(window.google?.accounts?.id);
+        }
+        if (!googleLoaded || !GOOGLE_CLIENT_ID) {
+            return false;
+        }
+        const googleApi = window.google?.accounts?.id;
+        if (!googleApi) {
+            return false;
+        }
+        googleApi.initialize({
+            client_id: GOOGLE_CLIENT_ID,
+            callback: (response) => {
+                void handleGoogleCredential(response?.credential);
+            },
+            ux_mode: "popup",
+            auto_select: false,
+            cancel_on_tap_outside: true,
+        });
+        googleInitializedRef.current = true;
+        return true;
+    }, [googleLoaded, handleGoogleCredential]);
+
+    useEffect(() => {
+        if (!googleLoaded) return;
+        void initializeGoogle();
+    }, [googleLoaded, initializeGoogle]);
+
+    const handleSignInClick = useCallback(() => {
+        const ready = initializeGoogle();
+        if (!ready) {
+            setAuthError("Logowanie Google nie jest dostępne. Sprawdź konfigurację klienta.");
+            return false;
+        }
+        window.google?.accounts?.id?.prompt();
+        return true;
+    }, [initializeGoogle]);
+
+    const triggerGoogleAuth = useCallback(() => {
+        const success = handleSignInClick();
+        if (success) {
+            setAuthDialogOpen(false);
+        }
+        return success;
+    }, [handleSignInClick]);
+
+    const handleLogout = useCallback(async () => {
+        try {
+            await fetch("/api/auth/logout", { method: "POST" });
+        } catch {
+            // ignoruj błędy wylogowania
+        }
+        setAuthUser(null);
+        resetToDefaults();
+        setAuthError(null);
+        setProfileError(null);
+        window.google?.accounts?.id?.disableAutoSelect?.();
+    }, [resetToDefaults]);
+
+    useEffect(() => {
+        if (typeof window === "undefined") return;
+        if (!useLocalTemplates) {
+            templatesHydratedRef.current = false;
+            return;
+        }
+        templatesHydratedRef.current = false;
+        try {
+            const stored = window.localStorage.getItem(SCORE_TEMPLATE_STORAGE_KEY);
+            if (!stored) {
+                setScoreTemplates([]);
+                return;
+            }
+            const parsed: unknown = JSON.parse(stored);
+            if (!Array.isArray(parsed)) {
+                setScoreTemplates([]);
+                return;
+            }
+            const normalized = (parsed
+                .map((item) => {
+                    if (!item || typeof item !== "object") return null;
+                    const candidate = item as Partial<ScoreTemplate>;
+                    if (typeof candidate.id !== "string") return null;
+                    const title =
+                        typeof candidate.title === "string" && candidate.title.trim()
+                            ? candidate.title.trim()
+                            : candidate.id;
+                    const rulesSource = Array.isArray(candidate.rules)
+                        ? candidate.rules
+                        : [];
+                    const rules = (rulesSource
+                        .map((rule) => {
+                            if (!rule || typeof rule !== "object") return null;
+                            const asRule = rule as Partial<ScoreTemplateRule>;
+                            if (typeof asRule.metric !== "string") return null;
+                            const transform =
+                                asRule.transform === "zscore"
+                                    ? "zscore"
+                                    : asRule.transform === "percentile"
+                                    ? "percentile"
+                                    : "raw";
+                            return {
+                                metric: asRule.metric,
+                                weight: Number(asRule.weight) || 0,
+                                direction: asRule.direction === "asc" ? "asc" : "desc",
+                                label:
+                                    typeof asRule.label === "string"
+                                        ? asRule.label
+                                        : asRule.label === null
+                                        ? null
+                                        : undefined,
+                                transform,
+                            } satisfies ScoreTemplateRule;
+                        })
+                        .filter(Boolean)) as ScoreTemplateRule[];
+
+                    return {
+                        id: candidate.id,
+                        title,
+                        name:
+                            typeof candidate.name === "string" && candidate.name.trim()
+                                ? candidate.name.trim()
+                                : undefined,
+                        description:
+                            typeof candidate.description === "string" && candidate.description.trim()
+                                ? candidate.description.trim()
+                                : undefined,
+                        rules,
+                        limit:
+                            typeof candidate.limit === "number" && candidate.limit > 0
+                                ? Math.floor(candidate.limit)
+                                : Number(candidate.limit) > 0
+                                ? Math.floor(Number(candidate.limit))
+                                : 10,
+                        sort: candidate.sort === "asc" ? "asc" : "desc",
+                        universe:
+                            typeof candidate.universe === "string" ? candidate.universe : "",
+                        minMcap:
+                            typeof candidate.minMcap === "string" ? candidate.minMcap : "",
+                        minTurnover:
+                            typeof candidate.minTurnover === "string"
+                                ? candidate.minTurnover
+                                : "",
+                        createdAt:
+                            typeof candidate.createdAt === "string"
+                                ? candidate.createdAt
+                                : new Date().toISOString(),
+                    } satisfies ScoreTemplate;
+                })
+                .filter(Boolean)) as ScoreTemplate[];
+            setScoreTemplates(normalized);
+        } catch {
+            // ignoruj uszkodzone dane
+        } finally {
+            templatesHydratedRef.current = true;
+        }
+    }, [useLocalTemplates]);
+
+    useEffect(() => {
+        if (typeof window === "undefined") return;
+        if (!useLocalTemplates) return;
+        if (!templatesHydratedRef.current) return;
+        try {
+            window.localStorage.setItem(
+                SCORE_TEMPLATE_STORAGE_KEY,
+                JSON.stringify(scoreTemplates)
+            );
+        } catch {
+            // ignoruj brak miejsca w localStorage
+        }
+    }, [scoreTemplates, useLocalTemplates]);
+
+    useEffect(() => {
+        if (!editingTemplateId) return;
+        if (!scoreTemplates.some((tpl) => tpl.id === editingTemplateId)) {
+            setEditingTemplateId(null);
+        }
+    }, [editingTemplateId, scoreTemplates]);
+
+    useEffect(() => {
+        let active = true;
+        const loadDefaultUniverse = async () => {
+            try {
+                const response = await fetch("/api/symbols?limit=50");
+                if (!response.ok) {
+                    return;
+                }
+                const data: unknown = await response.json();
+                if (!Array.isArray(data)) {
+                    return;
+                }
+                const extracted = data
+                    .map((item) => {
+                        if (!item || typeof item !== "object") return null;
+                        const symbol = (item as { symbol?: unknown }).symbol;
+                        if (typeof symbol !== "string") return null;
+                        const normalized = symbol.trim().toUpperCase();
+                        return normalized ? normalized : null;
+                    })
+                    .filter((sym): sym is string => Boolean(sym));
+                if (!extracted.length || !active) {
+                    return;
+                }
+                setScoreUniverseFallback((prev) => {
+                    const merged = new Set<string>([...prev, ...extracted]);
+                    return Array.from(merged).slice(0, 100);
+                });
+            } catch {
+                // ignoruj chwilowe błędy sieciowe – fallback pozostanie statyczny
+            }
+        };
+        void loadDefaultUniverse();
+        return () => {
+            active = false;
+        };
+    }, []);
 
     // Portfel
-    const [pfMode, setPfMode] = useState<"manual" | "score">("manual");
-    const [pfRows, setPfRows] = useState<{ symbol: string; weight: number }[]>([
-        { symbol: "CDR.WA", weight: 40 },
-        { symbol: "PKN.WA", weight: 30 },
-        { symbol: "PKOBP", weight: 30 },
-    ]);
-    const [pfStart, setPfStart] = useState("2015-01-01");
-    const [pfEnd, setPfEnd] = useState(() => new Date().toISOString().slice(0, 10));
-    const [pfInitial, setPfInitial] = useState(10000);
-    const [pfFee, setPfFee] = useState(0);
-    const [pfThreshold, setPfThreshold] = useState(0);
-    const [pfBenchmark, setPfBenchmark] = useState<string | null>(null);
+    const [pfMode, setPfMode] = useState<"manual" | "score">(defaultPortfolioDraft.mode);
+    const [pfRows, setPfRows] = useState<{ symbol: string; weight: number }[]>(() =>
+        defaultPortfolioDraft.rows.map((row) => ({ ...row }))
+    );
+    const [pfStart, setPfStart] = useState(defaultPortfolioDraft.start);
+    const [pfEnd, setPfEnd] = useState(defaultPortfolioDraft.end);
+    const [pfInitial, setPfInitial] = useState(defaultPortfolioDraft.initial);
+    const [pfFee, setPfFee] = useState(defaultPortfolioDraft.fee);
+    const [pfThreshold, setPfThreshold] = useState(defaultPortfolioDraft.threshold);
+    const [pfBenchmark, setPfBenchmark] = useState<string | null>(defaultPortfolioDraft.benchmark);
     const [pfLastBenchmark, setPfLastBenchmark] = useState<string | null>(null);
-    const [pfFreq, setPfFreq] = useState<Rebalance>("monthly");
+    const [pfFreq, setPfFreq] = useState<Rebalance>(defaultPortfolioDraft.frequency);
     const [pfRes, setPfRes] = useState<PortfolioResp | null>(null);
     const [pfBrushRange, setPfBrushRange] = useState<BrushStartEndIndex | null>(null);
     const [pfTimelineOpen, setPfTimelineOpen] = useState(false);
-    const [pfScoreName, setPfScoreName] = useState("quality_score");
-    const [pfScoreLimit, setPfScoreLimit] = useState(10);
-    const [pfScoreWeighting, setPfScoreWeighting] = useState("equal");
-    const [pfScoreDirection, setPfScoreDirection] = useState<"asc" | "desc">("desc");
-    const [pfScoreUniverse, setPfScoreUniverse] = useState("");
-    const [pfScoreMin, setPfScoreMin] = useState("");
-    const [pfScoreMax, setPfScoreMax] = useState("");
-    const [pfComparisonSymbols, setPfComparisonSymbols] = useState<string[]>([]);
+    const [pfScoreName, setPfScoreName] = useState(defaultPortfolioDraft.score.name);
+    const [pfScoreLimit, setPfScoreLimit] = useState(defaultPortfolioDraft.score.limit);
+    const [pfScoreWeighting, setPfScoreWeighting] = useState(defaultPortfolioDraft.score.weighting);
+    const [pfScoreDirection, setPfScoreDirection] = useState<"asc" | "desc">(
+        defaultPortfolioDraft.score.direction
+    );
+    const [pfScoreUniverse, setPfScoreUniverse] = useState(defaultPortfolioDraft.score.universe);
+    const [pfScoreMin, setPfScoreMin] = useState(defaultPortfolioDraft.score.min);
+    const [pfScoreMax, setPfScoreMax] = useState(defaultPortfolioDraft.score.max);
+    const [pfComparisonSymbols, setPfComparisonSymbols] = useState<string[]>(
+        () => [...defaultPortfolioDraft.comparisons]
+    );
     const [pfComparisonAllRows, setPfComparisonAllRows] = useState<Record<string, Row[]>>({});
     const [pfComparisonErrors, setPfComparisonErrors] = useState<Record<string, string>>({});
     const [pfPeriod, setPfPeriod] = useState<ChartPeriod>("max");
@@ -2731,6 +3494,7 @@ export default function Page() {
     const pfRangeInvalid = pfStart > pfEnd;
     const [pfLoading, setPfLoading] = useState(false);
     const [pfErr, setPfErr] = useState("");
+    const [pfSelectedTemplateId, setPfSelectedTemplateId] = useState<string | null>(null);
     const pfHasInvalidWeights = pfRows.some((row) => Number(row.weight) < 0 || Number.isNaN(Number(row.weight)));
     const pfHasMissingSymbols = pfRows.some(
         (row) => Number(row.weight) > 0 && (!row.symbol || !row.symbol.trim())
@@ -2749,6 +3513,152 @@ export default function Page() {
         pfLoading || pfInitial <= 0 || pfRangeInvalid || pfScoreNameInvalid || pfScoreLimitInvalid;
     const pfDisableSimulation =
         pfMode === "manual" ? pfDisableManualSimulation : pfDisableScoreSimulation;
+
+    const preferencesObject = useMemo<PersistedPreferences>(() => {
+        const sanitizedWatch = Array.from(
+            new Set(watch.map((item) => item.trim().toUpperCase()).filter((item) => Boolean(item)))
+        );
+        const sanitizedTemplates = scoreTemplates.map((tpl) => ({
+            ...tpl,
+            rules: tpl.rules.map((rule) => ({ ...rule })),
+        }));
+        const scoreDraft: ScoreDraftState = {
+            name: scoreNameInput,
+            description: scoreDescription,
+            limit: scoreLimit,
+            sort: scoreSort,
+            universe: scoreUniverse,
+            minMcap: scoreMinMcap,
+            minTurnover: scoreMinTurnover,
+            asOf: scoreAsOf,
+            rules: scoreRules.map((rule) => ({ ...rule })),
+        };
+        const portfolioDraft: PortfolioDraftState = {
+            mode: pfMode,
+            rows: pfRows.map((row) => ({ ...row })),
+            start: pfStart,
+            end: pfEnd,
+            initial: pfInitial,
+            fee: pfFee,
+            threshold: pfThreshold,
+            benchmark: pfBenchmark ?? null,
+            frequency: pfFreq,
+            score: {
+                name: pfScoreName,
+                limit: pfScoreLimit,
+                weighting: pfScoreWeighting,
+                direction: pfScoreDirection,
+                universe: pfScoreUniverse,
+                min: pfScoreMin,
+                max: pfScoreMax,
+            },
+            comparisons: Array.from(
+                new Set(
+                    pfComparisonSymbols
+                        .map((item) => item.trim().toUpperCase())
+                        .filter((item) => Boolean(item))
+                )
+            ),
+        };
+        return {
+            watchlist: sanitizedWatch,
+            scoreTemplates: sanitizedTemplates,
+            scoreDraft,
+            portfolioDraft,
+        };
+    }, [
+        pfBenchmark,
+        pfComparisonSymbols,
+        pfEnd,
+        pfFee,
+        pfFreq,
+        pfInitial,
+        pfMode,
+        pfRows,
+        pfScoreDirection,
+        pfScoreLimit,
+        pfScoreMax,
+        pfScoreMin,
+        pfScoreName,
+        pfScoreUniverse,
+        pfScoreWeighting,
+        pfStart,
+        pfThreshold,
+        scoreAsOf,
+        scoreDescription,
+        scoreLimit,
+        scoreMinMcap,
+        scoreMinTurnover,
+        scoreNameInput,
+        scoreRules,
+        scoreSort,
+        scoreTemplates,
+        scoreUniverse,
+        watch,
+    ]);
+
+    const preferencesJson = useMemo(() => JSON.stringify(preferencesObject), [preferencesObject]);
+
+    useEffect(() => {
+        if (!isAuthenticated || !profileHydrated) return;
+        if (!preferencesJson) return;
+        if (lastSavedPreferencesRef.current === preferencesJson) return;
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => {
+            void (async () => {
+                try {
+                    const response = await fetch("/api/account/profile", {
+                        method: "PUT",
+                        headers: { "Content-Type": "application/json" },
+                        body: preferencesJson,
+                        signal: controller.signal,
+                    });
+                    if (!response.ok) {
+                        const text = await response.text();
+                        throw new Error(
+                            text?.trim()
+                                ? `Nie udało się zapisać profilu: ${text.trim()}`
+                                : `Nie udało się zapisać profilu (status ${response.status})`
+                        );
+                    }
+                    const data = (await response.json()) as PublicUserProfile;
+                    setAuthUser(data.user);
+                    lastSavedPreferencesRef.current = preferencesJson;
+                    setProfileError(null);
+                } catch (error: unknown) {
+                    if (error instanceof DOMException && error.name === "AbortError") {
+                        return;
+                    }
+                    const message = error instanceof Error ? error.message : String(error);
+                    setProfileError(message);
+                    lastSavedPreferencesRef.current = null;
+                }
+            })();
+        }, 750);
+
+        return () => {
+            clearTimeout(timeout);
+            controller.abort();
+        };
+    }, [isAuthenticated, preferencesJson, profileHydrated]);
+
+    useEffect(() => {
+        if (!pfSelectedTemplateId) return;
+        if (!scoreTemplates.some((tpl) => tpl.id === pfSelectedTemplateId)) {
+            setPfSelectedTemplateId(null);
+        }
+    }, [pfSelectedTemplateId, scoreTemplates]);
+
+    useEffect(() => {
+        if (!pfSelectedTemplateId) return;
+        const tpl = scoreTemplates.find((item) => item.id === pfSelectedTemplateId);
+        if (!tpl) return;
+        setPfScoreName(tpl.name?.trim() ? tpl.name.trim() : tpl.title);
+        setPfScoreDirection(tpl.sort);
+        setPfScoreLimit(tpl.limit);
+        setPfScoreUniverse(tpl.universe ?? "");
+    }, [pfSelectedTemplateId, scoreTemplates]);
 
     useEffect(() => {
         if (pfPeriod !== "max") {
@@ -3067,10 +3977,12 @@ export default function Page() {
 
     const symbolLabel = symbol ?? "—";
     const navItems = [
-        { href: "#watchlist", label: "Watchlista" },
-        { href: "#analysis", label: "Analiza techniczna" },
-        { href: "#score", label: "Ranking score" },
-        { href: "#portfolio", label: "Symulacja portfela" },
+        { href: view === "analysis" ? "#analysis" : "/", label: "Analiza techniczna" },
+        { href: view === "score" ? "#score" : "/ranking-score", label: "Ranking score" },
+        {
+            href: view === "portfolio" ? "#portfolio" : "/symulator-portfela",
+            label: "Symulacja portfela",
+        },
     ];
 
     const comparisonErrorEntries = useMemo(
@@ -3210,17 +4122,114 @@ export default function Page() {
         setScoreDescription("Ranking jakościowy – przykład");
         setScoreLimit(10);
         setScoreSort("desc");
-        setScoreUniverse("WIG20.WA");
+        setScoreUniverse("");
         setScoreAsOf(new Date().toISOString().slice(0, 10));
         setScoreMinMcap("");
         setScoreMinTurnover("");
         setScoreResults(null);
         setScoreError("");
+        setEditingTemplateId(null);
+        setScoreTemplateFeedback(null);
+    };
+
+    const handleSaveScoreTemplate = (
+        mode: "update" | "new" = editingTemplateId ? "update" : "new"
+    ) => {
+        setScoreTemplateFeedback(null);
+        const sanitizedRules = scoreRules
+            .map(toTemplateRule)
+            .filter((rule) => typeof rule.metric === "string" && rule.metric.trim());
+        if (!sanitizedRules.length) {
+            setScoreTemplateFeedback({
+                type: "error",
+                message: "Dodaj co najmniej jedną metrykę, aby zapisać szablon.",
+            });
+            return;
+        }
+
+        const templateTitle = scoreNameInput.trim()
+            ? scoreNameInput.trim()
+            : `Szablon ${scoreTemplates.length + 1}`;
+        const limitValue =
+            typeof scoreLimit === "number" && Number.isFinite(scoreLimit) && scoreLimit > 0
+                ? Math.floor(scoreLimit)
+                : 10;
+
+        const baseTemplate = {
+            title: templateTitle,
+            name: scoreNameInput.trim() || undefined,
+            description: scoreDescription.trim() || undefined,
+            rules: sanitizedRules,
+            limit: limitValue,
+            sort: scoreSort === "asc" ? "asc" : "desc",
+            universe: scoreUniverse,
+            minMcap: scoreMinMcap,
+            minTurnover: scoreMinTurnover,
+        } satisfies Omit<ScoreTemplate, "id" | "createdAt">;
+
+        if (mode === "update" && editingTemplateId) {
+            const existing = scoreTemplates.find((tpl) => tpl.id === editingTemplateId);
+            if (existing) {
+                setScoreTemplates((prev) =>
+                    prev.map((tpl) =>
+                        tpl.id === editingTemplateId ? { ...existing, ...baseTemplate } : tpl
+                    )
+                );
+                setScoreTemplateFeedback({
+                    type: "success",
+                    message: `Zaktualizowano szablon „${templateTitle}”.`,
+                });
+                return;
+            }
+        }
+
+        const newTemplate: ScoreTemplate = {
+            ...baseTemplate,
+            id: createTemplateId(),
+            createdAt: new Date().toISOString(),
+        };
+
+        setScoreTemplates((prev) => [...prev, newTemplate]);
+        setEditingTemplateId(newTemplate.id);
+        setScoreTemplateFeedback({
+            type: "success",
+            message: `Zapisano szablon „${templateTitle}”.`,
+        });
+    };
+
+    const handleApplyScoreTemplate = (template: ScoreTemplate) => {
+        setScoreRules(fromTemplateRules(template.rules));
+        setScoreNameInput(template.name ?? template.title);
+        setScoreDescription(template.description ?? "");
+        setScoreLimit(template.limit);
+        setScoreSort(template.sort);
+        setScoreUniverse(template.universe ?? "");
+        setScoreMinMcap(template.minMcap ?? "");
+        setScoreMinTurnover(template.minTurnover ?? "");
+        setScoreResults(null);
+        setScoreError("");
+        setEditingTemplateId(template.id);
+        setScoreTemplateFeedback({
+            type: "success",
+            message: `Załadowano szablon „${template.title}”.`,
+        });
+    };
+
+    const handleDeleteScoreTemplate = (id: string) => {
+        const template = scoreTemplates.find((tpl) => tpl.id === id);
+        setScoreTemplates((prev) => prev.filter((tpl) => tpl.id !== id));
+        setScoreTemplateFeedback({
+            type: "success",
+            message: template
+                ? `Usunięto szablon „${template.title}”.`
+                : "Usunięto szablon.",
+        });
     };
 
     const handleScorePreview = async () => {
         try {
             setScoreError("");
+            setScoreTemplateFeedback(null);
             setScoreLoading(true);
             setScoreResults(null);
 
@@ -3240,12 +4249,18 @@ export default function Page() {
                 ? Math.floor(Number(scoreLimit))
                 : undefined;
 
+            const parsedUniverse = parseUniverseValue(scoreUniverse);
+            const resolvedUniverse = resolveUniverseWithFallback(
+                parsedUniverse,
+                scoreUniverseFallback
+            );
+
             const payload: ScorePreviewRequest = {
                 name: scoreNameInput.trim() || undefined,
                 description: scoreDescription.trim() || undefined,
                 rules: rulePayload,
                 limit: limitValue,
-                universe: parseUniverseValue(scoreUniverse),
+                universe: resolvedUniverse,
                 sort: scoreSort,
             };
 
@@ -3296,7 +4311,12 @@ export default function Page() {
                         ? universeCandidates[0]
                         : universeCandidates;
 
-                const componentsForScore = scoreComponents;
+                const selectedTemplate = pfSelectedTemplateId
+                    ? scoreTemplates.find((tpl) => tpl.id === pfSelectedTemplateId)
+                    : null;
+                const componentsForScore = selectedTemplate
+                    ? buildScoreComponents(fromTemplateRules(selectedTemplate.rules))
+                    : scoreComponents;
                 if (!componentsForScore.length) {
                     throw new Error("Skonfiguruj ranking score, aby uruchomić symulację.");
                 }
@@ -3318,7 +4338,8 @@ export default function Page() {
                         thresholdPct: pfThreshold,
                         benchmark: pfBenchmark,
                     },
-                    componentsForScore
+                    componentsForScore,
+                    scoreUniverseFallback
                 );
                 setPfRes(res);
             }
@@ -3333,20 +4354,37 @@ export default function Page() {
     };
 
     const removeFromWatch = (sym: string) => {
+        const normalized = sym.trim().toUpperCase();
+        if (!normalized) return;
         setWatch((prev) => {
-            if (!prev.includes(sym)) {
+            if (!prev.includes(normalized)) {
                 return prev;
             }
-            const next = prev.filter((item) => item !== sym);
-            if (symbol === sym) {
+            const next = prev.filter((item) => item !== normalized);
+            if (symbol === normalized) {
                 setSymbol(next.length ? next[0] : null);
             }
             return next;
         });
     };
 
+    const authDialogSectionLabel = authDialogMode === "login" ? "Logowanie" : "Rejestracja";
+    const authDialogHeading =
+        authDialogMode === "login"
+            ? "Wróć do zapisanych ustawień"
+            : "Załóż konto i synchronizuj konfiguracje";
+    const authDialogCtaLabel = authDialogMode === "login" ? "Zaloguj się" : "Załóż konto";
+
     return (
         <div className="min-h-screen bg-page text-neutral">
+            <Script
+                src="https://accounts.google.com/gsi/client"
+                strategy="afterInteractive"
+                async
+                defer
+                onLoad={() => setGoogleLoaded(true)}
+                onError={() => setAuthError("Nie udało się wczytać logowania Google.")}
+            />
             <header className="border-b border-soft bg-primary text-white">
                 <div className="max-w-6xl mx-auto px-4 md:px-8 py-10 space-y-8">
                     <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
@@ -3358,229 +4396,415 @@ export default function Page() {
                                 backendem.
                             </p>
                         </div>
-                        <div className="flex items-center gap-3 self-start md:self-auto">
-                            <button className="px-4 py-2 rounded-xl border border-white/40 text-white hover:bg-white/10">
-                                Zaloguj
-                            </button>
-                            <button className="px-4 py-2 rounded-xl bg-accent text-primary transition hover:bg-[#27AE60]">
-                                Utwórz konto
-                            </button>
+                        <div className="flex flex-col gap-2 items-stretch md:items-end self-start md:self-auto">
+                            {isAuthenticated ? (
+                                <div className="flex items-center gap-3">
+                                    {authUser?.picture ? (
+                                        <Image
+                                            src={authUser.picture}
+                                            alt="Avatar"
+                                            width={40}
+                                            height={40}
+                                            className="h-10 w-10 rounded-full border border-white/40 object-cover"
+                                            unoptimized
+                                        />
+                                    ) : null}
+                                    <div className="text-right">
+                                        <p className="font-semibold text-white">
+                                            {authUser?.name ?? authUser?.email ?? "Użytkownik Google"}
+                                        </p>
+                                        {authUser?.email ? (
+                                            <p className="text-xs text-white/70">{authUser.email}</p>
+                                        ) : null}
+                                        <p className="text-[11px] uppercase tracking-wider text-white/60">
+                                            {profileLoading ? "Zapisywanie ustawień..." : "Konto Google"}
+                                        </p>
+                                    </div>
+                                    <button
+                                        className="px-4 py-2 rounded-xl border border-white/40 text-white hover:bg-white/10 transition disabled:opacity-60"
+                                        onClick={handleLogout}
+                                        disabled={authLoading}
+                                    >
+                                        Wyloguj
+                                    </button>
+                                </div>
+                            ) : (
+                                <>
+                                    <div className="flex items-center gap-3">
+                                        <button
+                                            className="rounded-full border border-white/20 px-5 py-2 text-sm font-semibold text-white/80 transition hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                                            onClick={() => openAuthDialog("login")}
+                                            disabled={authLoading}
+                                        >
+                                            Zaloguj się
+                                        </button>
+                                        <button
+                                            className="rounded-full bg-white px-5 py-2 text-sm font-semibold text-primary shadow-lg shadow-black/10 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                                            onClick={() => openAuthDialog("signup")}
+                                            disabled={authLoading}
+                                        >
+                                            Załóż konto
+                                        </button>
+                                    </div>
+                                    <p className="text-xs text-white/70 md:text-right">
+                                        Historia ustawień jest zapisywana w Twoim koncie Google.
+                                    </p>
+                                    {!GOOGLE_CLIENT_ID && (
+                                        <p className="text-[11px] text-amber-200 md:text-right">
+                                            Ustaw zmienną NEXT_PUBLIC_GOOGLE_CLIENT_ID, aby włączyć logowanie.
+                                        </p>
+                                    )}
+                                </>
+                            )}
+                            {(authError || profileError) && (
+                                <p className="text-xs text-red-200 text-right max-w-xs">
+                                    {authError ?? profileError}
+                                </p>
+                            )}
                         </div>
                     </div>
                     <SectionNav items={navItems} />
                 </div>
             </header>
 
-            <main className="max-w-6xl mx-auto px-4 md:px-8 py-12 space-y-16">
-                <Section
-                    id="watchlist"
-                    kicker="Krok 1"
-                    title="Monitoruj swoje spółki"
-                    description="Dodawaj tickery z GPW, aby szybko przełączać wykresy oraz sekcje analityczne na stronie."
-                    actions={
-                        <TickerAutosuggest
-                            onPick={(sym) => {
-                                setWatch((w) => (w.includes(sym) ? w : [sym, ...w]));
-                                setSymbol(sym);
-                            }}
-                        />
-                    }
+            {!isAuthenticated && authDialogOpen && (
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 px-4 py-6"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="auth-dialog-title"
+                    onClick={closeAuthDialog}
                 >
-                    <Card>
-                        <div className="space-y-4">
-                            <p className="text-sm text-muted">
-                                Kliknij na ticker, aby przełączyć moduły poniżej. Usuń zbędne pozycje przyciskiem ×.
-                            </p>
-                            <Watchlist
-                                items={watch}
-                                current={symbol}
-                                onPick={(sym) => setSymbol(sym)}
-                                onRemove={removeFromWatch}
-                            />
-                        </div>
-                    </Card>
-                </Section>
-
-                <Section
-                    id="analysis"
-                    kicker="Krok 2"
-                    title="Analiza techniczna i kontekst"
-                    description="Przeglądaj kluczowe statystyki, wykres cenowy oraz wskaźniki momentum, a obok miej szybki podgląd fundamentów."
-                >
-                    <div className="grid md:grid-cols-3 gap-6">
-                        <div className="md:col-span-2 space-y-6">
-                            <Card
-                                title={symbol ? `${symbol} – wykres cenowy` : "Wykres cenowy"}
-                                right={
-                                    <>
-                                        {PERIOD_OPTIONS.map(({ label, value }) => (
-                                            <Chip
-                                                key={value}
-                                                active={period === value}
-                                                onClick={() => setPeriod(value)}
-                                            >
-                                                {label}
-                                            </Chip>
-                                        ))}
-                                        <Chip active={area} onClick={() => setArea(!area)}>
-                                            Area
-                                        </Chip>
-                                        <Chip active={smaOn} onClick={() => setSmaOn(!smaOn)}>
-                                            SMA 20
-                                        </Chip>
-                                    </>
-                                }
-                            >
-                                {!symbol ? (
-                                    <div className="p-6 text-sm text-subtle">
-                                        Dodaj spółkę do listy obserwacyjnej, aby zobaczyć wykres.
-                                    </div>
-                                ) : loading ? (
-                                    <div className="p-6 text-sm text-subtle">
-                                        Ładowanie danych z API…
-                                    </div>
-                                ) : rows.length ? (
-                                    <>
-                                        <Stats data={rows} />
-                                        <div className="h-2" />
-                                        {symbol && (
-                                            <div className="rounded-lg border border-dashed border-soft/70 bg-white/60 p-3">
-                                                <div className="flex flex-wrap items-center gap-3">
-                                                    <div className="text-xs font-semibold uppercase tracking-wide text-muted">
-                                                        Porównania
-                                                    </div>
-                                                    <TickerAutosuggest
-                                                        onPick={handleAddComparison}
-                                                        placeholder={
-                                                            comparisonLimitReached
-                                                                ? "Osiągnięto limit porównań"
-                                                                : "Dodaj spółkę do porównania"
-                                                        }
-                                                        inputClassName="w-56"
-                                                        disabled={comparisonLimitReached}
-                                                    />
-                                                    {comparisonLimitReached && (
-                                                        <span className="text-[11px] text-subtle">
-                                                            Maksymalnie {MAX_COMPARISONS} spółek.
-                                                        </span>
-                                                    )}
-                                                </div>
-                                                <div className="mt-3 space-y-2">
-                                                    {comparisonSymbols.length ? (
-                                                        <div className="flex flex-wrap gap-2">
-                                                            {comparisonSymbols.map((sym) => {
-                                                                const color = comparisonColorMap[sym] ?? "#475569";
-                                                                return (
-                                                                    <span
-                                                                        key={sym}
-                                                                        className="inline-flex items-center gap-2 rounded-full border border-soft bg-white/80 px-3 py-1 text-xs font-medium text-neutral shadow-sm"
-                                                                    >
-                                                                        <span
-                                                                            className="h-2.5 w-2.5 rounded-full"
-                                                                            style={{ backgroundColor: color }}
-                                                                        />
-                                                                        {sym}
-                                                                        <button
-                                                                            type="button"
-                                                                            onClick={() => handleRemoveComparison(sym)}
-                                                                            className="text-subtle transition hover:text-negative focus-visible:text-negative"
-                                                                            aria-label={`Usuń ${sym} z porównań`}
-                                                                        >
-                                                                            ×
-                                                                        </button>
-                                                                    </span>
-                                                                );
-                                                            })}
-                                                        </div>
-                                                    ) : (
-                                                        <p className="text-xs text-subtle">
-                                                            Dodaj spółkę, aby porównać zachowanie kursu z innymi instrumentami.
-                                                        </p>
-                                                    )}
-                                                    {comparisonErrorEntries.map(([sym, message]) => (
-                                                        <div key={sym} className="text-xs text-negative">
-                                                            {sym}: {message}
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                        )}
-                                        <PriceChart
-                                            rows={withSma}
-                                            showArea={area}
-                                            showSMA={smaOn}
-                                            brushDataRows={period === "max" ? brushRows : undefined}
-                                            brushRange={period === "max" ? brushRange : null}
-                                            onBrushChange={
-                                                period === "max" ? handleBrushSelectionChange : undefined
-                                            }
-                                            primarySymbol={symbol}
-                                            comparisonSeries={comparisonSeriesForChart}
-                                        />
-                                    </>
-                                ) : (
-                                    <div className="p-6 text-sm text-subtle">
-                                        Brak danych do wyświetlenia
-                                    </div>
-                                )}
-                                {err && symbol && (
-                                    <div className="mt-3 text-sm text-negative">Błąd: {err}</div>
-                                )}
-                            </Card>
-
-                            <Card title="RSI (14)">
-                                {!symbol ? (
-                                    <div className="p-6 text-sm text-subtle">
-                                        Dodaj spółkę, aby zobaczyć wskaźnik RSI.
-                                    </div>
-                                ) : (
-                                    <RsiChart rows={withRsi} />
-                                )}
-                            </Card>
-                        </div>
-
-                        <div className="space-y-6">
-                            <Card title={`Fundamenty – ${symbolLabel}`}>
-                                <div className="text-sm text-subtle">
-                                    {symbol
-                                        ? "Dane przykładowe — podłączymy realne API fundamentów w kolejnym kroku."
-                                        : "Dodaj spółkę, aby zobaczyć sekcję fundamentów."}
-                                </div>
-                                {symbol && (
-                                    <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-y-2 sm:gap-x-4 text-sm">
-                                        <div className="text-subtle">Kapitalizacja</div>
-                                        <div>$—</div>
-                                        <div className="text-subtle">P/E (TTM)</div>
-                                        <div>—</div>
-                                        <div className="text-subtle">Przychody</div>
-                                        <div>—</div>
-                                        <div className="text-subtle">Marża netto</div>
-                                        <div>—</div>
-                                    </div>
-                                )}
-                            </Card>
-
-                            <Card title="Skaner (demo)" right={<Chip active>Beta</Chip>}>
-                                <ul className="text-sm list-disc pl-5 space-y-1">
-                                    <li>Wysoki wolumen vs 20-sesyjna średnia</li>
-                                    <li>RSI &lt; 30 (wyprzedanie)</li>
-                                    <li>Przebicie SMA50 od dołu</li>
-                                    <li>Nowe 52-tygodniowe maksimum</li>
-                                </ul>
-                                <p className="text-xs text-subtle mt-3">
-                                    Podmienimy na realny backend skanera.
+                    <div
+                        className="w-full max-w-lg rounded-3xl bg-white text-slate-900 shadow-2xl"
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        <div className="flex items-start justify-between border-b border-slate-100 px-6 py-5">
+                            <div className="space-y-1">
+                                <p className="text-xs font-semibold uppercase tracking-[0.35em] text-slate-400">
+                                    {authDialogSectionLabel}
                                 </p>
-                            </Card>
+                                <h2 id="auth-dialog-title" className="text-xl font-semibold text-slate-900">
+                                    {authDialogHeading}
+                                </h2>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={closeAuthDialog}
+                                className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 text-lg text-slate-400 transition hover:border-slate-300 hover:text-slate-600"
+                                aria-label="Zamknij okno logowania"
+                            >
+                                ×
+                            </button>
+                        </div>
+                        <div className="space-y-6 px-6 py-6">
+                            <div className="space-y-3">
+                                <button
+                                    type="button"
+                                    disabled
+                                    className="flex w-full items-center justify-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-400"
+                                >
+                                    Kontynuuj przez Facebook
+                                </button>
+                                <button
+                                    type="button"
+                                    disabled
+                                    className="flex w-full items-center justify-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-400"
+                                >
+                                    Kontynuuj przez Apple
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={triggerGoogleAuth}
+                                    className="flex w-full items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-primary shadow hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                    disabled={authLoading || !GOOGLE_CLIENT_ID}
+                                >
+                                    {authLoading ? "Ładowanie logowania..." : "Kontynuuj przez konto Google"}
+                                </button>
+                            </div>
+                            <div className="flex items-center gap-3 text-slate-400">
+                                <span className="h-px flex-1 bg-slate-200" />
+                                <span className="text-xs uppercase tracking-[0.3em]">lub</span>
+                                <span className="h-px flex-1 bg-slate-200" />
+                            </div>
+                            <div className="flex items-center gap-2 rounded-full bg-slate-100 p-1 text-sm font-semibold text-slate-500">
+                                <button
+                                    type="button"
+                                    onClick={() => setAuthDialogMode("login")}
+                                    className={`flex-1 rounded-full px-4 py-2 transition ${
+                                        authDialogMode === "login"
+                                            ? "bg-white text-slate-900 shadow"
+                                            : "hover:text-slate-700"
+                                    }`}
+                                >
+                                    Zaloguj się
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setAuthDialogMode("signup")}
+                                    className={`flex-1 rounded-full px-4 py-2 transition ${
+                                        authDialogMode === "signup"
+                                            ? "bg-white text-slate-900 shadow"
+                                            : "hover:text-slate-700"
+                                    }`}
+                                >
+                                    Załóż konto
+                                </button>
+                            </div>
+                            <div className="space-y-4">
+                                <label className="flex flex-col gap-2 text-sm font-medium text-slate-700">
+                                    <span>E-mail</span>
+                                    <input
+                                        type="email"
+                                        placeholder="adres@email.com"
+                                        className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-slate-500 shadow-inner"
+                                        disabled
+                                    />
+                                </label>
+                                <label className="flex flex-col gap-2 text-sm font-medium text-slate-700">
+                                    <span>Hasło</span>
+                                    <input
+                                        type="password"
+                                        placeholder="••••••••"
+                                        className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-slate-500 shadow-inner"
+                                        disabled
+                                    />
+                                </label>
+                                <button
+                                    type="button"
+                                    className="w-full rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-white opacity-50"
+                                    disabled
+                                >
+                                    {authDialogCtaLabel}
+                                </button>
+                                <p className="text-xs text-slate-500">
+                                    Obsługujemy obecnie logowanie przez Google. Formularz e-mailowy będzie dostępny wkrótce.
+                                </p>
+                                {(authError || profileError) && (
+                                    <p className="text-sm text-red-500">{authError ?? profileError}</p>
+                                )}
+                                {!GOOGLE_CLIENT_ID && (
+                                    <p className="text-xs text-amber-500">
+                                        Dodaj identyfikator klienta Google, aby aktywować przycisk logowania.
+                                    </p>
+                                )}
+                            </div>
                         </div>
                     </div>
-                </Section>
+                </div>
+            )}
 
-                <Section
-                    id="score"
-                    kicker="Krok 3"
-                    title="Konfigurator score"
-                    description="Skonfiguruj zasady rankingu i pobierz wynik z backendu jednym kliknięciem."
-                >
+            <main className="max-w-6xl mx-auto px-4 md:px-8 py-12 space-y-16">
+                {view === "analysis" && (
+                    <Section
+                        id="analysis"
+                        title="Analiza techniczna i kontekst"
+                        description="Dodawaj tickery z GPW do listy obserwacyjnej i analizuj wykres wraz z kluczowymi statystykami, wskaźnikami momentum oraz podglądem fundamentów."
+                        actions={
+                            <TickerAutosuggest
+                                onPick={(sym) => {
+                                    const normalized = sym.trim().toUpperCase();
+                                    if (!normalized) return;
+                                    setWatch((w) => (w.includes(normalized) ? w : [normalized, ...w]));
+                                    setSymbol(normalized);
+                                }}
+                            />
+                        }
+                    >
+                        <div className="space-y-10">
+                            <Card>
+                                <div className="space-y-4">
+                                    <h3 className="text-lg font-semibold text-primary">
+                                        Monitoruj swoje spółki
+                                    </h3>
+                                    <p className="text-sm text-muted">
+                                        Kliknij na ticker, aby przełączyć moduły analizy poniżej. Usuń zbędne pozycje przyciskiem ×.
+                                    </p>
+                                    <Watchlist
+                                        items={watch}
+                                        current={symbol}
+                                        onPick={(sym) => setSymbol(sym)}
+                                        onRemove={removeFromWatch}
+                                    />
+                                </div>
+                            </Card>
+
+                            <div className="grid md:grid-cols-3 gap-6">
+                                <div className="md:col-span-2 space-y-6">
+                                    <Card
+                                        title={symbol ? `${symbol} – wykres cenowy` : "Wykres cenowy"}
+                                        right={
+                                            <>
+                                                {PERIOD_OPTIONS.map(({ label, value }) => (
+                                                    <Chip
+                                                        key={value}
+                                                        active={period === value}
+                                                        onClick={() => setPeriod(value)}
+                                                    >
+                                                        {label}
+                                                    </Chip>
+                                                ))}
+                                                <Chip active={area} onClick={() => setArea(!area)}>
+                                                    Area
+                                                </Chip>
+                                                <Chip active={smaOn} onClick={() => setSmaOn(!smaOn)}>
+                                                    SMA 20
+                                                </Chip>
+                                            </>
+                                        }
+                                    >
+                                        {!symbol ? (
+                                            <div className="p-6 text-sm text-subtle">
+                                                Dodaj spółkę do listy obserwacyjnej, aby zobaczyć wykres.
+                                            </div>
+                                        ) : loading ? (
+                                            <div className="p-6 text-sm text-subtle">
+                                                Ładowanie danych z API…
+                                            </div>
+                                        ) : rows.length ? (
+                                            <>
+                                                <Stats data={rows} />
+                                                <div className="h-2" />
+                                                {symbol && (
+                                                    <div className="rounded-lg border border-dashed border-soft/70 bg-white/60 p-3">
+                                                        <div className="flex flex-wrap items-center gap-3">
+                                                            <div className="text-xs font-semibold uppercase tracking-wide text-muted">
+                                                                Porównania
+                                                            </div>
+                                                            <TickerAutosuggest
+                                                                onPick={handleAddComparison}
+                                                                placeholder={
+                                                                    comparisonLimitReached
+                                                                        ? "Osiągnięto limit porównań"
+                                                                        : "Dodaj spółkę do porównania"
+                                                                }
+                                                                inputClassName="w-56"
+                                                                disabled={comparisonLimitReached}
+                                                            />
+                                                            {comparisonLimitReached && (
+                                                                <span className="text-[11px] text-subtle">
+                                                                    Maksymalnie {MAX_COMPARISONS} spółek.
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                        <div className="mt-3 space-y-2">
+                                                            {comparisonSymbols.length ? (
+                                                                <div className="flex flex-wrap gap-2">
+                                                                    {comparisonSymbols.map((sym) => {
+                                                                        const color = comparisonColorMap[sym] ?? "#475569";
+                                                                        return (
+                                                                            <span
+                                                                                key={sym}
+                                                                                className="inline-flex items-center gap-2 rounded-full border border-soft bg-white/80 px-3 py-1 text-xs font-medium text-neutral shadow-sm"
+                                                                            >
+                                                                                <span
+                                                                                    className="h-2.5 w-2.5 rounded-full"
+                                                                                    style={{ backgroundColor: color }}
+                                                                                />
+                                                                                {sym}
+                                                                                <button
+                                                                                    type="button"
+                                                                                    onClick={() => handleRemoveComparison(sym)}
+                                                                                    className="text-subtle transition hover:text-negative focus-visible:text-negative"
+                                                                                    aria-label={`Usuń ${sym} z porównań`}
+                                                                                >
+                                                                                    ×
+                                                                                </button>
+                                                                            </span>
+                                                                        );
+                                                                    })}
+                                                                </div>
+                                                            ) : (
+                                                                <p className="text-xs text-subtle">
+                                                                    Dodaj spółkę, aby porównać zachowanie kursu z innymi instrumentami.
+                                                                </p>
+                                                            )}
+                                                            {comparisonErrorEntries.map(([sym, message]) => (
+                                                                <div key={sym} className="text-xs text-negative">
+                                                                    {sym}: {message}
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                )}
+                                                <PriceChart
+                                                    rows={withSma}
+                                                    showArea={area}
+                                                    showSMA={smaOn}
+                                                    brushDataRows={period === "max" ? brushRows : undefined}
+                                                    brushRange={period === "max" ? brushRange : null}
+                                                    onBrushChange={
+                                                        period === "max" ? handleBrushSelectionChange : undefined
+                                                    }
+                                                    primarySymbol={symbol}
+                                                    comparisonSeries={comparisonSeriesForChart}
+                                                />
+                                            </>
+                                        ) : (
+                                            <div className="p-6 text-sm text-subtle">
+                                                Brak danych do wyświetlenia
+                                            </div>
+                                        )}
+                                        {err && symbol && (
+                                            <div className="mt-3 text-sm text-negative">Błąd: {err}</div>
+                                        )}
+                                    </Card>
+
+                                    <Card title="RSI (14)">
+                                        {!symbol ? (
+                                            <div className="p-6 text-sm text-subtle">
+                                                Dodaj spółkę, aby zobaczyć wskaźnik RSI.
+                                            </div>
+                                        ) : (
+                                            <RsiChart rows={withRsi} />
+                                        )}
+                                    </Card>
+                                </div>
+
+                                <div className="space-y-6">
+                                    <Card title={`Fundamenty – ${symbolLabel}`}>
+                                        <div className="text-sm text-subtle">
+                                            {symbol
+                                                ? "Dane przykładowe — podłączymy realne API fundamentów w kolejnym kroku."
+                                                : "Dodaj spółkę, aby zobaczyć sekcję fundamentów."}
+                                        </div>
+                                        {symbol && (
+                                            <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-y-2 sm:gap-x-4 text-sm">
+                                                <div className="text-subtle">Kapitalizacja</div>
+                                                <div>$—</div>
+                                                <div className="text-subtle">P/E (TTM)</div>
+                                                <div>—</div>
+                                                <div className="text-subtle">Przychody</div>
+                                                <div>—</div>
+                                                <div className="text-subtle">Marża netto</div>
+                                                <div>—</div>
+                                            </div>
+                                        )}
+                                    </Card>
+
+                                    <Card title="Skaner (demo)" right={<Chip active>Beta</Chip>}>
+                                        <ul className="text-sm list-disc pl-5 space-y-1">
+                                            <li>Wysoki wolumen vs 20-sesyjna średnia</li>
+                                            <li>RSI &lt; 30 (wyprzedanie)</li>
+                                            <li>Przebicie SMA50 od dołu</li>
+                                            <li>Nowe 52-tygodniowe maksimum</li>
+                                        </ul>
+                                        <p className="text-xs text-subtle mt-3">
+                                            Podmienimy na realny backend skanera.
+                                        </p>
+                                    </Card>
+                                </div>
+                            </div>
+                        </div>
+                    </Section>
+                )}
+
+                {view === "score" && (
+                    <Section
+                        id="score"
+                        title="Konfigurator score"
+                        description="Skonfiguruj zasady rankingu i pobierz wynik z backendu jednym kliknięciem."
+                    >
                     <Card title="Konfigurator score" right={<Chip active>Nowość</Chip>}>
                         <div className="space-y-5 text-sm">
                             <div className="grid gap-4 md:grid-cols-2">
@@ -3621,6 +4845,13 @@ export default function Page() {
                                         className={inputBaseClasses}
                                         placeholder="np. WIG20.WA, WIG40.WA"
                                     />
+                                    <span className="text-xs text-subtle">
+                                        Pozostaw puste, aby automatycznie użyć listy
+                                        {" "}
+                                        {scoreUniverseFallback.length}
+                                        {" "}
+                                        najpłynniejszych spółek GPW z backendu.
+                                    </span>
                                 </label>
                                 <label className="flex flex-col gap-2">
                                     <span className="text-muted text-xs uppercase tracking-wide">
@@ -3913,6 +5144,24 @@ export default function Page() {
                                 </button>
                                 <button
                                     type="button"
+                                    onClick={() => handleSaveScoreTemplate()}
+                                    className="px-4 py-2 rounded-xl bg-primary text-white transition hover:opacity-90"
+                                >
+                                    {editingTemplate
+                                        ? "Zapisz zmiany w szablonie"
+                                        : "Zapisz szablon"}
+                                </button>
+                                {editingTemplate && (
+                                    <button
+                                        type="button"
+                                        onClick={() => handleSaveScoreTemplate("new")}
+                                        className="px-4 py-2 rounded-xl border border-soft text-muted transition hover:border-[var(--color-primary)] hover:text-primary"
+                                    >
+                                        Zapisz jako nowy
+                                    </button>
+                                )}
+                                <button
+                                    type="button"
                                     onClick={resetScoreBuilder}
                                     className="px-4 py-2 rounded-xl border border-soft text-muted transition hover:border-[var(--color-primary)] hover:text-primary"
                                 >
@@ -3927,6 +5176,79 @@ export default function Page() {
                                     <div className="text-xs text-negative">Liczba spółek musi być dodatnia.</div>
                                 )}
                             </div>
+                            {editingTemplate && (
+                                <div className="text-xs text-subtle">
+                                    Edytujesz szablon „{editingTemplate.title}”.
+                                </div>
+                            )}
+                            {scoreTemplateFeedback && (
+                                <div
+                                    className={`text-xs ${
+                                        scoreTemplateFeedback.type === "error"
+                                            ? "text-negative"
+                                            : "text-primary"
+                                    }`}
+                                >
+                                    {scoreTemplateFeedback.message}
+                                </div>
+                            )}
+                            {scoreTemplates.length > 0 && (
+                                <div className="space-y-2">
+                                    <div className="text-xs uppercase tracking-wide text-muted">
+                                        Zapisane szablony
+                                    </div>
+                                    <div className="flex flex-col gap-2">
+                                        {scoreTemplates.map((template) => {
+                                            const isActive = template.id === editingTemplateId;
+                                            const rulesCount = template.rules.length;
+                                            const ruleLabel =
+                                                rulesCount === 1
+                                                    ? "1 reguła"
+                                                    : rulesCount >= 2 && rulesCount <= 4
+                                                    ? `${rulesCount} reguły`
+                                                    : `${rulesCount} reguł`;
+                                            const universeLabel = template.universe.trim()
+                                                ? template.universe.trim()
+                                                : "Auto (fallback)";
+                                            return (
+                                                <div
+                                                    key={template.id}
+                                                    className={`flex flex-wrap items-center justify-between gap-2 rounded-xl border px-3 py-2 bg-surface ${
+                                                        isActive ? "border-primary" : "border-soft"
+                                                    }`}
+                                                >
+                                                    <div>
+                                                        <div className="font-medium text-primary">
+                                                            {template.title}
+                                                        </div>
+                                                        <div className="text-xs text-subtle">
+                                                            {ruleLabel} • Limit {template.limit} • Sortowanie: {" "}
+                                                            {template.sort === "asc" ? "rosnąco" : "malejąco"} • Universe: {" "}
+                                                            {universeLabel}
+                                                        </div>
+                                                    </div>
+                                                    <div className="flex flex-wrap gap-2">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleApplyScoreTemplate(template)}
+                                                            className="px-3 py-1.5 rounded-lg bg-accent text-primary text-xs font-medium transition hover:bg-[#27AE60]"
+                                                        >
+                                                            Załaduj
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleDeleteScoreTemplate(template.id)}
+                                                            className="px-3 py-1.5 rounded-lg border border-soft text-xs text-muted transition hover:border-[var(--color-primary)] hover:text-primary"
+                                                        >
+                                                            Usuń
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            )}
                             {scoreError && <div className="text-sm text-negative">Błąd: {scoreError}</div>}
                             {scoreResults ? (
                                 <div className="space-y-4">
@@ -3955,16 +5277,17 @@ export default function Page() {
                         </div>
                     </Card>
                 </Section>
+                )}
 
-                <Section
-                    id="portfolio"
-                    kicker="Krok 4"
-                    title="Portfel – symulacja i rebalansing"
-                    description="Porównaj strategie z realnymi wagami lub rankingiem score, w tym statystyki, wykres i log rebalansingu."
-                >
-                    <Card>
-                        <div className="space-y-8">
-                            <div className="space-y-4">
+                {view === "portfolio" && (
+                    <Section
+                        id="portfolio"
+                        title="Portfel – symulacja i rebalansing"
+                        description="Porównaj strategie z realnymi wagami lub rankingiem score, w tym statystyki, wykres i log rebalansingu."
+                    >
+                        <Card>
+                            <div className="space-y-8">
+                                <div className="space-y-4">
                                 <div className="flex flex-wrap gap-2">
                                     <Chip active={pfMode === "manual"} onClick={() => setPfMode("manual")}>
                                         Własne wagi
@@ -3975,7 +5298,7 @@ export default function Page() {
                                 </div>
                                 <p className="text-sm text-muted">
                                     Wybierz tryb konfiguracji portfela. Wariant score wykorzysta parametry zdefiniowane
-                                    powyżej lub dowolną istniejącą nazwę rankingu z backendu.
+                                    powyżej, zapisany szablon lub dowolną istniejącą nazwę rankingu z backendu.
                                 </p>
                             </div>
                             <div className="grid gap-6 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
@@ -4053,6 +5376,64 @@ export default function Page() {
                                         </>
                                     ) : (
                                         <div className="space-y-3">
+                                            <div className="space-y-2">
+                                                <label className="flex flex-col gap-2">
+                                                    <span className="text-xs uppercase tracking-wide text-muted">
+                                                        Szablon z konfiguratora
+                                                    </span>
+                                                    <div className="flex flex-wrap gap-2">
+                                                        <select
+                                                            value={pfSelectedTemplateId ?? ""}
+                                                            onChange={(e) =>
+                                                                setPfSelectedTemplateId(
+                                                                    e.target.value ? e.target.value : null
+                                                                )
+                                                            }
+                                                            className={`${inputBaseClasses} min-w-[12rem]`}
+                                                            disabled={scoreTemplates.length === 0}
+                                                        >
+                                                            <option value="">
+                                                                Brak – użyj bieżącej konfiguracji
+                                                            </option>
+                                                            {scoreTemplates.map((template) => (
+                                                                <option key={template.id} value={template.id}>
+                                                                    {template.title}
+                                                                </option>
+                                                            ))}
+                                                        </select>
+                                                        {pfSelectedTemplateId && (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => setPfSelectedTemplateId(null)}
+                                                                className="px-3 py-1.5 rounded-lg border border-soft text-xs text-muted transition hover:border-[var(--color-primary)] hover:text-primary"
+                                                            >
+                                                                Wyczyść
+                                                            </button>
+                                                        )}
+                                                        {pfSelectedTemplateId && (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => {
+                                                                    const template = scoreTemplates.find(
+                                                                        (item) => item.id === pfSelectedTemplateId
+                                                                    );
+                                                                    if (template) {
+                                                                        handleApplyScoreTemplate(template);
+                                                                    }
+                                                                }}
+                                                                className="px-3 py-1.5 rounded-lg bg-accent text-primary text-xs font-medium transition hover:bg-[#27AE60]"
+                                                            >
+                                                                Otwórz w konfiguratorze
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                </label>
+                                                <div className="text-xs text-subtle">
+                                                    {scoreTemplates.length
+                                                        ? "Wybierz zapisany zestaw reguł, aby szybko zasymulować portfel."
+                                                        : "Zapisz konfigurację score powyżej, by móc użyć jej tutaj."}
+                                                </div>
+                                            </div>
                                             <div className="grid gap-3 md:grid-cols-2">
                                                 <label className="flex flex-col gap-2">
                                                     <span className="text-xs uppercase tracking-wide text-muted">
@@ -4477,6 +5858,7 @@ export default function Page() {
                         </div>
                     </Card>
                 </Section>
+                )}
 
                 <footer className="pt-6 text-center text-sm text-subtle">
                     © {new Date().getFullYear()} Analityka Rynków • MVP

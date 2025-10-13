@@ -1,36 +1,57 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+## GPW Analytics frontend
 
-## Getting Started
+Interfejs panelu analitycznego wykorzystującego Next.js 15 (App Router) zintegrowany z backendem FastAPI. Aplikacja udostępnia analizę techniczną, konfigurator rankingów oraz symulator portfela. Stan użytkownika (lista obserwowanych, szablony score, ostatnie konfiguracje) może być zapisywany w koncie Google.
 
-First, run the development server:
+## Szybki start
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Domyślnie aplikacja startuje pod adresem [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Logowanie przez Google
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+1. Utwórz identyfikator OAuth 2.0 typu "Web" w konsoli Google Cloud.
+2. Skonfiguruj zmienne środowiskowe (np. w pliku `.env.local`):
 
-## Learn More
+   ```bash
+   NEXT_PUBLIC_GOOGLE_CLIENT_ID="twoj-client-id.apps.googleusercontent.com"
+   AUTH_SECRET="dowolny_silny_klucz_sesji"
+   ```
 
-To learn more about Next.js, take a look at the following resources:
+   `AUTH_SECRET` służy do podpisywania ciasteczek sesji – w środowisku produkcyjnym ustaw długi, losowy ciąg.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+3. W konfiguracji identyfikatora OAuth w konsoli Google uzupełnij pola:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+   | Pole w konsoli Google                     | Wartość dla środowiska lokalnego                     | Wartość produkcyjna (Vercel)                |
+   | ---------------------------------------- | ---------------------------------------------------- | ------------------------------------------- |
+   | Autoryzowane źródła JavaScript           | `http://localhost:3000`                              | `https://gpw-frontend.vercel.app`*          |
+   | Autoryzowane identyfikatory URI przekierowania | *(pozostaw puste – przepływ tokenowy GIS nie używa przekierowania)* | *(pozostaw puste)* |
 
-## Deploy on Vercel
+   \* Zastąp docelową domeną produkcyjną, jeżeli aplikacja działa pod innym adresem.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+4. Po zalogowaniu preferencje użytkownika są zapisywane w pliku `data/users.json` (ścieżka ignorowana przez Gita). Dane synchronizują się automatycznie przy zmianach w konfiguratorach.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Jeżeli `NEXT_PUBLIC_GOOGLE_CLIENT_ID` nie jest ustawiony, przycisk logowania zostanie dezaktywowany.
+
+## Struktura API
+
+- `app/api/auth/google` – obsługa logowania z tokenem Google i tworzenie sesji HTTP-only.
+- `app/api/auth/session` – szybki podgląd bieżącej sesji (używany przez panel).
+- `app/api/auth/logout` – wylogowanie i czyszczenie sesji.
+- `app/api/account/profile` – odczyt i zapis preferencji użytkownika (lista obserwowanych, szablony score, konfiguracje portfela).
+
+Logowanie korzysta z usług Google Identity Services ładowanych po stronie klienta (`https://accounts.google.com/gsi/client`).
+
+## Dane lokalne
+
+Preferencje użytkownika są odkładane w `data/users.json`. Plik tworzony jest automatycznie i ignorowany przez repozytorium. Możesz go ręcznie usunąć, aby "wyczyścić" konta testowe.
+
+## Budowanie i lint
+
+```bash
+npm run build    # produkcyjny build Next.js
+npm run lint     # statyczna analiza kodu
+```
