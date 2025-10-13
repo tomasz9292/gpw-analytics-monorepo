@@ -2885,6 +2885,8 @@ export function AnalyticsDashboard({
     const [googleLoaded, setGoogleLoaded] = useState(false);
     const googleInitializedRef = useRef(false);
     const lastSavedPreferencesRef = useRef<string | null>(null);
+    const [authDialogOpen, setAuthDialogOpen] = useState(false);
+    const [authDialogMode, setAuthDialogMode] = useState<"login" | "signup">("login");
 
     const [watch, setWatch] = useState<string[]>(() => [...DEFAULT_WATCHLIST]);
     const [symbol, setSymbol] = useState<string | null>(DEFAULT_WATCHLIST[0] ?? null);
@@ -2937,7 +2939,23 @@ export function AnalyticsDashboard({
     );
 
     const isAuthenticated = Boolean(authUser);
+    useEffect(() => {
+        if (isAuthenticated) {
+            setAuthDialogOpen(false);
+        }
+    }, [isAuthenticated]);
     const useLocalTemplates = !isAuthenticated;
+
+    const openAuthDialog = useCallback((mode: "login" | "signup") => {
+        setAuthDialogMode(mode);
+        setAuthDialogOpen(true);
+        setAuthError(null);
+        setProfileError(null);
+    }, []);
+
+    const closeAuthDialog = useCallback(() => {
+        setAuthDialogOpen(false);
+    }, []);
 
     const resetToDefaults = useCallback(() => {
         const freshScoreDraft = getDefaultScoreDraft();
@@ -3257,10 +3275,19 @@ export function AnalyticsDashboard({
         const ready = initializeGoogle();
         if (!ready) {
             setAuthError("Logowanie Google nie jest dostępne. Sprawdź konfigurację klienta.");
-            return;
+            return false;
         }
         window.google?.accounts?.id?.prompt();
+        return true;
     }, [initializeGoogle]);
+
+    const triggerGoogleAuth = useCallback(() => {
+        const success = handleSignInClick();
+        if (success) {
+            setAuthDialogOpen(false);
+        }
+        return success;
+    }, [handleSignInClick]);
 
     const handleLogout = useCallback(async () => {
         try {
@@ -4341,6 +4368,13 @@ export function AnalyticsDashboard({
         });
     };
 
+    const authDialogSectionLabel = authDialogMode === "login" ? "Logowanie" : "Rejestracja";
+    const authDialogHeading =
+        authDialogMode === "login"
+            ? "Wróć do zapisanych ustawień"
+            : "Załóż konto i synchronizuj konfiguracje";
+    const authDialogCtaLabel = authDialogMode === "login" ? "Zaloguj się" : "Załóż konto";
+
     return (
         <div className="min-h-screen bg-page text-neutral">
             <Script
@@ -4395,14 +4429,23 @@ export function AnalyticsDashboard({
                                     </button>
                                 </div>
                             ) : (
-                                <div className="flex flex-col md:flex-row md:items-center gap-3">
-                                    <button
-                                        className="px-4 py-2 rounded-xl bg-white text-primary font-medium shadow hover:bg-slate-100 transition disabled:opacity-70"
-                                        onClick={handleSignInClick}
-                                        disabled={authLoading || !GOOGLE_CLIENT_ID}
-                                    >
-                                        {authLoading ? "Sprawdzanie..." : "Zaloguj przez Google"}
-                                    </button>
+                                <>
+                                    <div className="flex items-center gap-3">
+                                        <button
+                                            className="rounded-full border border-white/20 px-5 py-2 text-sm font-semibold text-white/80 transition hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                                            onClick={() => openAuthDialog("login")}
+                                            disabled={authLoading}
+                                        >
+                                            Zaloguj się
+                                        </button>
+                                        <button
+                                            className="rounded-full bg-white px-5 py-2 text-sm font-semibold text-primary shadow-lg shadow-black/10 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                                            onClick={() => openAuthDialog("signup")}
+                                            disabled={authLoading}
+                                        >
+                                            Załóż konto
+                                        </button>
+                                    </div>
                                     <p className="text-xs text-white/70 md:text-right">
                                         Historia ustawień jest zapisywana w Twoim koncie Google.
                                     </p>
@@ -4411,7 +4454,7 @@ export function AnalyticsDashboard({
                                             Ustaw zmienną NEXT_PUBLIC_GOOGLE_CLIENT_ID, aby włączyć logowanie.
                                         </p>
                                     )}
-                                </div>
+                                </>
                             )}
                             {(authError || profileError) && (
                                 <p className="text-xs text-red-200 text-right max-w-xs">
@@ -4423,6 +4466,133 @@ export function AnalyticsDashboard({
                     <SectionNav items={navItems} />
                 </div>
             </header>
+
+            {!isAuthenticated && authDialogOpen && (
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 px-4 py-6"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="auth-dialog-title"
+                    onClick={closeAuthDialog}
+                >
+                    <div
+                        className="w-full max-w-lg rounded-3xl bg-white text-slate-900 shadow-2xl"
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        <div className="flex items-start justify-between border-b border-slate-100 px-6 py-5">
+                            <div className="space-y-1">
+                                <p className="text-xs font-semibold uppercase tracking-[0.35em] text-slate-400">
+                                    {authDialogSectionLabel}
+                                </p>
+                                <h2 id="auth-dialog-title" className="text-xl font-semibold text-slate-900">
+                                    {authDialogHeading}
+                                </h2>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={closeAuthDialog}
+                                className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 text-lg text-slate-400 transition hover:border-slate-300 hover:text-slate-600"
+                                aria-label="Zamknij okno logowania"
+                            >
+                                ×
+                            </button>
+                        </div>
+                        <div className="space-y-6 px-6 py-6">
+                            <div className="space-y-3">
+                                <button
+                                    type="button"
+                                    disabled
+                                    className="flex w-full items-center justify-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-400"
+                                >
+                                    Kontynuuj przez Facebook
+                                </button>
+                                <button
+                                    type="button"
+                                    disabled
+                                    className="flex w-full items-center justify-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-400"
+                                >
+                                    Kontynuuj przez Apple
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={triggerGoogleAuth}
+                                    className="flex w-full items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-primary shadow hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                    disabled={authLoading || !GOOGLE_CLIENT_ID}
+                                >
+                                    {authLoading ? "Ładowanie logowania..." : "Kontynuuj przez konto Google"}
+                                </button>
+                            </div>
+                            <div className="flex items-center gap-3 text-slate-400">
+                                <span className="h-px flex-1 bg-slate-200" />
+                                <span className="text-xs uppercase tracking-[0.3em]">lub</span>
+                                <span className="h-px flex-1 bg-slate-200" />
+                            </div>
+                            <div className="flex items-center gap-2 rounded-full bg-slate-100 p-1 text-sm font-semibold text-slate-500">
+                                <button
+                                    type="button"
+                                    onClick={() => setAuthDialogMode("login")}
+                                    className={`flex-1 rounded-full px-4 py-2 transition ${
+                                        authDialogMode === "login"
+                                            ? "bg-white text-slate-900 shadow"
+                                            : "hover:text-slate-700"
+                                    }`}
+                                >
+                                    Zaloguj się
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setAuthDialogMode("signup")}
+                                    className={`flex-1 rounded-full px-4 py-2 transition ${
+                                        authDialogMode === "signup"
+                                            ? "bg-white text-slate-900 shadow"
+                                            : "hover:text-slate-700"
+                                    }`}
+                                >
+                                    Załóż konto
+                                </button>
+                            </div>
+                            <div className="space-y-4">
+                                <label className="flex flex-col gap-2 text-sm font-medium text-slate-700">
+                                    <span>E-mail</span>
+                                    <input
+                                        type="email"
+                                        placeholder="adres@email.com"
+                                        className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-slate-500 shadow-inner"
+                                        disabled
+                                    />
+                                </label>
+                                <label className="flex flex-col gap-2 text-sm font-medium text-slate-700">
+                                    <span>Hasło</span>
+                                    <input
+                                        type="password"
+                                        placeholder="••••••••"
+                                        className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-slate-500 shadow-inner"
+                                        disabled
+                                    />
+                                </label>
+                                <button
+                                    type="button"
+                                    className="w-full rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-white opacity-50"
+                                    disabled
+                                >
+                                    {authDialogCtaLabel}
+                                </button>
+                                <p className="text-xs text-slate-500">
+                                    Obsługujemy obecnie logowanie przez Google. Formularz e-mailowy będzie dostępny wkrótce.
+                                </p>
+                                {(authError || profileError) && (
+                                    <p className="text-sm text-red-500">{authError ?? profileError}</p>
+                                )}
+                                {!GOOGLE_CLIENT_ID && (
+                                    <p className="text-xs text-amber-500">
+                                        Dodaj identyfikator klienta Google, aby aktywować przycisk logowania.
+                                    </p>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             <main className="max-w-6xl mx-auto px-4 md:px-8 py-12 space-y-16">
                 {view === "analysis" && (
