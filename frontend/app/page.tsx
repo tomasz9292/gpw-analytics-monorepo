@@ -2823,7 +2823,7 @@ export function AnalyticsDashboard({
                     const rulesSource = Array.isArray(candidate.rules)
                         ? candidate.rules
                         : [];
-                    const rules = rulesSource
+                    const rules = (rulesSource
                         .map((rule) => {
                             if (!rule || typeof rule !== "object") return null;
                             const asRule = rule as Partial<ScoreTemplateRule>;
@@ -2847,7 +2847,7 @@ export function AnalyticsDashboard({
                                 transform,
                             } satisfies ScoreTemplateRule;
                         })
-                        .filter((rule): rule is ScoreTemplateRule => Boolean(rule));
+                        .filter(Boolean)) as ScoreTemplateRule[];
 
                     return {
                         id: candidate.id,
