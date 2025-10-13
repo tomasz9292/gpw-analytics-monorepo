@@ -2834,6 +2834,68 @@ export default function Page() {
         setPfBrushRange(null);
     }, [pfRes]);
 
+    const pfPortfolioAllRows = useMemo<Row[]>(
+        () => (pfRes ? portfolioPointsToRows(pfRes.equity) : []),
+        [pfRes]
+    );
+
+    const pfBrushRows = useMemo<RowSMA[]>(
+        () => pfPortfolioAllRows.map((row) => ({ ...row, sma: null })),
+        [pfPortfolioAllRows]
+    );
+
+    const pfVisibleRange = useMemo(() => {
+        const baseRange = computeVisibleRangeForRows(pfPortfolioAllRows, pfPeriod);
+        if (!baseRange) return null;
+        if (pfPeriod !== "max") {
+            return baseRange;
+        }
+        if (!pfBrushRange || !pfPortfolioAllRows.length) {
+            return baseRange;
+        }
+        const total = pfPortfolioAllRows.length;
+        const safeStart = Math.max(0, Math.min(pfBrushRange.startIndex, total - 1));
+        const safeEnd = Math.max(safeStart, Math.min(pfBrushRange.endIndex, total - 1));
+        const startDate = pfPortfolioAllRows[safeStart]?.date ?? baseRange.start;
+        const endDate = pfPortfolioAllRows[safeEnd]?.date ?? baseRange.end;
+        return { start: startDate, end: endDate };
+    }, [pfBrushRange, pfPeriod, pfPortfolioAllRows]);
+
+    const pfPortfolioVisibleRows = useMemo<Row[]>(() => {
+        if (!pfVisibleRange) return [];
+        return pfPortfolioAllRows.filter(
+            (row) => row.date >= pfVisibleRange.start && row.date <= pfVisibleRange.end
+        );
+    }, [pfPortfolioAllRows, pfVisibleRange]);
+
+    const pfPortfolioRowsWithSma = useMemo<RowSMA[]>(
+        () => pfPortfolioVisibleRows.map((row) => ({ ...row, sma: null })),
+        [pfPortfolioVisibleRows]
+    );
+
+    const pfBenchmarkAllRows = useMemo<Row[]>(
+        () => (pfRes?.benchmark?.length ? portfolioPointsToRows(pfRes.benchmark) : []),
+        [pfRes]
+    );
+
+    const pfBenchmarkVisibleRows = useMemo<Row[]>(() => {
+        if (!pfVisibleRange) return [];
+        return pfBenchmarkAllRows.filter(
+            (row) => row.date >= pfVisibleRange.start && row.date <= pfVisibleRange.end
+        );
+    }, [pfBenchmarkAllRows, pfVisibleRange]);
+
+    const pfBenchmarkSeries = useMemo<ComparisonSeries | null>(() => {
+        if (!pfBenchmarkVisibleRows.length) return null;
+        const label = pfLastBenchmark ?? "Benchmark";
+        return {
+            symbol: label,
+            label,
+            color: "#2563EB",
+            rows: pfBenchmarkVisibleRows,
+        };
+    }, [pfBenchmarkVisibleRows, pfLastBenchmark]);
+
     // Quotes loader
     useEffect(() => {
         let live = true;
@@ -3086,68 +3148,6 @@ export default function Page() {
         [comparisonErrors]
     );
     const comparisonLimitReached = comparisonSymbols.length >= MAX_COMPARISONS;
-
-    const pfPortfolioAllRows = useMemo<Row[]>(
-        () => (pfRes ? portfolioPointsToRows(pfRes.equity) : []),
-        [pfRes]
-    );
-
-    const pfBrushRows = useMemo<RowSMA[]>(
-        () => pfPortfolioAllRows.map((row) => ({ ...row, sma: null })),
-        [pfPortfolioAllRows]
-    );
-
-    const pfVisibleRange = useMemo(() => {
-        const baseRange = computeVisibleRangeForRows(pfPortfolioAllRows, pfPeriod);
-        if (!baseRange) return null;
-        if (pfPeriod !== "max") {
-            return baseRange;
-        }
-        if (!pfBrushRange || !pfPortfolioAllRows.length) {
-            return baseRange;
-        }
-        const total = pfPortfolioAllRows.length;
-        const safeStart = Math.max(0, Math.min(pfBrushRange.startIndex, total - 1));
-        const safeEnd = Math.max(safeStart, Math.min(pfBrushRange.endIndex, total - 1));
-        const startDate = pfPortfolioAllRows[safeStart]?.date ?? baseRange.start;
-        const endDate = pfPortfolioAllRows[safeEnd]?.date ?? baseRange.end;
-        return { start: startDate, end: endDate };
-    }, [pfBrushRange, pfPeriod, pfPortfolioAllRows]);
-
-    const pfPortfolioVisibleRows = useMemo<Row[]>(() => {
-        if (!pfVisibleRange) return [];
-        return pfPortfolioAllRows.filter(
-            (row) => row.date >= pfVisibleRange.start && row.date <= pfVisibleRange.end
-        );
-    }, [pfPortfolioAllRows, pfVisibleRange]);
-
-    const pfPortfolioRowsWithSma = useMemo<RowSMA[]>(
-        () => pfPortfolioVisibleRows.map((row) => ({ ...row, sma: null })),
-        [pfPortfolioVisibleRows]
-    );
-
-    const pfBenchmarkAllRows = useMemo<Row[]>(
-        () => (pfRes?.benchmark?.length ? portfolioPointsToRows(pfRes.benchmark) : []),
-        [pfRes]
-    );
-
-    const pfBenchmarkVisibleRows = useMemo<Row[]>(() => {
-        if (!pfVisibleRange) return [];
-        return pfBenchmarkAllRows.filter(
-            (row) => row.date >= pfVisibleRange.start && row.date <= pfVisibleRange.end
-        );
-    }, [pfBenchmarkAllRows, pfVisibleRange]);
-
-    const pfBenchmarkSeries = useMemo<ComparisonSeries | null>(() => {
-        if (!pfBenchmarkVisibleRows.length) return null;
-        const label = pfLastBenchmark ?? "Benchmark";
-        return {
-            symbol: label,
-            label,
-            color: "#2563EB",
-            rows: pfBenchmarkVisibleRows,
-        };
-    }, [pfBenchmarkVisibleRows, pfLastBenchmark]);
 
     useEffect(() => {
         let live = true;
