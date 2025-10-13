@@ -316,9 +316,26 @@ class PortfolioStats(BaseModel):
     last_value: float
 
 
+class PortfolioTrade(BaseModel):
+    symbol: str
+    action: Optional[str] = None
+    weight_change: Optional[float] = None
+    value_change: Optional[float] = None
+    target_weight: Optional[float] = None
+    note: Optional[str] = None
+
+
+class PortfolioRebalanceEvent(BaseModel):
+    date: str
+    reason: Optional[str] = None
+    turnover: Optional[float] = None
+    trades: Optional[List[PortfolioTrade]] = None
+
+
 class PortfolioResp(BaseModel):
     equity: List[PortfolioPoint]
     stats: PortfolioStats
+    rebalances: Optional[List[PortfolioRebalanceEvent]] = None
 
 
 class PortfolioScoreItem(BaseModel):
@@ -900,69 +917,179 @@ def _compute_backtest(
     weights_pct: List[float],
     start: date,
     rebalance: str,
-) -> Tuple[List[PortfolioPoint], PortfolioStats]:
+) -> Tuple[List[PortfolioPoint], PortfolioStats, List[PortfolioRebalanceEvent]]:
     """
     Prosty backtest na dziennych close'ach z rebalancingiem.
+    Obsługuje okresy przed debiutem spółki poprzez normalizację wag
+    wśród dostępnych składników i wymusza rebalans w dniu wejścia na giełdę.
     """
-    # unia dat
-    all_dates = sorted({d for series in closes_map.values() for (d, _) in series})
+
+    start_iso = start.isoformat()
+    all_dates = sorted(
+        {d for series in closes_map.values() for (d, _) in series if d >= start_iso}
+    )
     if not all_dates:
         raise HTTPException(404, "Brak wspólnych notowań")
 
-    # zbuduj słowniki {date: close} per symbol
     close_dicts: Dict[str, Dict[str, float]] = {
         sym: {d: c for (d, c) in series} for sym, series in closes_map.items()
     }
 
-    # filtr: tylko daty obecne dla wszystkich
-    common_dates = []
-    for ds in all_dates:
-        if all(ds in close_dicts[s] for s in close_dicts.keys()):
-            common_dates.append(ds)
+    first_dates: Dict[str, str] = {sym: series[0][0] for sym, series in closes_map.items() if series}
+    last_prices: Dict[str, Optional[float]] = {sym: None for sym in closes_map.keys()}
 
-    if not common_dates:
-        raise HTTPException(404, "Brak wspólnych notowań dla wszystkich spółek")
-
-    # normalizacja wag
     tot = sum(weights_pct) or 1.0
-    w = [x / tot for x in weights_pct]
+    base_weights: Dict[str, float] = {}
+    for sym, weight in zip(closes_map.keys(), weights_pct):
+        base_weights[sym] = (weight or 0.0) / tot
+
+    rebal_dates = set(_rebalance_dates(all_dates, rebalance))
 
     equity: List[PortfolioPoint] = []
-    value = 1.0  # start equity
-    shares: Dict[str, float] = {}
+    rebalances: List[PortfolioRebalanceEvent] = []
+    shares: Dict[str, float] = {sym: 0.0 for sym in closes_map.keys()}
 
-    # daty rebalansingu
-    rebal_dates = set(_rebalance_dates(common_dates, rebalance))
+    portfolio_value = 1.0
 
-    first_date = common_dates[0]
-    # inicjalny zakup
-    for sym, wi in zip(close_dicts.keys(), w):
-        px = close_dicts[sym][first_date]
-        shares[sym] = (value * wi) / px
+    for ds in all_dates:
+        prices_today: Dict[str, float] = {}
+        newly_available: List[str] = []
 
-    equity.append(PortfolioPoint(date=first_date, value=value))
+        for sym, price_map in close_dicts.items():
+            px = price_map.get(ds)
+            if px is not None:
+                prices_today[sym] = px
+                last_prices[sym] = px
+                if first_dates.get(sym) == ds:
+                    newly_available.append(sym)
+            elif shares.get(sym, 0.0) > 0 and last_prices.get(sym) is not None:
+                prices_today[sym] = last_prices[sym]  # podtrzymaj ostatni kurs
 
-    # kolejne dni
-    for ds in common_dates[1:]:
-        # aktualizacja wyceny
-        value = sum(shares[s] * close_dicts[s][ds] for s in shares)
-        # ewentualny rebalans na początku okresu
-        if ds in rebal_dates:
-            for i, sym in enumerate(close_dicts.keys()):
-                px = close_dicts[sym][ds]
-                shares[sym] = (value * w[i]) / px
+        if not prices_today:
+            continue
 
-        equity.append(PortfolioPoint(date=ds, value=value))
+        # wartość portfela przed ewentualnym rebalancingiem
+        if equity:
+            portfolio_value = 0.0
+            for sym, qty in shares.items():
+                if qty <= 0:
+                    continue
+                price = prices_today.get(sym)
+                if price is None:
+                    price = last_prices.get(sym)
+                if price is None:
+                    continue
+                portfolio_value += qty * price
+            if portfolio_value <= 0:
+                portfolio_value = 1.0
 
-    # stats
+        is_first_point = not equity
+        scheduled_rebalance = ds in rebal_dates
+        should_rebalance = is_first_point or scheduled_rebalance or bool(newly_available)
+
+        trades: List[PortfolioTrade] = []
+        turnover_abs = 0.0
+
+        if should_rebalance:
+            # symbole, które mogą uczestniczyć w rebalansingu
+            available_syms = list(prices_today.keys())
+            symbols_with_weight = [sym for sym in available_syms if base_weights.get(sym, 0.0) > 0]
+            if not symbols_with_weight:
+                symbols_with_weight = available_syms
+
+            weight_sum = sum(base_weights.get(sym, 0.0) for sym in symbols_with_weight)
+            targets: Dict[str, float] = {}
+            if weight_sum > 0:
+                for sym in symbols_with_weight:
+                    targets[sym] = base_weights.get(sym, 0.0) / weight_sum
+            else:
+                equal = 1.0 / len(symbols_with_weight) if symbols_with_weight else 0.0
+                for sym in symbols_with_weight:
+                    targets[sym] = equal
+
+            for sym in available_syms:
+                targets.setdefault(sym, 0.0)
+
+            for sym in available_syms:
+                price = prices_today[sym]
+                current_qty = shares.get(sym, 0.0)
+                current_value = current_qty * price
+                current_weight = current_value / portfolio_value if portfolio_value > 0 else 0.0
+                target_weight = targets.get(sym, 0.0)
+                target_value = portfolio_value * target_weight
+                delta_value = target_value - current_value
+
+                if abs(delta_value) > 1e-9:
+                    action = "buy" if delta_value > 0 else "sell"
+                    shares[sym] = target_value / price if price > 0 else 0.0
+                    turnover_abs += abs(delta_value)
+                    note = None
+                    if sym in newly_available:
+                        note = "Dołączono do portfela (debiut notowań)"
+                    trades.append(
+                        PortfolioTrade(
+                            symbol=pretty_symbol(sym),
+                            action=action,
+                            weight_change=target_weight - current_weight,
+                            value_change=delta_value,
+                            target_weight=target_weight,
+                            note=note,
+                        )
+                    )
+                else:
+                    if price > 0:
+                        shares[sym] = current_value / price
+
+            if trades:
+                reasons: List[str] = []
+                if is_first_point:
+                    reasons.append("Start portfela")
+                if newly_available:
+                    joined = ", ".join(pretty_symbol(sym) for sym in newly_available)
+                    reasons.append(f"Nowe spółki: {joined}")
+                if scheduled_rebalance and not is_first_point:
+                    reasons.append("Planowy rebalansing")
+
+                turnover = turnover_abs / portfolio_value if portfolio_value > 0 else 0.0
+                rebalances.append(
+                    PortfolioRebalanceEvent(
+                        date=ds,
+                        reason=" • ".join(reasons) if reasons else None,
+                        turnover=turnover,
+                        trades=trades,
+                    )
+                )
+
+        # aktualizacja wartości portfela po ewentualnym rebalansingu
+        portfolio_value = 0.0
+        for sym, qty in shares.items():
+            if qty <= 0:
+                continue
+            price = prices_today.get(sym)
+            if price is None:
+                price = last_prices.get(sym)
+            if price is None:
+                continue
+            portfolio_value += qty * price
+
+        equity.append(PortfolioPoint(date=ds, value=portfolio_value))
+
+    if not equity:
+        raise HTTPException(404, "Brak notowań do zbudowania portfela")
+
     if len(equity) >= 2:
         first_v = equity[0].value
         last_v = equity[-1].value
-        days = max(1, (datetime.fromisoformat(equity[-1].date) - datetime.fromisoformat(equity[0].date)).days)
+        days = max(
+            1,
+            (
+                datetime.fromisoformat(equity[-1].date)
+                - datetime.fromisoformat(equity[0].date)
+            ).days,
+        )
         years = days / 365.25
         cagr = (last_v / first_v) ** (1 / years) - 1 if years > 0 else 0.0
 
-        # max drawdown
         peak = -1e9
         max_dd = 0.0
         values = [pt.value for pt in equity]
@@ -972,7 +1099,6 @@ def _compute_backtest(
             if dd < max_dd:
                 max_dd = dd
 
-        # dzienna zmienność (bardzo prosto, od equity)
         import statistics
 
         rets: List[float] = []
@@ -993,10 +1119,14 @@ def _compute_backtest(
         )
     else:
         stats = PortfolioStats(
-            cagr=0.0, max_drawdown=0.0, volatility=0.0, sharpe=0.0, last_value=equity[-1].value
+            cagr=0.0,
+            max_drawdown=0.0,
+            volatility=0.0,
+            sharpe=0.0,
+            last_value=equity[-1].value,
         )
 
-    return equity, stats
+    return equity, stats, rebalances
 
 
 def _run_backtest(req: BacktestPortfolioRequest) -> PortfolioResp:
@@ -1043,8 +1173,14 @@ def _run_backtest(req: BacktestPortfolioRequest) -> PortfolioResp:
             raise HTTPException(404, f"Brak danych historycznych dla {rs}")
         closes_map[rs] = series
 
-    equity, stats = _compute_backtest(closes_map, weights_list, dt_start, req.rebalance)
-    return PortfolioResp(equity=equity, stats=stats)
+    equity, stats, rebalances = _compute_backtest(
+        closes_map, weights_list, dt_start, req.rebalance
+    )
+    return PortfolioResp(
+        equity=equity,
+        stats=stats,
+        rebalances=rebalances or None,
+    )
 
 
 def _compute_portfolio_score(req: PortfolioScoreRequest) -> List[PortfolioScoreItem]:
