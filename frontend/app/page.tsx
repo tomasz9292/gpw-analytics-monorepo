@@ -2811,7 +2811,7 @@ export function AnalyticsDashboard({
             if (!stored) return;
             const parsed: unknown = JSON.parse(stored);
             if (!Array.isArray(parsed)) return;
-            const normalized = parsed
+            const normalized = (parsed
                 .map((item) => {
                     if (!item || typeof item !== "object") return null;
                     const candidate = item as Partial<ScoreTemplate>;
@@ -2882,7 +2882,7 @@ export function AnalyticsDashboard({
                                 : new Date().toISOString(),
                     } satisfies ScoreTemplate;
                 })
-                .filter((item): item is ScoreTemplate => Boolean(item));
+                .filter(Boolean)) as ScoreTemplate[];
             setScoreTemplates(normalized);
         } catch {
             // ignoruj uszkodzone dane
