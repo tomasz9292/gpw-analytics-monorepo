@@ -292,6 +292,7 @@ type PortfolioRebalanceTrade = {
     weight_change?: number;
     value_change?: number;
     target_weight?: number;
+    note?: string;
 };
 
 type PortfolioRebalanceEvent = {
@@ -697,6 +698,10 @@ function normalizePortfolioResponse(raw: unknown): PortfolioResp {
                 ["target_weight", "new_weight", "weight_after"]
             );
             if (targetWeight !== undefined) normalizedTrade.target_weight = targetWeight;
+
+            const noteRaw =
+                tradeRecord.note ?? tradeRecord.comment ?? tradeRecord.info ?? tradeRecord.details;
+            if (noteRaw !== undefined) normalizedTrade.note = String(noteRaw);
 
             tradeAcc.push(normalizedTrade);
             return tradeAcc;
@@ -1253,6 +1258,7 @@ function RebalanceTimeline({ events }: { events: PortfolioRebalanceEvent[] }) {
                                             <th className="py-1 pr-3 font-medium">Zmiana wagi</th>
                                             <th className="py-1 pr-3 font-medium">Zmiana wartości</th>
                                             <th className="py-1 pr-3 font-medium">Waga docelowa</th>
+                                            <th className="py-1 pr-3 font-medium">Notatka</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -1275,6 +1281,9 @@ function RebalanceTimeline({ events }: { events: PortfolioRebalanceEvent[] }) {
                                                         ? formatPercent(trade.target_weight, 1)
                                                         : "—"}
                                                 </td>
+                                                <td className="py-1 pr-3 text-subtle">
+                                                    {trade.note ?? "—"}
+                                                </td>
                                             </tr>
                                         ))}
                                     </tbody>
@@ -1283,6 +1292,69 @@ function RebalanceTimeline({ events }: { events: PortfolioRebalanceEvent[] }) {
                         )}
                     </div>
                 ))}
+            </div>
+        </div>
+    );
+}
+
+function TransactionHistory({ events }: { events: PortfolioRebalanceEvent[] }) {
+    const rows = events.flatMap((event) =>
+        (event.trades ?? []).map((trade) => ({
+            date: event.date,
+            reason: event.reason,
+            ...trade,
+        }))
+    );
+
+    if (!rows.length) return null;
+
+    return (
+        <div className="space-y-3">
+            <div className="text-sm text-muted font-medium">Historia transakcji</div>
+            <div className="overflow-x-auto">
+                <table className="min-w-full text-xs md:text-sm">
+                    <thead className="text-left text-subtle">
+                        <tr>
+                            <th className="py-1 pr-3 font-medium">Data</th>
+                            <th className="py-1 pr-3 font-medium">Spółka</th>
+                            <th className="py-1 pr-3 font-medium">Akcja</th>
+                            <th className="py-1 pr-3 font-medium">Zmiana wagi</th>
+                            <th className="py-1 pr-3 font-medium">Zmiana wartości</th>
+                            <th className="py-1 pr-3 font-medium">Waga docelowa</th>
+                            <th className="py-1 pr-3 font-medium">Notatka</th>
+                            <th className="py-1 pr-3 font-medium">Powód</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {rows.map((row, idx) => (
+                            <tr
+                                key={`${row.date}-${row.symbol}-${idx}`}
+                                className="border-t border-soft"
+                            >
+                                <td className="py-1 pr-3 font-medium text-primary">{row.date}</td>
+                                <td className="py-1 pr-3 font-medium">{row.symbol}</td>
+                                <td className="py-1 pr-3 capitalize">{row.action ?? "—"}</td>
+                                <td className="py-1 pr-3">
+                                    {typeof row.weight_change === "number"
+                                        ? formatPercent(row.weight_change, 1)
+                                        : "—"}
+                                </td>
+                                <td className="py-1 pr-3">
+                                    {typeof row.value_change === "number"
+                                        ? row.value_change.toFixed(2)
+                                        : "—"}
+                                </td>
+                                <td className="py-1 pr-3">
+                                    {typeof row.target_weight === "number"
+                                        ? formatPercent(row.target_weight, 1)
+                                        : "—"}
+                                </td>
+                                <td className="py-1 pr-3 text-subtle">{row.note ?? "—"}</td>
+                                <td className="py-1 pr-3 text-subtle">{row.reason ?? "—"}</td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
             </div>
         </div>
     );
@@ -3798,8 +3870,9 @@ export default function Page() {
                                             </ResponsiveContainer>
                                         </div>
                                         {pfRes.rebalances && pfRes.rebalances.length > 0 && (
-                                            <div className="mt-6">
+                                            <div className="mt-6 space-y-6">
                                                 <RebalanceTimeline events={pfRes.rebalances} />
+                                                <TransactionHistory events={pfRes.rebalances} />
                                             </div>
                                         )}
                                         <div className="text-xs text-subtle mt-2 space-y-1">
