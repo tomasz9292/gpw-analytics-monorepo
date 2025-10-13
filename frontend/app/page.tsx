@@ -2777,8 +2777,8 @@ export default function Page() {
     const [pfMode, setPfMode] = useState<"manual" | "score">("manual");
     const [pfRows, setPfRows] = useState<{ symbol: string; weight: number }[]>([
         { symbol: "CDR.WA", weight: 40 },
-        { symbol: "ORLEN.WA", weight: 30 },
-        { symbol: "PKO.WA", weight: 30 },
+        { symbol: "PKN.WA", weight: 30 },
+        { symbol: "PKOBP", weight: 30 },
     ]);
     const [pfStart, setPfStart] = useState("2015-01-01");
     const [pfEnd, setPfEnd] = useState(() => new Date().toISOString().slice(0, 10));
@@ -2789,6 +2789,7 @@ export default function Page() {
     const [pfLastBenchmark, setPfLastBenchmark] = useState<string | null>(null);
     const [pfFreq, setPfFreq] = useState<Rebalance>("monthly");
     const [pfRes, setPfRes] = useState<PortfolioResp | null>(null);
+    const [pfBrushRange, setPfBrushRange] = useState<BrushStartEndIndex | null>(null);
     const [pfScoreName, setPfScoreName] = useState("quality_score");
     const [pfScoreLimit, setPfScoreLimit] = useState(10);
     const [pfScoreWeighting, setPfScoreWeighting] = useState("equal");
@@ -2822,6 +2823,16 @@ export default function Page() {
         pfLoading || pfInitial <= 0 || pfRangeInvalid || pfScoreNameInvalid || pfScoreLimitInvalid;
     const pfDisableSimulation =
         pfMode === "manual" ? pfDisableManualSimulation : pfDisableScoreSimulation;
+
+    useEffect(() => {
+        if (pfPeriod !== "max") {
+            setPfBrushRange(null);
+        }
+    }, [pfPeriod]);
+
+    useEffect(() => {
+        setPfBrushRange(null);
+    }, [pfRes]);
 
     // Quotes loader
     useEffect(() => {
@@ -3026,6 +3037,26 @@ export default function Page() {
         });
     }, []);
 
+    const handlePfBrushSelectionChange = useCallback(
+        (range: BrushStartEndIndex) => {
+            if (pfPeriod !== "max" || !pfPortfolioAllRows.length) return;
+            const total = pfPortfolioAllRows.length;
+            const safeStart = Math.max(0, Math.min(range.startIndex, total - 1));
+            const safeEnd = Math.max(safeStart, Math.min(range.endIndex, total - 1));
+            setPfBrushRange((current) => {
+                if (
+                    current &&
+                    current.startIndex === safeStart &&
+                    current.endIndex === safeEnd
+                ) {
+                    return current;
+                }
+                return { startIndex: safeStart, endIndex: safeEnd };
+            });
+        },
+        [pfPeriod, pfPortfolioAllRows]
+    );
+
     const handleBrushSelectionChange = useCallback(
         (range: BrushStartEndIndex) => {
             if (period !== "max" || !allRows.length) return;
@@ -3061,10 +3092,27 @@ export default function Page() {
         [pfRes]
     );
 
-    const pfVisibleRange = useMemo(
-        () => computeVisibleRangeForRows(pfPortfolioAllRows, pfPeriod),
-        [pfPortfolioAllRows, pfPeriod]
+    const pfBrushRows = useMemo<RowSMA[]>(
+        () => pfPortfolioAllRows.map((row) => ({ ...row, sma: null })),
+        [pfPortfolioAllRows]
     );
+
+    const pfVisibleRange = useMemo(() => {
+        const baseRange = computeVisibleRangeForRows(pfPortfolioAllRows, pfPeriod);
+        if (!baseRange) return null;
+        if (pfPeriod !== "max") {
+            return baseRange;
+        }
+        if (!pfBrushRange || !pfPortfolioAllRows.length) {
+            return baseRange;
+        }
+        const total = pfPortfolioAllRows.length;
+        const safeStart = Math.max(0, Math.min(pfBrushRange.startIndex, total - 1));
+        const safeEnd = Math.max(safeStart, Math.min(pfBrushRange.endIndex, total - 1));
+        const startDate = pfPortfolioAllRows[safeStart]?.date ?? baseRange.start;
+        const endDate = pfPortfolioAllRows[safeEnd]?.date ?? baseRange.end;
+        return { start: startDate, end: endDate };
+    }, [pfBrushRange, pfPeriod, pfPortfolioAllRows]);
 
     const pfPortfolioVisibleRows = useMemo<Row[]>(() => {
         if (!pfVisibleRange) return [];
@@ -4432,6 +4480,17 @@ export default function Page() {
                                                     rows={pfPortfolioRowsWithSma}
                                                     showArea
                                                     showSMA={false}
+                                                    brushDataRows={
+                                                        pfPeriod === "max" ? pfBrushRows : undefined
+                                                    }
+                                                    brushRange={
+                                                        pfPeriod === "max" ? pfBrushRange : null
+                                                    }
+                                                    onBrushChange={
+                                                        pfPeriod === "max"
+                                                            ? handlePfBrushSelectionChange
+                                                            : undefined
+                                                    }
                                                     primarySymbol="Portfel"
                                                     comparisonSeries={pfComparisonSeriesForChart}
                                                 />
