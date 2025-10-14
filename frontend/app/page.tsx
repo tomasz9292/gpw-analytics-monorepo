@@ -2,6 +2,7 @@
 
 import React, { useMemo, useState, useEffect, useId, useCallback, useRef } from "react";
 import Image from "next/image";
+import Link from "next/link";
 import Script from "next/script";
 import {
     LineChart,
@@ -1470,13 +1471,13 @@ const SectionNav = ({ items }: { items: NavItem[] }) => {
     return (
         <nav className="flex flex-wrap gap-2 text-sm">
             {items.map((item) => (
-                <a
+                <Link
                     key={item.href}
                     href={item.href}
                     className="px-3 py-1 rounded-full border border-white/20 bg-white/10 text-white/80 hover:text-white hover:border-white/40 transition"
                 >
                     {item.label}
-                </a>
+                </Link>
             ))}
         </nav>
     );
@@ -1544,7 +1545,7 @@ const SidebarNav = ({
                 const active = item.key && item.key === activeKey;
                 const Icon = item.icon;
                 return (
-                    <a
+                    <Link
                         key={item.href}
                         href={item.href}
                         aria-label={collapsed ? item.label : undefined}
@@ -1606,7 +1607,7 @@ const SidebarNav = ({
                             </svg>
                         )}
                         {active && collapsed && <span className="sr-only">(aktywny)</span>}
-                    </a>
+                    </Link>
                 );
             })}
         </nav>
