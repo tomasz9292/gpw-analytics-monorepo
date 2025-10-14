@@ -1649,6 +1649,8 @@ const SidebarContent = ({
     const sectionPadding = collapsed ? "px-3" : "px-5";
     const headerSpacing = collapsed ? "space-y-4" : "space-y-5";
     const collapseToggleLabel = collapsed ? "Otwórz pasek boczny" : "Zamknij pasek boczny";
+    const toggleTooltipClass =
+        "pointer-events-none absolute left-full top-1/2 z-20 ml-3 -translate-y-1/2 whitespace-nowrap rounded-lg bg-[#1a1c23] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.28em] text-white opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100";
     const renderBrandBadge = () => (
         <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-[#10a37f] via-[#0f5d4a] to-[#0b3d2d] text-sm font-semibold">
             GA
@@ -1659,7 +1661,7 @@ const SidebarContent = ({
             <div className="group relative">
                 {renderBrandBadge()}
                 {onToggleCollapse ? (
-                    <span className="pointer-events-none absolute left-full top-1/2 z-20 ml-3 -translate-y-1/2 whitespace-nowrap rounded-lg border border-white/10 bg-[#1a1c23]/95 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.28em] text-white opacity-0 shadow-[0_12px_30px_rgba(0,0,0,0.45)] transition-opacity duration-150 group-hover:opacity-100">
+                    <span className={toggleTooltipClass}>
                         {collapseToggleLabel}
                     </span>
                 ) : null}
@@ -1681,7 +1683,7 @@ const SidebarContent = ({
             aria-expanded={!collapsed}
         >
             <SidebarToggleGlyph className="h-4 w-4" />
-            <span className="pointer-events-none absolute left-full top-1/2 z-20 ml-3 -translate-y-1/2 whitespace-nowrap rounded-lg border border-white/10 bg-[#1a1c23]/95 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.28em] text-white opacity-0 shadow-[0_12px_30px_rgba(0,0,0,0.45)] transition group-hover:opacity-100 group-focus-visible:opacity-100">
+            <span className={toggleTooltipClass}>
                 {collapseToggleLabel}
             </span>
         </button>
@@ -1710,7 +1712,7 @@ const SidebarContent = ({
                                 <span className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100">
                                     <SidebarToggleGlyph className="h-5 w-5 text-white" />
                                 </span>
-                                <span className="pointer-events-none absolute left-full top-1/2 z-20 ml-3 -translate-y-1/2 whitespace-nowrap rounded-lg border border-white/10 bg-[#1a1c23]/95 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.28em] text-white opacity-0 shadow-[0_12px_30px_rgba(0,0,0,0.45)] transition group-hover:opacity-100 group-focus-visible:opacity-100">
+                                <span className={toggleTooltipClass}>
                                     {collapseToggleLabel}
                                 </span>
                             </button>
@@ -4979,8 +4981,8 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                 />
             </aside>
             <div className="flex min-h-screen flex-1 flex-col">
-                <header className="border-b border-soft/60 bg-primary/10 text-white backdrop-blur">
-                    <div className="mx-auto w-full max-w-6xl px-4 py-8 md:px-8 md:py-10">
+                <header className="text-white lg:hidden">
+                    <div className="mx-auto w-full max-w-6xl px-4 py-4 md:px-8 md:py-6">
                         <div className="mb-4 flex items-center justify-between lg:mb-0">
                             <div className="flex items-center gap-3">
                                 <button
@@ -5008,7 +5010,7 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                                 <span className="text-sm font-semibold text-white lg:hidden">GPW Analytics</span>
                             </div>
                         </div>
-                        <div className="mt-6 space-y-4 lg:hidden">
+                        <div className="mt-6 space-y-4">
                             {isAuthenticated ? (
                                 <div className="flex items-center gap-3 rounded-2xl bg-white/10 p-4">
                                     {authUser?.picture ? (
@@ -5212,7 +5214,7 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
             )}
 
             <main className="flex-1 overflow-y-auto">
-                <div className="mx-auto w-full max-w-6xl px-4 py-12 md:px-8 md:py-12 space-y-16">
+                <div className="mx-auto w-full max-w-6xl px-4 py-8 md:px-8 md:py-12 space-y-16">
                     {view === "analysis" && (
                         <Section
                             id="analysis"
