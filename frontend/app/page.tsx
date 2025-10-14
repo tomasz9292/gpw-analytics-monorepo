@@ -1359,7 +1359,111 @@ const Section = ({
 );
 
 type DashboardView = "analysis" | "score" | "portfolio";
-type NavItem = { href: string; label: string; key?: DashboardView };
+type NavItem = {
+    href: string;
+    label: string;
+    key?: DashboardView;
+    icon?: React.ComponentType<{ className?: string }>;
+};
+
+const IconSparkline = ({ className }: { className?: string }) => (
+    <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        xmlns="http://www.w3.org/2000/svg"
+        className={className}
+    >
+        <path
+            d="M4 18H20"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+        />
+        <path
+            d="M5 13.5L9.5 9L12.5 12L19 5"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+        />
+    </svg>
+);
+
+const IconTrophy = ({ className }: { className?: string }) => (
+    <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        xmlns="http://www.w3.org/2000/svg"
+        className={className}
+    >
+        <path
+            d="M8 4H16V7.5C16 9.433 14.433 11 12.5 11H11.5C9.567 11 8 9.433 8 7.5V4Z"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+        />
+        <path
+            d="M6 4H4V6C4 7.657 5.343 9 7 9"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+        />
+        <path
+            d="M18 4H20V6C20 7.657 18.657 9 17 9"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+        />
+        <path
+            d="M12 11V15"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+        />
+        <path
+            d="M9 20H15"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+        />
+        <path
+            d="M9.5 15H14.5V18.5H9.5V15Z"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+        />
+    </svg>
+);
+
+const IconPie = ({ className }: { className?: string }) => (
+    <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        xmlns="http://www.w3.org/2000/svg"
+        className={className}
+    >
+        <path
+            d="M12 3V12H21"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+        />
+        <path
+            d="M19 12.5C18.8491 15.6537 16.1537 18.3491 13 18.5C9.41015 18.6745 6.32551 15.5899 6.5 12C6.65094 8.84634 9.34634 6.15094 12.5 6"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+        />
+    </svg>
+);
 
 const SectionNav = ({ items }: { items: NavItem[] }) => {
     if (!items.length) return null;
@@ -1394,10 +1498,12 @@ const SidebarNav = ({
         <nav className={`space-y-1.5 ${collapsed ? "text-[11px]" : "text-sm"}`}>
             {items.map((item) => {
                 const active = item.key && item.key === activeKey;
+                const Icon = item.icon;
                 return (
                     <a
                         key={item.href}
                         href={item.href}
+                        aria-label={collapsed ? item.label : undefined}
                         className={`group relative flex items-center overflow-hidden rounded-xl border border-transparent px-3 py-2 transition ${
                             collapsed ? "justify-center" : "gap-3"
                         } ${
@@ -1417,11 +1523,23 @@ const SidebarNav = ({
                                 }`}
                             />
                         )}
-                        {collapsed ? (
+                        {Icon ? (
+                            <span
+                                aria-hidden
+                                className={`relative z-10 inline-flex items-center justify-center rounded-lg transition ${
+                                    collapsed
+                                        ? "h-12 w-12 bg-white/5"
+                                        : "h-10 w-10 bg-white/10 group-hover:bg-white/15"
+                                } ${active ? "text-white" : "text-white/60 group-hover:text-white"}`}
+                            >
+                                <Icon className="h-5 w-5" />
+                            </span>
+                        ) : collapsed ? (
                             <span aria-hidden className="font-semibold">
                                 {item.label.charAt(0).toUpperCase()}
                             </span>
-                        ) : (
+                        ) : null}
+                        {!collapsed && (
                             <span className="relative z-10 font-medium">{item.label}</span>
                         )}
                         {!collapsed && (
@@ -1507,14 +1625,14 @@ const SidebarContent = ({
                 <button
                     type="button"
                     onClick={onStartAnalysis}
-                    className={`group w-full rounded-2xl bg-gradient-to-r from-[#10a37f] via-[#0f7f66] to-[#0b5a45] text-sm font-semibold text-white shadow-[0_10px_35px_rgba(16,163,127,0.35)] transition hover:shadow-[0_12px_40px_rgba(16,163,127,0.55)] ${
-                        collapsed ? "py-3" : "px-4 py-3"
-                    }`}
+                    className={
+                        collapsed
+                            ? "group flex h-12 w-12 items-center justify-center rounded-xl border border-white/15 bg-white/5 text-white transition hover:border-white/25 hover:bg-white/10"
+                            : "group w-full rounded-2xl bg-gradient-to-r from-[#10a37f] via-[#0f7f66] to-[#0b5a45] px-4 py-3 text-sm font-semibold text-white shadow-[0_10px_35px_rgba(16,163,127,0.35)] transition hover:shadow-[0_12px_40px_rgba(16,163,127,0.55)]"
+                    }
                 >
                     {collapsed ? (
-                        <span className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-lg leading-none">
-                            +
-                        </span>
+                        <span className="text-2xl leading-none">+</span>
                     ) : (
                         <span className="flex items-center justify-center gap-2">
                             <span className="flex h-5 w-5 items-center justify-center rounded-full bg-white/20 text-base leading-none">
@@ -4279,12 +4397,23 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
         }
     }, [isAuthenticated, openAuthDialog]);
     const navItems: NavItem[] = [
-        { href: view === "analysis" ? "#analysis" : "/", label: "Analiza techniczna", key: "analysis" },
-        { href: view === "score" ? "#score" : "/ranking-score", label: "Ranking score", key: "score" },
+        {
+            href: view === "analysis" ? "#analysis" : "/",
+            label: "Analiza techniczna",
+            key: "analysis",
+            icon: IconSparkline,
+        },
+        {
+            href: view === "score" ? "#score" : "/ranking-score",
+            label: "Ranking score",
+            key: "score",
+            icon: IconTrophy,
+        },
         {
             href: view === "portfolio" ? "#portfolio" : "/symulator-portfela",
             label: "Symulacja portfela",
             key: "portfolio",
+            icon: IconPie,
         },
     ];
 
