@@ -1647,6 +1647,7 @@ const SidebarContent = ({
     onToggleCollapse?: () => void;
 }) => {
     const sectionPadding = collapsed ? "px-3" : "px-5";
+    const navSpacing = collapsed ? "mt-4" : "mt-6";
     const headerSpacing = collapsed ? "space-y-4" : "space-y-5";
     const collapseToggleLabel = collapsed ? "Otwórz pasek boczny" : "Zamknij pasek boczny";
     const toggleTooltipClass =
@@ -1740,7 +1741,7 @@ const SidebarContent = ({
                     )}
                 </button>
             </div>
-            <div className={`flex-1 overflow-y-auto pb-6 ${sectionPadding}`}>
+            <div className={`flex-1 overflow-y-auto pb-6 ${sectionPadding} ${navSpacing}`}>
                 <div className="space-y-3">
                     {!collapsed && (
                         <p className="text-[11px] font-semibold uppercase tracking-[0.32em] text-white/40">
