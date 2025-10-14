@@ -1381,31 +1381,278 @@ const SectionNav = ({ items }: { items: NavItem[] }) => {
 const SidebarNav = ({
     items,
     activeKey,
+    collapsed,
+    onNavigate,
 }: {
     items: NavItem[];
     activeKey?: DashboardView;
+    collapsed?: boolean;
+    onNavigate?: () => void;
 }) => {
     if (!items.length) return null;
     return (
-        <nav className="space-y-1 text-sm">
+        <nav className={`space-y-1 ${collapsed ? "text-xs" : "text-sm"}`}>
             {items.map((item) => {
                 const active = item.key && item.key === activeKey;
                 return (
                     <a
                         key={item.href}
                         href={item.href}
-                        className={`flex items-center justify-between rounded-lg px-3 py-2 transition ${
+                        className={`flex items-center ${
+                            collapsed ? "justify-center" : "justify-between"
+                        } rounded-lg px-3 py-2 transition ${
                             active
                                 ? "bg-white/10 text-white"
                                 : "text-white/70 hover:text-white hover:bg-white/5"
                         }`}
+                        title={item.label}
+                        onClick={() => onNavigate?.()}
+                        aria-current={active ? "page" : undefined}
                     >
-                        <span>{item.label}</span>
-                        {active && <span className="h-2 w-2 rounded-full bg-primary/80" />}
+                        {collapsed ? (
+                            <span aria-hidden className="font-semibold">
+                                {item.label.charAt(0).toUpperCase()}
+                            </span>
+                        ) : (
+                            <span>{item.label}</span>
+                        )}
+                        {active && !collapsed && (
+                            <span className="h-2 w-2 rounded-full bg-primary/80" />
+                        )}
+                        {active && collapsed && (
+                            <span className="sr-only">(aktywny)</span>
+                        )}
                     </a>
                 );
             })}
         </nav>
+    );
+};
+
+const SidebarContent = ({
+    collapsed,
+    navItems,
+    activeKey,
+    onStartAnalysis,
+    isAuthenticated,
+    authUser,
+    profileLoading,
+    authLoading,
+    handleLogout,
+    openAuthDialog,
+    authError,
+    profileError,
+    googleClientId,
+    onNavigate,
+}: {
+    collapsed?: boolean;
+    navItems: NavItem[];
+    activeKey?: DashboardView;
+    onStartAnalysis: () => void;
+    isAuthenticated: boolean;
+    authUser: AuthUser | null;
+    profileLoading: boolean;
+    authLoading: boolean;
+    handleLogout: () => void;
+    openAuthDialog: (mode: "login" | "signup") => void;
+    authError: string | null;
+    profileError: string | null;
+    googleClientId: string;
+    onNavigate?: () => void;
+}) => {
+    const containerPadding = collapsed ? "px-2" : "px-4";
+    const buttonPadding = collapsed ? "px-0" : "px-4";
+    return (
+        <div className="flex h-full flex-col">
+            <div className={`space-y-6 ${containerPadding} py-6`}>
+                <div
+                    className={`flex items-center ${
+                        collapsed ? "justify-center" : "gap-3"
+                    }`}
+                >
+                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary font-semibold">
+                        GA
+                    </div>
+                    {!collapsed && (
+                        <div>
+                            <p className="text-sm font-semibold">GPW Analytics</p>
+                            <p className="text-xs text-white/60">Panel demo</p>
+                        </div>
+                    )}
+                </div>
+                <button
+                    type="button"
+                    onClick={onStartAnalysis}
+                    className={`w-full rounded-lg bg-white/10 py-3 text-sm font-semibold text-white transition hover:bg-white/20 ${buttonPadding}`}
+                >
+                    {collapsed ? (
+                        <span className="relative inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/30">
+                            <span aria-hidden className="text-lg leading-none">
+                                +
+                            </span>
+                            <span className="sr-only">Nowa analiza</span>
+                        </span>
+                    ) : (
+                        "Nowa analiza"
+                    )}
+                </button>
+            </div>
+            <div className={`flex-1 overflow-y-auto ${containerPadding}`}>
+                <SidebarNav
+                    items={navItems}
+                    activeKey={activeKey}
+                    collapsed={collapsed}
+                    onNavigate={onNavigate}
+                />
+            </div>
+            <div
+                className={`border-t border-white/10 ${containerPadding} ${
+                    collapsed ? "py-5" : "py-6"
+                } text-sm`}
+            >
+                {isAuthenticated ? (
+                    <div
+                        className={`flex ${
+                            collapsed
+                                ? "flex-col items-center gap-3 text-center"
+                                : "items-center gap-3"
+                        }`}
+                    >
+                        {authUser?.picture ? (
+                            <Image
+                                src={authUser.picture}
+                                alt="Avatar"
+                                width={40}
+                                height={40}
+                                className="h-10 w-10 rounded-full border border-white/30 object-cover"
+                                unoptimized
+                            />
+                        ) : (
+                            <div className="flex h-10 w-10 items-center justify-center rounded-full border border-white/20 bg-white/10 text-sm font-semibold">
+                                {(authUser?.name ?? authUser?.email ?? "U").charAt(0).toUpperCase()}
+                            </div>
+                        )}
+                        {!collapsed && (
+                            <div className="flex-1">
+                                <p className="font-semibold">
+                                    {authUser?.name ?? authUser?.email ?? "Użytkownik Google"}
+                                </p>
+                                {authUser?.email ? (
+                                    <p className="text-xs text-white/60">{authUser.email}</p>
+                                ) : null}
+                                <p className="text-[11px] uppercase tracking-wider text-white/40">
+                                    {profileLoading ? "Zapisywanie ustawień..." : "Konto Google"}
+                                </p>
+                            </div>
+                        )}
+                        <button
+                            className={`text-xs font-semibold text-white transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60 ${
+                                collapsed
+                                    ? "relative flex h-10 w-10 items-center justify-center rounded-full border border-white/30 bg-white/5 px-0 py-0"
+                                    : "rounded-lg border border-white/20 px-3 py-2"
+                            }`}
+                            onClick={handleLogout}
+                            disabled={authLoading}
+                        >
+                            {collapsed ? (
+                                <>
+                                    <svg
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                        xmlns="http://www.w3.org/2000/svg"
+                                        className="h-4 w-4"
+                                    >
+                                        <path
+                                            d="M13 6H6C4.895 6 4 6.895 4 8V16C4 17.105 4.895 18 6 18H13"
+                                            stroke="currentColor"
+                                            strokeWidth="2"
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                        />
+                                        <path
+                                            d="M17 16L21 12L17 8"
+                                            stroke="currentColor"
+                                            strokeWidth="2"
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                        />
+                                        <path
+                                            d="M21 12H9"
+                                            stroke="currentColor"
+                                            strokeWidth="2"
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                        />
+                                    </svg>
+                                    <span className="sr-only">Wyloguj</span>
+                                </>
+                            ) : (
+                                "Wyloguj"
+                            )}
+                        </button>
+                    </div>
+                ) : collapsed ? (
+                    <div className="flex flex-col items-center gap-3 text-center">
+                        <button
+                            className="relative flex h-10 w-10 items-center justify-center rounded-full border border-white/30 bg-white/5 text-white transition hover:border-white/50 disabled:cursor-not-allowed disabled:opacity-60"
+                            onClick={() => openAuthDialog("login")}
+                            disabled={authLoading}
+                        >
+                            <span aria-hidden className="text-base leading-none">
+                                →
+                            </span>
+                            <span className="sr-only">Zaloguj się</span>
+                        </button>
+                        <button
+                            className="relative flex h-10 w-10 items-center justify-center rounded-full border border-white bg-white text-primary transition hover:border-white/70 disabled:cursor-not-allowed disabled:opacity-60"
+                            onClick={() => openAuthDialog("signup")}
+                            disabled={authLoading}
+                        >
+                            <span aria-hidden className="text-lg leading-none">+</span>
+                            <span className="sr-only">Załóż konto</span>
+                        </button>
+                        <p className="text-[11px] text-white/60">
+                            Historia ustawień jest zapisywana w Twoim koncie Google.
+                        </p>
+                        {!googleClientId && (
+                            <p className="text-[10px] text-amber-200">
+                                Ustaw zmienną NEXT_PUBLIC_GOOGLE_CLIENT_ID, aby włączyć logowanie.
+                            </p>
+                        )}
+                    </div>
+                ) : (
+                    <div className="space-y-4">
+                        <button
+                            className="w-full rounded-lg bg-white/10 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-60"
+                            onClick={() => openAuthDialog("login")}
+                            disabled={authLoading}
+                        >
+                            Zaloguj się
+                        </button>
+                        <button
+                            className="w-full rounded-lg bg-white px-4 py-2 text-sm font-semibold text-primary transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                            onClick={() => openAuthDialog("signup")}
+                            disabled={authLoading}
+                        >
+                            Załóż konto
+                        </button>
+                        <p className="text-xs text-white/60">
+                            Historia ustawień jest zapisywana w Twoim koncie Google.
+                        </p>
+                        {!googleClientId && (
+                            <p className="text-[11px] text-amber-200">
+                                Ustaw zmienną NEXT_PUBLIC_GOOGLE_CLIENT_ID, aby włączyć logowanie.
+                            </p>
+                        )}
+                    </div>
+                )}
+                {(authError || profileError) && (
+                    <p className={`mt-4 text-xs text-rose-200 ${collapsed ? "text-center" : ""}`}>
+                        {authError ?? profileError}
+                    </p>
+                )}
+            </div>
+        </div>
     );
 };
 
@@ -2913,6 +3160,8 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
     const lastSavedPreferencesRef = useRef<string | null>(null);
     const [authDialogOpen, setAuthDialogOpen] = useState(false);
     const [authDialogMode, setAuthDialogMode] = useState<"login" | "signup">("login");
+    const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+    const [sidebarMobileOpen, setSidebarMobileOpen] = useState(false);
 
     const [watch, setWatch] = useState<string[]>(() => [...DEFAULT_WATCHLIST]);
     const [symbol, setSymbol] = useState<string | null>(DEFAULT_WATCHLIST[0] ?? null);
@@ -2928,6 +3177,24 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
     const [comparisonErrors, setComparisonErrors] = useState<Record<string, string>>({});
     const [loading, setLoading] = useState(false);
     const [err, setErr] = useState("");
+
+    useEffect(() => {
+        if (typeof document === "undefined") {
+            return;
+        }
+        const { body } = document;
+        const previous = body.style.overflow;
+        if (sidebarMobileOpen) {
+            body.style.overflow = "hidden";
+            return () => {
+                body.style.overflow = previous;
+            };
+        }
+        body.style.overflow = previous;
+        return () => {
+            body.style.overflow = previous;
+        };
+    }, [sidebarMobileOpen]);
 
     // Score builder
     const [scoreRules, setScoreRules] = useState<ScoreBuilderRule[]>(() => defaultScoreDraft.rules);
@@ -4002,6 +4269,16 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
     );
 
     const symbolLabel = symbol ?? "—";
+    const handleStartAnalysis = useCallback(() => {
+        setSidebarMobileOpen(false);
+        if (!isAuthenticated) {
+            openAuthDialog("signup");
+            return;
+        }
+        if (typeof window !== "undefined") {
+            window.scrollTo({ top: 0, behavior: "smooth" });
+        }
+    }, [isAuthenticated, openAuthDialog]);
     const navItems: NavItem[] = [
         { href: view === "analysis" ? "#analysis" : "/", label: "Analiza techniczna", key: "analysis" },
         { href: view === "score" ? "#score" : "/ranking-score", label: "Ranking score", key: "score" },
@@ -4412,108 +4689,127 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                 onLoad={() => setGoogleLoaded(true)}
                 onError={() => setAuthError("Nie udało się wczytać logowania Google.")}
             />
-            <aside className="hidden w-72 flex-col border-r border-white/10 bg-[rgba(15,23,42,0.95)] text-white lg:flex">
-                <div className="space-y-6 px-4 py-6">
-                    <div className="flex items-center gap-3">
-                        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary font-semibold">
-                            GA
-                        </div>
-                        <div>
-                            <p className="text-sm font-semibold">GPW Analytics</p>
-                            <p className="text-xs text-white/60">Panel demo</p>
-                        </div>
-                    </div>
+            {sidebarMobileOpen && (
+                <div
+                    className="fixed inset-0 z-40 bg-slate-950/70 backdrop-blur-sm lg:hidden"
+                    onClick={() => setSidebarMobileOpen(false)}
+                />
+            )}
+            <div
+                className={`fixed inset-y-0 left-0 z-50 w-72 transform border-r border-white/10 bg-[rgba(15,23,42,0.95)] text-white transition-transform duration-300 ease-in-out lg:hidden ${
+                    sidebarMobileOpen ? "translate-x-0" : "-translate-x-full"
+                }`}
+                role="dialog"
+                aria-modal="true"
+            >
+                <div className="relative flex h-full flex-col">
+                    <SidebarContent
+                        collapsed={false}
+                        navItems={navItems}
+                        activeKey={view}
+                        onStartAnalysis={handleStartAnalysis}
+                        isAuthenticated={isAuthenticated}
+                        authUser={authUser}
+                        profileLoading={profileLoading}
+                        authLoading={authLoading}
+                        handleLogout={handleLogout}
+                        openAuthDialog={openAuthDialog}
+                        authError={authError}
+                        profileError={profileError}
+                        googleClientId={GOOGLE_CLIENT_ID}
+                        onNavigate={() => setSidebarMobileOpen(false)}
+                    />
                     <button
                         type="button"
-                        onClick={() => {
-                            if (!isAuthenticated) {
-                                openAuthDialog("signup");
-                                return;
-                            }
-                            if (typeof window !== "undefined") {
-                                window.scrollTo({ top: 0, behavior: "smooth" });
-                            }
-                        }}
-                        className="w-full rounded-lg bg-white/10 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/20"
+                        onClick={() => setSidebarMobileOpen(false)}
+                        className="absolute right-4 top-4 inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/20 text-lg text-white/70 transition hover:border-white/40 hover:text-white"
+                        aria-label="Zamknij menu"
                     >
-                        Nowa analiza
+                        ×
                     </button>
                 </div>
-                <div className="flex-1 overflow-y-auto px-4">
-                    <SidebarNav items={navItems} activeKey={view} />
-                </div>
-                <div className="border-t border-white/10 px-4 py-6 text-sm">
-                    {isAuthenticated ? (
-                        <div className="flex items-center gap-3">
-                            {authUser?.picture ? (
-                                <Image
-                                    src={authUser.picture}
-                                    alt="Avatar"
-                                    width={40}
-                                    height={40}
-                                    className="h-10 w-10 rounded-full border border-white/30 object-cover"
-                                    unoptimized
-                                />
-                            ) : (
-                                <div className="flex h-10 w-10 items-center justify-center rounded-full border border-white/20 bg-white/10 text-sm font-semibold">
-                                    {(authUser?.name ?? authUser?.email ?? "U").charAt(0).toUpperCase()}
-                                </div>
-                            )}
-                            <div className="flex-1">
-                                <p className="font-semibold">
-                                    {authUser?.name ?? authUser?.email ?? "Użytkownik Google"}
-                                </p>
-                                {authUser?.email ? (
-                                    <p className="text-xs text-white/60">{authUser.email}</p>
-                                ) : null}
-                                <p className="text-[11px] uppercase tracking-wider text-white/40">
-                                    {profileLoading ? "Zapisywanie ustawień..." : "Konto Google"}
-                                </p>
-                            </div>
-                            <button
-                                className="rounded-lg border border-white/20 px-3 py-2 text-xs font-semibold transition hover:bg-white/10"
-                                onClick={handleLogout}
-                                disabled={authLoading}
-                            >
-                                Wyloguj
-                            </button>
-                        </div>
-                    ) : (
-                        <div className="space-y-4">
-                            <button
-                                className="w-full rounded-lg bg-white/10 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/20 disabled:opacity-60"
-                                onClick={() => openAuthDialog("login")}
-                                disabled={authLoading}
-                            >
-                                Zaloguj się
-                            </button>
-                            <button
-                                className="w-full rounded-lg bg-white px-4 py-2 text-sm font-semibold text-primary transition hover:bg-slate-100 disabled:opacity-60"
-                                onClick={() => openAuthDialog("signup")}
-                                disabled={authLoading}
-                            >
-                                Załóż konto
-                            </button>
-                            <p className="text-xs text-white/60">
-                                Historia ustawień jest zapisywana w Twoim koncie Google.
-                            </p>
-                            {!GOOGLE_CLIENT_ID && (
-                                <p className="text-[11px] text-amber-200">
-                                    Ustaw zmienną NEXT_PUBLIC_GOOGLE_CLIENT_ID, aby włączyć logowanie.
-                                </p>
-                            )}
-                        </div>
-                    )}
-                    {(authError || profileError) && (
-                        <p className="mt-4 text-xs text-rose-200">
-                            {authError ?? profileError}
-                        </p>
-                    )}
-                </div>
+            </div>
+            <aside
+                className={`hidden lg:flex ${sidebarCollapsed ? "lg:w-20" : "lg:w-72"} flex-col border-r border-white/10 bg-[rgba(15,23,42,0.95)] text-white lg:sticky lg:top-0 lg:h-screen lg:flex-shrink-0`}
+            >
+                <SidebarContent
+                    collapsed={sidebarCollapsed}
+                    navItems={navItems}
+                    activeKey={view}
+                    onStartAnalysis={handleStartAnalysis}
+                    isAuthenticated={isAuthenticated}
+                    authUser={authUser}
+                    profileLoading={profileLoading}
+                    authLoading={authLoading}
+                    handleLogout={handleLogout}
+                    openAuthDialog={openAuthDialog}
+                    authError={authError}
+                    profileError={profileError}
+                    googleClientId={GOOGLE_CLIENT_ID}
+                />
             </aside>
             <div className="flex min-h-screen flex-1 flex-col">
                 <header className="border-b border-soft/60 bg-primary/10 text-white backdrop-blur">
                     <div className="mx-auto w-full max-w-6xl px-4 py-8 md:px-8 md:py-10">
+                        <div className="mb-6 flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                                <button
+                                    type="button"
+                                    onClick={() => setSidebarMobileOpen(true)}
+                                    className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/20 text-white transition hover:border-white/40 hover:text-white lg:hidden"
+                                    aria-label="Otwórz menu"
+                                    aria-expanded={sidebarMobileOpen}
+                                >
+                                    <svg
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                        xmlns="http://www.w3.org/2000/svg"
+                                        className="h-5 w-5"
+                                    >
+                                        <path
+                                            d="M4 6H20M4 12H20M4 18H20"
+                                            stroke="currentColor"
+                                            strokeWidth="2"
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                        />
+                                    </svg>
+                                </button>
+                                <span className="text-sm font-semibold text-white lg:hidden">GPW Analytics</span>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setSidebarCollapsed((prev) => !prev)}
+                                className="hidden items-center gap-2 rounded-lg border border-white/20 px-3 py-2 text-xs font-semibold text-white/70 transition hover:border-white/40 hover:text-white lg:inline-flex"
+                                aria-pressed={sidebarCollapsed}
+                            >
+                                <svg
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    className="h-4 w-4"
+                                >
+                                    {sidebarCollapsed ? (
+                                        <path
+                                            d="M10 6L16 12L10 18"
+                                            stroke="currentColor"
+                                            strokeWidth="2"
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                        />
+                                    ) : (
+                                        <path
+                                            d="M14 6L8 12L14 18"
+                                            stroke="currentColor"
+                                            strokeWidth="2"
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                        />
+                                    )}
+                                </svg>
+                                <span>{sidebarCollapsed ? "Pokaż menu" : "Zwiń menu"}</span>
+                            </button>
+                        </div>
                         <div className="space-y-3">
                             <span className="text-xs uppercase tracking-[0.35em] text-white/70">Panel demo</span>
                             <h1 className="text-3xl md:text-4xl font-bold text-white">Analityka Rynków</h1>
