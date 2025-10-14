@@ -1584,6 +1584,7 @@ const SidebarContent = ({
     profileError,
     googleClientId,
     onNavigate,
+    onToggleCollapse,
 }: {
     collapsed?: boolean;
     navItems: NavItem[];
@@ -1599,9 +1600,11 @@ const SidebarContent = ({
     profileError: string | null;
     googleClientId: string;
     onNavigate?: () => void;
+    onToggleCollapse?: () => void;
 }) => {
     const sectionPadding = collapsed ? "px-3" : "px-5";
     const headerSpacing = collapsed ? "space-y-4" : "space-y-5";
+    const collapseToggleLabel = collapsed ? "Otwórz pasek boczny" : "Zwiń pasek boczny";
     return (
         <div className="flex h-full flex-col bg-[#0f1014] text-white">
             <div className={`${sectionPadding} ${headerSpacing} pt-6`}>
@@ -1610,9 +1613,24 @@ const SidebarContent = ({
                         collapsed ? "justify-center" : "gap-3"
                     }`}
                 >
-                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-[#10a37f] via-[#0f5d4a] to-[#0b3d2d] text-sm font-semibold">
-                        GA
-                    </div>
+                    {onToggleCollapse ? (
+                        <button
+                            type="button"
+                            onClick={onToggleCollapse}
+                            className="group relative flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#10a37f] via-[#0f5d4a] to-[#0b3d2d] text-sm font-semibold text-white transition hover:shadow-[0_0_0_3px_rgba(16,163,127,0.35)] focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0f1014]"
+                            aria-label={collapseToggleLabel}
+                            aria-expanded={!collapsed}
+                        >
+                            <span className="pointer-events-none select-none">GA</span>
+                            <span className="pointer-events-none absolute left-1/2 top-full z-20 mt-2 -translate-x-1/2 whitespace-nowrap rounded-lg border border-white/10 bg-[#1a1c23]/95 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.28em] text-white opacity-0 shadow-[0_12px_30px_rgba(0,0,0,0.45)] transition group-hover:opacity-100 group-focus-visible:opacity-100">
+                                {collapseToggleLabel}
+                            </span>
+                        </button>
+                    ) : (
+                        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-[#10a37f] via-[#0f5d4a] to-[#0b3d2d] text-sm font-semibold">
+                            GA
+                        </div>
+                    )}
                     {!collapsed && (
                         <div className="leading-tight">
                             <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-white/50">
@@ -4874,12 +4892,13 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                     authError={authError}
                     profileError={profileError}
                     googleClientId={GOOGLE_CLIENT_ID}
+                    onToggleCollapse={() => setSidebarCollapsed((prev) => !prev)}
                 />
             </aside>
             <div className="flex min-h-screen flex-1 flex-col">
                 <header className="border-b border-soft/60 bg-primary/10 text-white backdrop-blur">
                     <div className="mx-auto w-full max-w-6xl px-4 py-8 md:px-8 md:py-10">
-                        <div className="mb-6 flex items-center justify-between">
+                        <div className="mb-4 flex items-center justify-between lg:mb-0">
                             <div className="flex items-center gap-3">
                                 <button
                                     type="button"
@@ -4905,46 +4924,6 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                                 </button>
                                 <span className="text-sm font-semibold text-white lg:hidden">GPW Analytics</span>
                             </div>
-                            <button
-                                type="button"
-                                onClick={() => setSidebarCollapsed((prev) => !prev)}
-                                className="hidden items-center gap-2 rounded-lg border border-white/20 px-3 py-2 text-xs font-semibold text-white/70 transition hover:border-white/40 hover:text-white lg:inline-flex"
-                                aria-pressed={sidebarCollapsed}
-                            >
-                                <svg
-                                    viewBox="0 0 24 24"
-                                    fill="none"
-                                    xmlns="http://www.w3.org/2000/svg"
-                                    className="h-4 w-4"
-                                >
-                                    {sidebarCollapsed ? (
-                                        <path
-                                            d="M10 6L16 12L10 18"
-                                            stroke="currentColor"
-                                            strokeWidth="2"
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                        />
-                                    ) : (
-                                        <path
-                                            d="M14 6L8 12L14 18"
-                                            stroke="currentColor"
-                                            strokeWidth="2"
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                        />
-                                    )}
-                                </svg>
-                                <span>{sidebarCollapsed ? "Pokaż menu" : "Zwiń menu"}</span>
-                            </button>
-                        </div>
-                        <div className="space-y-3">
-                            <span className="text-xs uppercase tracking-[0.35em] text-white/70">Panel demo</span>
-                            <h1 className="text-3xl md:text-4xl font-bold text-white">Analityka Rynków</h1>
-                            <p className="max-w-2xl text-white/80">
-                                Zbieraj notowania, konfiguruj score i sprawdzaj portfel w jednym miejscu połączonym z
-                                backendem.
-                            </p>
                         </div>
                         <div className="mt-6 space-y-4 lg:hidden">
                             {isAuthenticated ? (
