@@ -1681,7 +1681,7 @@ const SidebarContent = ({
             aria-expanded={!collapsed}
         >
             <SidebarToggleGlyph className="h-4 w-4" />
-            <span className="pointer-events-none absolute right-full top-1/2 z-20 mr-3 -translate-y-1/2 whitespace-nowrap rounded-lg border border-white/10 bg-[#1a1c23]/95 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.28em] text-white opacity-0 shadow-[0_12px_30px_rgba(0,0,0,0.45)] transition group-hover:opacity-100 group-focus-visible:opacity-100">
+            <span className="pointer-events-none absolute left-0 top-1/2 z-20 -translate-y-1/2 -translate-x-[calc(100%+0.75rem)] whitespace-nowrap rounded-lg border border-white/10 bg-[#1a1c23]/95 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.28em] text-white opacity-0 shadow-[0_12px_30px_rgba(0,0,0,0.45)] transition group-hover:opacity-100 group-focus-visible:opacity-100">
                 {collapseToggleLabel}
             </span>
         </button>
