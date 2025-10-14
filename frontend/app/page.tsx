@@ -3207,7 +3207,7 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
     const lastSavedPreferencesRef = useRef<string | null>(null);
     const [authDialogOpen, setAuthDialogOpen] = useState(false);
     const [authDialogMode, setAuthDialogMode] = useState<"login" | "signup">("login");
-    const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+    const [sidebarDesktopOpen, setSidebarDesktopOpen] = useState(false);
     const [sidebarMobileOpen, setSidebarMobileOpen] = useState(false);
 
     const [watch, setWatch] = useState<string[]>(() => [...DEFAULT_WATCHLIST]);
@@ -3242,6 +3242,22 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
             body.style.overflow = previous;
         };
     }, [sidebarMobileOpen]);
+
+    useEffect(() => {
+        if (typeof window === "undefined") {
+            return;
+        }
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === "Escape") {
+                setSidebarMobileOpen(false);
+                setSidebarDesktopOpen(false);
+            }
+        };
+        window.addEventListener("keydown", handleKeyDown);
+        return () => {
+            window.removeEventListener("keydown", handleKeyDown);
+        };
+    }, []);
 
     // Score builder
     const [scoreRules, setScoreRules] = useState<ScoreBuilderRule[]>(() => defaultScoreDraft.rules);
@@ -4318,6 +4334,7 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
     const symbolLabel = symbol ?? "—";
     const handleStartAnalysis = useCallback(() => {
         setSidebarMobileOpen(false);
+        setSidebarDesktopOpen(false);
         if (!isAuthenticated) {
             openAuthDialog("signup");
             return;
@@ -4743,6 +4760,15 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                 onClick={() => setSidebarMobileOpen(false)}
                 aria-hidden="true"
             />
+            <div
+                className={`fixed inset-0 z-30 hidden transition-opacity duration-300 lg:block ${
+                    sidebarDesktopOpen
+                        ? "pointer-events-auto bg-slate-950/60 backdrop-blur-sm opacity-100"
+                        : "pointer-events-none opacity-0"
+                }`}
+                onClick={() => setSidebarDesktopOpen(false)}
+                aria-hidden="true"
+            />
             <nav
                 className={`fixed inset-y-0 left-0 z-50 flex w-[min(320px,85vw)] max-w-[85vw] transform flex-col border-r border-white/10 bg-[rgba(10,16,28,0.96)] text-white shadow-2xl shadow-black/40 transition-transform duration-300 ease-in-out lg:hidden ${
                     sidebarMobileOpen ? "translate-x-0" : "-translate-x-full"
@@ -4785,50 +4811,73 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                     </button>
                 </div>
             </nav>
-            <aside
-                className={`hidden lg:flex ${sidebarCollapsed ? "lg:w-20" : "lg:w-72"} flex-col border-r border-white/10 bg-[rgba(15,23,42,0.95)] text-white lg:sticky lg:top-0 lg:h-screen lg:flex-shrink-0`}
-                {...(sidebarCollapsed
-                    ? {
-                          role: "button" as const,
-                          tabIndex: 0,
-                          "aria-label": "Rozwiń menu nawigacji",
-                          onKeyDown: (event: React.KeyboardEvent<HTMLElement>) => {
-                              if (event.key === "Enter" || event.key === " ") {
-                                  event.preventDefault();
-                                  setSidebarCollapsed(false);
-                              }
-                          },
-                      }
-                    : {})}
-                onClick={(event) => {
-                    if (!sidebarCollapsed) return;
-                    if (event.target === event.currentTarget) {
-                        setSidebarCollapsed(false);
-                    }
-                }}
-            >
-                <SidebarContent
-                    collapsed={sidebarCollapsed}
-                    navItems={navItems}
-                    activeKey={view}
-                    onStartAnalysis={handleStartAnalysis}
-                    isAuthenticated={isAuthenticated}
-                    authUser={authUser}
-                    profileLoading={profileLoading}
-                    authLoading={authLoading}
-                    handleLogout={handleLogout}
-                    openAuthDialog={openAuthDialog}
-                    authError={authError}
-                    profileError={profileError}
-                    googleClientId={GOOGLE_CLIENT_ID}
-                    onExpandSidebar={() => setSidebarCollapsed(false)}
-                />
+            <aside className="relative hidden lg:flex lg:h-screen lg:flex-shrink-0">
+                <div className="flex h-full w-20 flex-col border-r border-white/10 bg-[rgba(15,23,42,0.96)] text-white">
+                    <SidebarContent
+                        collapsed
+                        navItems={navItems}
+                        activeKey={view}
+                        onStartAnalysis={handleStartAnalysis}
+                        isAuthenticated={isAuthenticated}
+                        authUser={authUser}
+                        profileLoading={profileLoading}
+                        authLoading={authLoading}
+                        handleLogout={handleLogout}
+                        openAuthDialog={openAuthDialog}
+                        authError={authError}
+                        profileError={profileError}
+                        googleClientId={GOOGLE_CLIENT_ID}
+                        onExpandSidebar={() => setSidebarDesktopOpen(true)}
+                    />
+                </div>
+                <div
+                    className={`pointer-events-none absolute left-20 top-0 z-40 h-full w-[min(360px,24vw)] -translate-x-full transform opacity-0 transition-transform transition-opacity duration-300 ease-out ${
+                        sidebarDesktopOpen ? "pointer-events-auto translate-x-0 opacity-100" : ""
+                    }`}
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label="Pełne menu nawigacji"
+                >
+                    <div
+                        className="relative flex h-full flex-col overflow-hidden border-r border-white/10 bg-[rgba(10,16,28,0.97)] text-white shadow-2xl shadow-black/40"
+                        style={{
+                            paddingTop: "calc(env(safe-area-inset-top, 0px) + 1.5rem)",
+                            paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 1.5rem)",
+                        }}
+                    >
+                        <SidebarContent
+                            collapsed={false}
+                            navItems={navItems}
+                            activeKey={view}
+                            onStartAnalysis={handleStartAnalysis}
+                            isAuthenticated={isAuthenticated}
+                            authUser={authUser}
+                            profileLoading={profileLoading}
+                            authLoading={authLoading}
+                            handleLogout={handleLogout}
+                            openAuthDialog={openAuthDialog}
+                            authError={authError}
+                            profileError={profileError}
+                            googleClientId={GOOGLE_CLIENT_ID}
+                            onNavigate={() => setSidebarDesktopOpen(false)}
+                        />
+                        <button
+                            type="button"
+                            onClick={() => setSidebarDesktopOpen(false)}
+                            className="absolute right-4 inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/20 bg-white/5 text-lg text-white/80 transition hover:border-white/40 hover:bg-white/10 hover:text-white"
+                            style={{ top: "calc(env(safe-area-inset-top, 0px) + 0.75rem)" }}
+                            aria-label="Zamknij menu"
+                        >
+                            ×
+                        </button>
+                    </div>
+                </div>
             </aside>
             <div className="flex min-h-screen flex-1 flex-col">
                 <header className="border-b border-soft/60 bg-primary/10 text-white backdrop-blur">
                     <div className="mx-auto w-full max-w-6xl px-4 py-8 md:px-8 md:py-10">
                         <div className="mb-6 flex items-center justify-between">
-                            <div className="flex items-center gap-3">
+                            <div className="flex items-center gap-2">
                                 <button
                                     type="button"
                                     onClick={() => setSidebarMobileOpen(true)}
@@ -4851,40 +4900,43 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                                         />
                                     </svg>
                                 </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setSidebarDesktopOpen((prev) => !prev)}
+                                    className="hidden h-10 w-10 items-center justify-center rounded-full border border-white/20 text-white transition hover:border-white/40 hover:text-white lg:inline-flex"
+                                    aria-label={sidebarDesktopOpen ? "Zamknij pasek boczny" : "Otwórz pasek boczny"}
+                                    aria-pressed={sidebarDesktopOpen}
+                                >
+                                    <svg
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                        xmlns="http://www.w3.org/2000/svg"
+                                        className="h-5 w-5"
+                                    >
+                                        <rect
+                                            x="4.75"
+                                            y="5"
+                                            width="6.5"
+                                            height="14"
+                                            rx="1.5"
+                                            stroke="currentColor"
+                                            strokeWidth="1.5"
+                                            fill={sidebarDesktopOpen ? "currentColor" : "none"}
+                                        />
+                                        <rect
+                                            x="12.75"
+                                            y="7"
+                                            width="6.5"
+                                            height="10"
+                                            rx="1.5"
+                                            stroke="currentColor"
+                                            strokeWidth="1.5"
+                                            fill="none"
+                                        />
+                                    </svg>
+                                </button>
                                 <span className="text-sm font-semibold text-white lg:hidden">GPW Analytics</span>
                             </div>
-                            <button
-                                type="button"
-                                onClick={() => setSidebarCollapsed((prev) => !prev)}
-                                className="hidden items-center gap-2 rounded-lg border border-white/20 px-3 py-2 text-xs font-semibold text-white/70 transition hover:border-white/40 hover:text-white lg:inline-flex"
-                                aria-pressed={sidebarCollapsed}
-                            >
-                                <svg
-                                    viewBox="0 0 24 24"
-                                    fill="none"
-                                    xmlns="http://www.w3.org/2000/svg"
-                                    className="h-4 w-4"
-                                >
-                                    {sidebarCollapsed ? (
-                                        <path
-                                            d="M10 6L16 12L10 18"
-                                            stroke="currentColor"
-                                            strokeWidth="2"
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                        />
-                                    ) : (
-                                        <path
-                                            d="M14 6L8 12L14 18"
-                                            stroke="currentColor"
-                                            strokeWidth="2"
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                        />
-                                    )}
-                                </svg>
-                                <span>{sidebarCollapsed ? "Pokaż menu" : "Zwiń menu"}</span>
-                            </button>
                         </div>
                         
                         <div className="mt-6 space-y-4 lg:hidden">
