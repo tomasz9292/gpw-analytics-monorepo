@@ -1381,47 +1381,32 @@ const SectionNav = ({ items }: { items: NavItem[] }) => {
 const SidebarNav = ({
     items,
     activeKey,
-    collapsed,
     onNavigate,
 }: {
     items: NavItem[];
     activeKey?: DashboardView;
-    collapsed?: boolean;
     onNavigate?: () => void;
 }) => {
     if (!items.length) return null;
     return (
-        <nav className={`space-y-1 ${collapsed ? "text-xs" : "text-sm"}`}>
+        <nav className="space-y-1 text-sm">
             {items.map((item) => {
                 const active = item.key && item.key === activeKey;
                 return (
                     <a
                         key={item.href}
                         href={item.href}
-                        className={`flex items-center ${
-                            collapsed ? "justify-center" : "justify-between"
-                        } rounded-lg px-3 py-2 transition ${
+                        className={`flex items-center justify-between rounded-lg px-3 py-2 transition ${
                             active
-                                ? "bg-white/10 text-white"
-                                : "text-white/70 hover:text-white hover:bg-white/5"
+                                ? "bg-primary/10 text-primary"
+                                : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
                         }`}
                         title={item.label}
                         onClick={() => onNavigate?.()}
                         aria-current={active ? "page" : undefined}
                     >
-                        {collapsed ? (
-                            <span aria-hidden className="font-semibold">
-                                {item.label.charAt(0).toUpperCase()}
-                            </span>
-                        ) : (
-                            <span>{item.label}</span>
-                        )}
-                        {active && !collapsed && (
-                            <span className="h-2 w-2 rounded-full bg-primary/80" />
-                        )}
-                        {active && collapsed && (
-                            <span className="sr-only">(aktywny)</span>
-                        )}
+                        <span>{item.label}</span>
+                        {active && <span className="h-2 w-2 rounded-full bg-primary/80" />}
                     </a>
                 );
             })}
@@ -1430,7 +1415,6 @@ const SidebarNav = ({
 };
 
 const SidebarContent = ({
-    collapsed,
     navItems,
     activeKey,
     onStartAnalysis,
@@ -1444,9 +1428,7 @@ const SidebarContent = ({
     profileError,
     googleClientId,
     onNavigate,
-    onExpandSidebar,
 }: {
-    collapsed?: boolean;
     navItems: NavItem[];
     activeKey?: DashboardView;
     onStartAnalysis: () => void;
@@ -1460,241 +1442,96 @@ const SidebarContent = ({
     profileError: string | null;
     googleClientId: string;
     onNavigate?: () => void;
-    onExpandSidebar?: () => void;
 }) => {
-    const containerPadding = collapsed ? "px-2" : "px-4";
-    const buttonPadding = collapsed ? "px-0" : "px-4";
-    const enableCollapsedExpansion = Boolean(collapsed && onExpandSidebar);
-
-    const handleCollapsedKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
-        if (!enableCollapsedExpansion) return;
-        if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            onExpandSidebar?.();
-        }
-    };
-
     return (
-        <div className="flex h-full flex-col">
-            <div className={`space-y-6 ${containerPadding} py-6`}>
-                <div
-                    className={`flex items-center ${
-                        collapsed ? "justify-center" : "gap-3"
-                    } ${enableCollapsedExpansion ? "cursor-pointer" : ""}`}
-                    {...(enableCollapsedExpansion
-                        ? {
-                              role: "button" as const,
-                              tabIndex: 0,
-                              onClick: onExpandSidebar,
-                              onKeyDown: handleCollapsedKeyDown,
-                              title: "Rozwiń menu",
-                          }
-                        : {})}
-                >
-                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary font-semibold">
+        <div className="flex h-full flex-col bg-white text-slate-900">
+            <div className="border-b border-slate-200 px-6 pb-6 pt-8">
+                <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary font-semibold text-white">
                         GA
                     </div>
-                    {!collapsed && (
-                        <div>
-                            <p className="text-sm font-semibold">GPW Analytics</p>
-                            <p className="text-xs text-white/60">Panel demo</p>
-                        </div>
-                    )}
+                    <div>
+                        <p className="text-sm font-semibold text-slate-900">GPW Analytics</p>
+                        <p className="text-xs text-slate-500">Twoje centrum rynkowe</p>
+                    </div>
                 </div>
                 <button
                     type="button"
                     onClick={onStartAnalysis}
-                    className={`w-full rounded-lg bg-white/10 py-3 text-sm font-semibold text-white transition hover:bg-white/20 ${buttonPadding}`}
+                    className="mt-6 w-full rounded-full bg-primary px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-primary/90"
                 >
-                    {collapsed ? (
-                        <span className="relative inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/30">
-                            <span aria-hidden className="text-lg leading-none">
-                                +
-                            </span>
-                            <span className="sr-only">Nowa analiza</span>
-                        </span>
-                    ) : (
-                        "Nowa analiza"
-                    )}
+                    Nowa analiza
                 </button>
             </div>
-            <div className={`flex-1 overflow-y-auto ${containerPadding}`}>
-                <SidebarNav
-                    items={navItems}
-                    activeKey={activeKey}
-                    collapsed={collapsed}
-                    onNavigate={onNavigate}
-                />
+            <div className="flex-1 overflow-y-auto px-4 py-6">
+                <SidebarNav items={navItems} activeKey={activeKey} onNavigate={onNavigate} />
             </div>
-            <div
-                className={`border-t border-white/10 ${containerPadding} ${
-                    collapsed ? "py-5" : "py-6"
-                } text-sm`}
-            >
-                {enableCollapsedExpansion && (
-                    <div className="mb-4 flex justify-center">
-                        <button
-                            type="button"
-                            className="inline-flex items-center gap-1.5 rounded-full border border-white/30 px-3 py-1.5 text-xs font-semibold text-white/80 transition hover:border-white/50 hover:text-white"
-                            onClick={onExpandSidebar}
-                        >
-                            <svg
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                xmlns="http://www.w3.org/2000/svg"
-                                className="h-3.5 w-3.5"
-                                aria-hidden
-                            >
-                                <path
-                                    d="M9 6L15 12L9 18"
-                                    stroke="currentColor"
-                                    strokeWidth="2"
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                />
-                            </svg>
-                            <span>Rozwiń menu</span>
-                        </button>
-                    </div>
-                )}
+            <div className="border-t border-slate-200 px-6 py-6 text-sm text-slate-600">
                 {isAuthenticated ? (
-                    <div
-                        className={`flex ${
-                            collapsed
-                                ? "flex-col items-center gap-3 text-center"
-                                : "items-center gap-3"
-                        }`}
-                    >
+                    <div className="flex items-center gap-3">
                         {authUser?.picture ? (
                             <Image
                                 src={authUser.picture}
                                 alt="Avatar"
                                 width={40}
                                 height={40}
-                                className="h-10 w-10 rounded-full border border-white/30 object-cover"
+                                className="h-10 w-10 rounded-full border border-slate-200 object-cover"
                                 unoptimized
                             />
                         ) : (
-                            <div className="flex h-10 w-10 items-center justify-center rounded-full border border-white/20 bg-white/10 text-sm font-semibold">
+                            <div className="flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 bg-slate-100 text-sm font-semibold text-slate-700">
                                 {(authUser?.name ?? authUser?.email ?? "U").charAt(0).toUpperCase()}
                             </div>
                         )}
-                        {!collapsed && (
-                            <div className="flex-1">
-                                <p className="font-semibold">
-                                    {authUser?.name ?? authUser?.email ?? "Użytkownik Google"}
-                                </p>
-                                {authUser?.email ? (
-                                    <p className="text-xs text-white/60">{authUser.email}</p>
-                                ) : null}
-                                <p className="text-[11px] uppercase tracking-wider text-white/40">
-                                    {profileLoading ? "Zapisywanie ustawień..." : "Konto Google"}
-                                </p>
-                            </div>
-                        )}
+                        <div className="flex-1">
+                            <p className="font-semibold text-slate-900">
+                                {authUser?.name ?? authUser?.email ?? "Użytkownik Google"}
+                            </p>
+                            {authUser?.email ? (
+                                <p className="text-xs text-slate-500">{authUser.email}</p>
+                            ) : null}
+                            <p className="text-[11px] uppercase tracking-[0.2em] text-slate-400">
+                                {profileLoading ? "Zapisywanie ustawień..." : "Konto Google"}
+                            </p>
+                        </div>
                         <button
-                            className={`text-xs font-semibold text-white transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60 ${
-                                collapsed
-                                    ? "relative flex h-10 w-10 items-center justify-center rounded-full border border-white/30 bg-white/5 px-0 py-0"
-                                    : "rounded-lg border border-white/20 px-3 py-2"
-                            }`}
+                            className="rounded-full border border-slate-300 px-4 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
                             onClick={handleLogout}
                             disabled={authLoading}
                         >
-                            {collapsed ? (
-                                <>
-                                    <svg
-                                        viewBox="0 0 24 24"
-                                        fill="none"
-                                        xmlns="http://www.w3.org/2000/svg"
-                                        className="h-4 w-4"
-                                    >
-                                        <path
-                                            d="M13 6H6C4.895 6 4 6.895 4 8V16C4 17.105 4.895 18 6 18H13"
-                                            stroke="currentColor"
-                                            strokeWidth="2"
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                        />
-                                        <path
-                                            d="M17 16L21 12L17 8"
-                                            stroke="currentColor"
-                                            strokeWidth="2"
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                        />
-                                        <path
-                                            d="M21 12H9"
-                                            stroke="currentColor"
-                                            strokeWidth="2"
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                        />
-                                    </svg>
-                                    <span className="sr-only">Wyloguj</span>
-                                </>
-                            ) : (
-                                "Wyloguj"
-                            )}
+                            Wyloguj
                         </button>
-                    </div>
-                ) : collapsed ? (
-                    <div className="flex flex-col items-center gap-3 text-center">
-                        <button
-                            className="relative flex h-10 w-10 items-center justify-center rounded-full border border-white/30 bg-white/5 text-white transition hover:border-white/50 disabled:cursor-not-allowed disabled:opacity-60"
-                            onClick={() => openAuthDialog("login")}
-                            disabled={authLoading}
-                        >
-                            <span aria-hidden className="text-base leading-none">
-                                →
-                            </span>
-                            <span className="sr-only">Zaloguj się</span>
-                        </button>
-                        <button
-                            className="relative flex h-10 w-10 items-center justify-center rounded-full border border-white bg-white text-primary transition hover:border-white/70 disabled:cursor-not-allowed disabled:opacity-60"
-                            onClick={() => openAuthDialog("signup")}
-                            disabled={authLoading}
-                        >
-                            <span aria-hidden className="text-lg leading-none">+</span>
-                            <span className="sr-only">Załóż konto</span>
-                        </button>
-                        <p className="text-[11px] text-white/60">
-                            Historia ustawień jest zapisywana w Twoim koncie Google.
-                        </p>
-                        {!googleClientId && (
-                            <p className="text-[10px] text-amber-200">
-                                Ustaw zmienną NEXT_PUBLIC_GOOGLE_CLIENT_ID, aby włączyć logowanie.
-                            </p>
-                        )}
                     </div>
                 ) : (
                     <div className="space-y-4">
-                        <button
-                            className="w-full rounded-lg bg-white/10 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-60"
-                            onClick={() => openAuthDialog("login")}
-                            disabled={authLoading}
-                        >
-                            Zaloguj się
-                        </button>
-                        <button
-                            className="w-full rounded-lg bg-white px-4 py-2 text-sm font-semibold text-primary transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-                            onClick={() => openAuthDialog("signup")}
-                            disabled={authLoading}
-                        >
-                            Załóż konto
-                        </button>
-                        <p className="text-xs text-white/60">
+                        <div className="flex flex-col gap-2 sm:flex-row">
+                            <button
+                                className="flex-1 rounded-full border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-60"
+                                onClick={() => openAuthDialog("login")}
+                                disabled={authLoading}
+                            >
+                                Zaloguj się
+                            </button>
+                            <button
+                                className="flex-1 rounded-full bg-primary px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+                                onClick={() => openAuthDialog("signup")}
+                                disabled={authLoading}
+                            >
+                                Załóż konto
+                            </button>
+                        </div>
+                        <p className="text-xs text-slate-500">
                             Historia ustawień jest zapisywana w Twoim koncie Google.
                         </p>
                         {!googleClientId && (
-                            <p className="text-[11px] text-amber-200">
+                            <p className="text-[11px] text-amber-600">
                                 Ustaw zmienną NEXT_PUBLIC_GOOGLE_CLIENT_ID, aby włączyć logowanie.
                             </p>
                         )}
                     </div>
                 )}
                 {(authError || profileError) && (
-                    <p className={`mt-4 text-xs text-rose-200 ${collapsed ? "text-center" : ""}`}>
+                    <p className="mt-4 text-xs text-rose-600">
                         {authError ?? profileError}
                     </p>
                 )}
@@ -3207,8 +3044,8 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
     const lastSavedPreferencesRef = useRef<string | null>(null);
     const [authDialogOpen, setAuthDialogOpen] = useState(false);
     const [authDialogMode, setAuthDialogMode] = useState<"login" | "signup">("login");
-    const [sidebarDesktopOpen, setSidebarDesktopOpen] = useState(false);
-    const [sidebarMobileOpen, setSidebarMobileOpen] = useState(false);
+    const [sidebarOpen, setSidebarOpen] = useState(false);
+    const sidebarUserOverrideRef = useRef(false);
 
     const [watch, setWatch] = useState<string[]>(() => [...DEFAULT_WATCHLIST]);
     const [symbol, setSymbol] = useState<string | null>(DEFAULT_WATCHLIST[0] ?? null);
@@ -3231,7 +3068,7 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
         }
         const { body } = document;
         const previous = body.style.overflow;
-        if (sidebarMobileOpen) {
+        if (sidebarOpen) {
             body.style.overflow = "hidden";
             return () => {
                 body.style.overflow = previous;
@@ -3241,7 +3078,7 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
         return () => {
             body.style.overflow = previous;
         };
-    }, [sidebarMobileOpen]);
+    }, [sidebarOpen]);
 
     useEffect(() => {
         if (typeof window === "undefined") {
@@ -3249,13 +3086,37 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
         }
         const handleKeyDown = (event: KeyboardEvent) => {
             if (event.key === "Escape") {
-                setSidebarMobileOpen(false);
-                setSidebarDesktopOpen(false);
+                setSidebarOpen(false);
+                sidebarUserOverrideRef.current = false;
             }
         };
         window.addEventListener("keydown", handleKeyDown);
         return () => {
             window.removeEventListener("keydown", handleKeyDown);
+        };
+    }, []);
+
+    useEffect(() => {
+        if (typeof window === "undefined") {
+            return;
+        }
+        const mediaQuery = window.matchMedia("(min-width: 1024px)");
+        const handleMediaChange = (event: MediaQueryListEvent) => {
+            if (event.matches) {
+                if (!sidebarUserOverrideRef.current) {
+                    setSidebarOpen(true);
+                }
+            } else {
+                setSidebarOpen(false);
+                sidebarUserOverrideRef.current = false;
+            }
+        };
+        if (mediaQuery.matches) {
+            setSidebarOpen(true);
+        }
+        mediaQuery.addEventListener("change", handleMediaChange);
+        return () => {
+            mediaQuery.removeEventListener("change", handleMediaChange);
         };
     }, []);
 
@@ -4331,10 +4192,24 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
         [allRows, period]
     );
 
+    const closeSidebar = useCallback(() => {
+        setSidebarOpen(false);
+        sidebarUserOverrideRef.current = false;
+    }, []);
+
+    const openSidebarPanel = useCallback(() => {
+        setSidebarOpen(true);
+        if (typeof window !== "undefined") {
+            const isDesktop = window.matchMedia("(min-width: 1024px)").matches;
+            if (isDesktop) {
+                sidebarUserOverrideRef.current = true;
+            }
+        }
+    }, []);
+
     const symbolLabel = symbol ?? "—";
     const handleStartAnalysis = useCallback(() => {
-        setSidebarMobileOpen(false);
-        setSidebarDesktopOpen(false);
+        closeSidebar();
         if (!isAuthenticated) {
             openAuthDialog("signup");
             return;
@@ -4342,7 +4217,7 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
         if (typeof window !== "undefined") {
             window.scrollTo({ top: 0, behavior: "smooth" });
         }
-    }, [isAuthenticated, openAuthDialog]);
+    }, [closeSidebar, isAuthenticated, openAuthDialog]);
     const navItems: NavItem[] = [
         { href: view === "analysis" ? "#analysis" : "/", label: "Analiza techniczna", key: "analysis" },
         { href: view === "score" ? "#score" : "/ranking-score", label: "Ranking score", key: "score" },
@@ -4754,38 +4629,25 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                 onError={() => setAuthError("Nie udało się wczytać logowania Google.")}
             />
             <div
-                className={`fixed inset-0 z-40 bg-slate-950/70 backdrop-blur-sm transition-opacity duration-300 lg:hidden ${
-                    sidebarMobileOpen ? "opacity-100" : "pointer-events-none opacity-0"
-                }`}
-                onClick={() => setSidebarMobileOpen(false)}
-                aria-hidden="true"
-            />
-            <div
-                className={`fixed inset-0 z-30 hidden transition-opacity duration-300 lg:block ${
-                    sidebarDesktopOpen
-                        ? "pointer-events-auto bg-slate-950/60 backdrop-blur-sm opacity-100"
-                        : "pointer-events-none opacity-0"
-                }`}
-                onClick={() => setSidebarDesktopOpen(false)}
+                className={`fixed inset-0 z-40 bg-slate-900/70 backdrop-blur-sm transition-opacity duration-300 ${sidebarOpen ? "opacity-100" : "pointer-events-none opacity-0"}`}
+                onClick={closeSidebar}
                 aria-hidden="true"
             />
             <nav
-                className={`fixed inset-y-0 left-0 z-50 flex w-[min(320px,85vw)] max-w-[85vw] transform flex-col border-r border-white/10 bg-[rgba(10,16,28,0.96)] text-white shadow-2xl shadow-black/40 transition-transform duration-300 ease-in-out lg:hidden ${
-                    sidebarMobileOpen ? "translate-x-0" : "-translate-x-full"
-                }`}
+                className={`fixed inset-y-0 left-0 z-50 flex w-[min(320px,88vw)] max-w-[360px] transform transition-transform duration-300 ease-out ${sidebarOpen ? "translate-x-0" : "-translate-x-full pointer-events-none"}`}
                 role="dialog"
-                aria-modal="true"
+                aria-modal={sidebarOpen || undefined}
                 aria-label="Menu nawigacji"
+                aria-hidden={!sidebarOpen}
             >
                 <div
-                    className="relative flex h-full flex-col overflow-hidden"
+                    className="relative flex h-full w-full flex-col overflow-hidden rounded-r-3xl border-r border-slate-200 bg-white shadow-xl shadow-slate-900/10"
                     style={{
-                        paddingTop: "calc(env(safe-area-inset-top, 0px) + 1.5rem)",
+                        paddingTop: "calc(env(safe-area-inset-top, 0px) + 1rem)",
                         paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 1.5rem)",
                     }}
                 >
                     <SidebarContent
-                        collapsed={false}
                         navItems={navItems}
                         activeKey={view}
                         onStartAnalysis={handleStartAnalysis}
@@ -4798,81 +4660,18 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                         authError={authError}
                         profileError={profileError}
                         googleClientId={GOOGLE_CLIENT_ID}
-                        onNavigate={() => setSidebarMobileOpen(false)}
+                        onNavigate={closeSidebar}
                     />
                     <button
                         type="button"
-                        onClick={() => setSidebarMobileOpen(false)}
-                        className="absolute right-4 inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/20 bg-white/5 text-lg text-white/80 transition hover:border-white/40 hover:bg-white/10 hover:text-white"
-                        style={{ top: "calc(env(safe-area-inset-top, 0px) + 0.75rem)" }}
+                        onClick={closeSidebar}
+                        className="absolute right-4 top-4 inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-500 shadow-sm transition hover:bg-slate-100 hover:text-slate-700"
                         aria-label="Zamknij menu"
                     >
                         ×
                     </button>
                 </div>
             </nav>
-            <aside className="relative hidden lg:flex lg:h-screen lg:flex-shrink-0">
-                <div className="flex h-full w-20 flex-col border-r border-white/10 bg-[rgba(15,23,42,0.96)] text-white">
-                    <SidebarContent
-                        collapsed
-                        navItems={navItems}
-                        activeKey={view}
-                        onStartAnalysis={handleStartAnalysis}
-                        isAuthenticated={isAuthenticated}
-                        authUser={authUser}
-                        profileLoading={profileLoading}
-                        authLoading={authLoading}
-                        handleLogout={handleLogout}
-                        openAuthDialog={openAuthDialog}
-                        authError={authError}
-                        profileError={profileError}
-                        googleClientId={GOOGLE_CLIENT_ID}
-                        onExpandSidebar={() => setSidebarDesktopOpen(true)}
-                    />
-                </div>
-                <div
-                    className={`pointer-events-none absolute left-20 top-0 z-40 h-full w-[min(360px,24vw)] -translate-x-full transform opacity-0 transition-transform transition-opacity duration-300 ease-out ${
-                        sidebarDesktopOpen ? "pointer-events-auto translate-x-0 opacity-100" : ""
-                    }`}
-                    role="dialog"
-                    aria-modal="true"
-                    aria-label="Pełne menu nawigacji"
-                >
-                    <div
-                        className="relative flex h-full flex-col overflow-hidden border-r border-white/10 bg-[rgba(10,16,28,0.97)] text-white shadow-2xl shadow-black/40"
-                        style={{
-                            paddingTop: "calc(env(safe-area-inset-top, 0px) + 1.5rem)",
-                            paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 1.5rem)",
-                        }}
-                    >
-                        <SidebarContent
-                            collapsed={false}
-                            navItems={navItems}
-                            activeKey={view}
-                            onStartAnalysis={handleStartAnalysis}
-                            isAuthenticated={isAuthenticated}
-                            authUser={authUser}
-                            profileLoading={profileLoading}
-                            authLoading={authLoading}
-                            handleLogout={handleLogout}
-                            openAuthDialog={openAuthDialog}
-                            authError={authError}
-                            profileError={profileError}
-                            googleClientId={GOOGLE_CLIENT_ID}
-                            onNavigate={() => setSidebarDesktopOpen(false)}
-                        />
-                        <button
-                            type="button"
-                            onClick={() => setSidebarDesktopOpen(false)}
-                            className="absolute right-4 inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/20 bg-white/5 text-lg text-white/80 transition hover:border-white/40 hover:bg-white/10 hover:text-white"
-                            style={{ top: "calc(env(safe-area-inset-top, 0px) + 0.75rem)" }}
-                            aria-label="Zamknij menu"
-                        >
-                            ×
-                        </button>
-                    </div>
-                </div>
-            </aside>
             <div className="flex min-h-screen flex-1 flex-col">
                 <header className="border-b border-soft/60 bg-primary/10 text-white backdrop-blur">
                     <div className="mx-auto w-full max-w-6xl px-4 py-8 md:px-8 md:py-10">
@@ -4880,10 +4679,10 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                             <div className="flex items-center gap-2">
                                 <button
                                     type="button"
-                                    onClick={() => setSidebarMobileOpen(true)}
+                                    onClick={openSidebarPanel}
                                     className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/20 text-white transition hover:border-white/40 hover:text-white lg:hidden"
-                                    aria-label="Otwórz menu"
-                                    aria-expanded={sidebarMobileOpen}
+                                    aria-label={sidebarOpen ? "Zamknij menu" : "Otwórz menu"}
+                                    aria-expanded={sidebarOpen}
                                 >
                                     <svg
                                         viewBox="0 0 24 24"
@@ -4902,10 +4701,10 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                                 </button>
                                 <button
                                     type="button"
-                                    onClick={() => setSidebarDesktopOpen((prev) => !prev)}
+                                    onClick={() => (sidebarOpen ? closeSidebar() : openSidebarPanel())}
                                     className="hidden h-10 w-10 items-center justify-center rounded-full border border-white/20 text-white transition hover:border-white/40 hover:text-white lg:inline-flex"
-                                    aria-label={sidebarDesktopOpen ? "Zamknij pasek boczny" : "Otwórz pasek boczny"}
-                                    aria-pressed={sidebarDesktopOpen}
+                                    aria-label={sidebarOpen ? "Zamknij pasek boczny" : "Otwórz pasek boczny"}
+                                    aria-pressed={sidebarOpen}
                                 >
                                     <svg
                                         viewBox="0 0 24 24"
@@ -4921,7 +4720,7 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                                             rx="1.5"
                                             stroke="currentColor"
                                             strokeWidth="1.5"
-                                            fill={sidebarDesktopOpen ? "currentColor" : "none"}
+                                            fill={sidebarOpen ? "currentColor" : "none"}
                                         />
                                         <rect
                                             x="12.75"
