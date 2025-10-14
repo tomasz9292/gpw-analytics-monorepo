@@ -2,6 +2,7 @@
 
 import React, { useMemo, useState, useEffect, useId, useCallback, useRef } from "react";
 import Image from "next/image";
+import Link from "next/link";
 import Script from "next/script";
 import {
     LineChart,
@@ -1359,24 +1360,172 @@ const Section = ({
 );
 
 type DashboardView = "analysis" | "score" | "portfolio";
-type NavItem = { href: string; label: string; key?: DashboardView };
+type NavItem = {
+    href: string;
+    label: string;
+    key?: DashboardView;
+    icon?: React.ComponentType<{ className?: string }>;
+};
+
+const IconSparkline = ({ className }: { className?: string }) => (
+    <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        xmlns="http://www.w3.org/2000/svg"
+        className={className}
+    >
+        <path
+            d="M4 18H20"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+        />
+        <path
+            d="M5 13.5L9.5 9L12.5 12L19 5"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+        />
+    </svg>
+);
+
+const IconTrophy = ({ className }: { className?: string }) => (
+    <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        xmlns="http://www.w3.org/2000/svg"
+        className={className}
+    >
+        <path
+            d="M8 4H16V7.5C16 9.433 14.433 11 12.5 11H11.5C9.567 11 8 9.433 8 7.5V4Z"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+        />
+        <path
+            d="M6 4H4V6C4 7.657 5.343 9 7 9"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+        />
+        <path
+            d="M18 4H20V6C20 7.657 18.657 9 17 9"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+        />
+        <path
+            d="M12 11V15"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+        />
+        <path
+            d="M9 20H15"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+        />
+        <path
+            d="M9.5 15H14.5V18.5H9.5V15Z"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+        />
+    </svg>
+);
+
+const IconPie = ({ className }: { className?: string }) => (
+    <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        xmlns="http://www.w3.org/2000/svg"
+        className={className}
+    >
+        <path
+            d="M12 3V12H21"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+        />
+        <path
+            d="M19 12.5C18.8491 15.6537 16.1537 18.3491 13 18.5C9.41015 18.6745 6.32551 15.5899 6.5 12C6.65094 8.84634 9.34634 6.15094 12.5 6"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+        />
+    </svg>
+);
 
 const SectionNav = ({ items }: { items: NavItem[] }) => {
     if (!items.length) return null;
     return (
         <nav className="flex flex-wrap gap-2 text-sm">
             {items.map((item) => (
-                <a
+                <Link
                     key={item.href}
                     href={item.href}
                     className="px-3 py-1 rounded-full border border-white/20 bg-white/10 text-white/80 hover:text-white hover:border-white/40 transition"
                 >
                     {item.label}
-                </a>
+                </Link>
             ))}
         </nav>
     );
 };
+
+const SidebarToggleGlyph = ({ className }: { className?: string }) => (
+    <svg
+        viewBox="0 0 20 20"
+        fill="none"
+        xmlns="http://www.w3.org/2000/svg"
+        className={className}
+        aria-hidden
+    >
+        <rect
+            x="2.75"
+            y="2.75"
+            width="14.5"
+            height="14.5"
+            rx="3"
+            stroke="currentColor"
+            strokeWidth="1.5"
+        />
+        <path
+            d="M7.25 2.75V17.25"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+        />
+        <path
+            d="M10.75 6.75H14.25"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+        />
+        <path
+            d="M10.75 10.25H14.25"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+        />
+        <path
+            d="M10.75 13.75H14.25"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+        />
+    </svg>
+);
 
 const SidebarNav = ({
     items,
@@ -1391,38 +1540,74 @@ const SidebarNav = ({
 }) => {
     if (!items.length) return null;
     return (
-        <nav className={`space-y-1 ${collapsed ? "text-xs" : "text-sm"}`}>
+        <nav className={`space-y-1.5 ${collapsed ? "text-[11px]" : "text-sm"}`}>
             {items.map((item) => {
                 const active = item.key && item.key === activeKey;
+                const Icon = item.icon;
                 return (
-                    <a
+                    <Link
                         key={item.href}
                         href={item.href}
-                        className={`flex items-center ${
-                            collapsed ? "justify-center" : "justify-between"
-                        } rounded-lg px-3 py-2 transition ${
+                        aria-label={collapsed ? item.label : undefined}
+                        className={`group relative flex items-center overflow-hidden rounded-xl border border-transparent px-3 py-2 transition ${
+                            collapsed ? "justify-center" : "gap-3"
+                        } ${
                             active
-                                ? "bg-white/10 text-white"
-                                : "text-white/70 hover:text-white hover:bg-white/5"
+                                ? "bg-white/10 text-white shadow-[0_0_0_1px_rgba(255,255,255,0.08)]"
+                                : "text-white/70 hover:border-white/10 hover:text-white hover:bg-white/5"
                         }`}
                         title={item.label}
                         onClick={() => onNavigate?.()}
                         aria-current={active ? "page" : undefined}
                     >
-                        {collapsed ? (
+                        {active && (
+                            <span
+                                aria-hidden
+                                className={`absolute left-2 top-1/2 h-7 w-1 -translate-y-1/2 rounded-full bg-[#10a37f] ${
+                                    collapsed ? "left-1 h-6" : ""
+                                }`}
+                            />
+                        )}
+                        {Icon ? (
+                            <span
+                                aria-hidden
+                                className={`relative z-10 inline-flex items-center justify-center rounded-lg transition ${
+                                    collapsed
+                                        ? "h-12 w-12 bg-white/5"
+                                        : "h-10 w-10 bg-white/10 group-hover:bg-white/15"
+                                } ${active ? "text-white" : "text-white/60 group-hover:text-white"}`}
+                            >
+                                <Icon className="h-5 w-5" />
+                            </span>
+                        ) : collapsed ? (
                             <span aria-hidden className="font-semibold">
                                 {item.label.charAt(0).toUpperCase()}
                             </span>
-                        ) : (
-                            <span>{item.label}</span>
+                        ) : null}
+                        {!collapsed && (
+                            <span className="relative z-10 font-medium">{item.label}</span>
                         )}
-                        {active && !collapsed && (
-                            <span className="h-2 w-2 rounded-full bg-primary/80" />
+                        {!collapsed && (
+                            <svg
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                xmlns="http://www.w3.org/2000/svg"
+                                className={`relative z-10 h-4 w-4 transition ${
+                                    active ? "text-white" : "text-white/40 group-hover:text-white/70"
+                                }`}
+                                aria-hidden
+                            >
+                                <path
+                                    d="M9 5L16 12L9 19"
+                                    stroke="currentColor"
+                                    strokeWidth="2"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                />
+                            </svg>
                         )}
-                        {active && collapsed && (
-                            <span className="sr-only">(aktywny)</span>
-                        )}
-                    </a>
+                        {active && collapsed && <span className="sr-only">(aktywny)</span>}
+                    </Link>
                 );
             })}
         </nav>
@@ -1444,6 +1629,7 @@ const SidebarContent = ({
     profileError,
     googleClientId,
     onNavigate,
+    onToggleCollapse,
 }: {
     collapsed?: boolean;
     navItems: NavItem[];
@@ -1459,188 +1645,213 @@ const SidebarContent = ({
     profileError: string | null;
     googleClientId: string;
     onNavigate?: () => void;
+    onToggleCollapse?: () => void;
 }) => {
-    const containerPadding = collapsed ? "px-2" : "px-4";
-    const buttonPadding = collapsed ? "px-0" : "px-4";
+    const sectionPadding = collapsed ? "px-3" : "px-5";
+    const navSpacing = collapsed ? "mt-4" : "mt-6";
+    const headerSpacing = collapsed ? "space-y-4" : "space-y-5";
+    const collapseToggleLabel = collapsed ? "Otwórz pasek boczny" : "Zamknij pasek boczny";
+    const toggleTooltipClass =
+        "pointer-events-none absolute left-full top-1/2 z-20 ml-3 -translate-y-1/2 whitespace-nowrap rounded-lg bg-[#1a1c23] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.28em] text-white opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100";
+    const renderBrandBadge = () => (
+        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-[#10a37f] via-[#0f5d4a] to-[#0b3d2d] text-sm font-semibold">
+            GA
+        </div>
+    );
+    const renderExpandedHeader = () => (
+        <div className="flex w-full items-center gap-3">
+            <div className="group relative">{renderBrandBadge()}</div>
+            <div className="leading-tight">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-white/50">
+                    GPW Analytics
+                </p>
+                <p className="text-base font-semibold text-white">Panel demo</p>
+            </div>
+        </div>
+    );
+    const renderExpandedToggle = () => (
+        <button
+            type="button"
+            onClick={onToggleCollapse}
+            className="group relative flex h-10 w-10 items-center justify-center rounded-xl border border-white/15 bg-white/5 text-white/70 transition hover:border-white/30 hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0f1014]"
+            aria-label={collapseToggleLabel}
+            aria-expanded={!collapsed}
+        >
+            <SidebarToggleGlyph className="h-4 w-4" />
+            <span className={toggleTooltipClass}>
+                {collapseToggleLabel}
+            </span>
+        </button>
+    );
+    const headerAlignment = collapsed
+        ? "justify-center"
+        : onToggleCollapse
+        ? "justify-between"
+        : "justify-start";
     return (
-        <div className="flex h-full flex-col">
-            <div className={`space-y-6 ${containerPadding} py-6`}>
-                <div
-                    className={`flex items-center ${
-                        collapsed ? "justify-center" : "gap-3"
-                    }`}
-                >
-                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary font-semibold">
-                        GA
-                    </div>
-                    {!collapsed && (
-                        <div>
-                            <p className="text-sm font-semibold">GPW Analytics</p>
-                            <p className="text-xs text-white/60">Panel demo</p>
-                        </div>
+        <div className="flex h-full flex-col bg-[#0f1014] text-white">
+            <div className={`${sectionPadding} ${headerSpacing} pt-6`}>
+                <div className={`flex items-center ${headerAlignment} gap-3`}>
+                    {collapsed ? (
+                        onToggleCollapse ? (
+                            <button
+                                type="button"
+                                onClick={onToggleCollapse}
+                                className="group relative flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-[#10a37f] via-[#0f5d4a] to-[#0b3d2d] text-sm font-semibold text-white transition focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0f1014]"
+                                aria-label={collapseToggleLabel}
+                                aria-expanded={!collapsed}
+                            >
+                                <span className="pointer-events-none select-none transition-opacity duration-150 group-hover:opacity-0 group-focus-visible:opacity-0">
+                                    GA
+                                </span>
+                                <span className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100">
+                                    <SidebarToggleGlyph className="h-5 w-5 text-white" />
+                                </span>
+                                <span className={toggleTooltipClass}>
+                                    {collapseToggleLabel}
+                                </span>
+                            </button>
+                        ) : (
+                            renderBrandBadge()
+                        )
+                    ) : (
+                        <>
+                            {renderExpandedHeader()}
+                            {onToggleCollapse ? renderExpandedToggle() : null}
+                        </>
                     )}
                 </div>
                 <button
                     type="button"
                     onClick={onStartAnalysis}
-                    className={`w-full rounded-lg bg-white/10 py-3 text-sm font-semibold text-white transition hover:bg-white/20 ${buttonPadding}`}
+                    className={
+                        collapsed
+                            ? "group flex h-12 w-12 items-center justify-center rounded-xl border border-white/15 bg-white/5 text-white transition hover:border-white/25 hover:bg-white/10"
+                            : "group w-full rounded-2xl bg-gradient-to-r from-[#10a37f] via-[#0f7f66] to-[#0b5a45] px-4 py-3 text-sm font-semibold text-white shadow-[0_10px_35px_rgba(16,163,127,0.35)] transition hover:shadow-[0_12px_40px_rgba(16,163,127,0.55)]"
+                    }
                 >
                     {collapsed ? (
-                        <span className="relative inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/30">
-                            <span aria-hidden className="text-lg leading-none">
+                        <span className="text-2xl leading-none">+</span>
+                    ) : (
+                        <span className="flex items-center justify-center gap-2">
+                            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-white/20 text-base leading-none">
                                 +
                             </span>
-                            <span className="sr-only">Nowa analiza</span>
+                            <span>Nowa analiza</span>
                         </span>
-                    ) : (
-                        "Nowa analiza"
                     )}
                 </button>
             </div>
-            <div className={`flex-1 overflow-y-auto ${containerPadding}`}>
-                <SidebarNav
-                    items={navItems}
-                    activeKey={activeKey}
-                    collapsed={collapsed}
-                    onNavigate={onNavigate}
-                />
+            <div className={`flex-1 overflow-y-auto pb-6 ${sectionPadding} ${navSpacing}`}>
+                <div className="space-y-3">
+                    {!collapsed && (
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.32em] text-white/40">
+                            Nawigacja
+                        </p>
+                    )}
+                    <SidebarNav
+                        items={navItems}
+                        activeKey={activeKey}
+                        collapsed={collapsed}
+                        onNavigate={onNavigate}
+                    />
+                </div>
             </div>
             <div
-                className={`border-t border-white/10 ${containerPadding} ${
+                className={`border-t border-white/10 ${sectionPadding} ${
                     collapsed ? "py-5" : "py-6"
                 } text-sm`}
             >
                 {isAuthenticated ? (
-                    <div
-                        className={`flex ${
-                            collapsed
-                                ? "flex-col items-center gap-3 text-center"
-                                : "items-center gap-3"
+                    <button
+                        type="button"
+                        onClick={handleLogout}
+                        disabled={authLoading}
+                        className={`group w-full rounded-2xl border border-white/10 bg-white/5 text-left transition hover:border-white/20 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60 ${
+                            collapsed ? "p-2" : "px-4 py-3"
                         }`}
                     >
-                        {authUser?.picture ? (
-                            <Image
-                                src={authUser.picture}
-                                alt="Avatar"
-                                width={40}
-                                height={40}
-                                className="h-10 w-10 rounded-full border border-white/30 object-cover"
-                                unoptimized
-                            />
-                        ) : (
-                            <div className="flex h-10 w-10 items-center justify-center rounded-full border border-white/20 bg-white/10 text-sm font-semibold">
-                                {(authUser?.name ?? authUser?.email ?? "U").charAt(0).toUpperCase()}
-                            </div>
-                        )}
-                        {!collapsed && (
-                            <div className="flex-1">
-                                <p className="font-semibold">
-                                    {authUser?.name ?? authUser?.email ?? "Użytkownik Google"}
-                                </p>
-                                {authUser?.email ? (
-                                    <p className="text-xs text-white/60">{authUser.email}</p>
-                                ) : null}
-                                <p className="text-[11px] uppercase tracking-wider text-white/40">
-                                    {profileLoading ? "Zapisywanie ustawień..." : "Konto Google"}
-                                </p>
-                            </div>
-                        )}
-                        <button
-                            className={`text-xs font-semibold text-white transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60 ${
-                                collapsed
-                                    ? "relative flex h-10 w-10 items-center justify-center rounded-full border border-white/30 bg-white/5 px-0 py-0"
-                                    : "rounded-lg border border-white/20 px-3 py-2"
+                        <div
+                            className={`flex ${
+                                collapsed ? "flex-col items-center gap-3" : "items-center gap-3"
                             }`}
-                            onClick={handleLogout}
-                            disabled={authLoading}
                         >
-                            {collapsed ? (
-                                <>
-                                    <svg
-                                        viewBox="0 0 24 24"
-                                        fill="none"
-                                        xmlns="http://www.w3.org/2000/svg"
-                                        className="h-4 w-4"
-                                    >
-                                        <path
-                                            d="M13 6H6C4.895 6 4 6.895 4 8V16C4 17.105 4.895 18 6 18H13"
-                                            stroke="currentColor"
-                                            strokeWidth="2"
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                        />
-                                        <path
-                                            d="M17 16L21 12L17 8"
-                                            stroke="currentColor"
-                                            strokeWidth="2"
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                        />
-                                        <path
-                                            d="M21 12H9"
-                                            stroke="currentColor"
-                                            strokeWidth="2"
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                        />
-                                    </svg>
-                                    <span className="sr-only">Wyloguj</span>
-                                </>
+                            {authUser?.picture ? (
+                                <Image
+                                    src={authUser.picture}
+                                    alt="Avatar"
+                                    width={40}
+                                    height={40}
+                                    className="h-10 w-10 rounded-full border border-white/20 object-cover"
+                                    unoptimized
+                                />
                             ) : (
-                                "Wyloguj"
+                                <div className="flex h-10 w-10 items-center justify-center rounded-full border border-white/15 bg-white/10 text-sm font-semibold">
+                                    {(authUser?.name ?? authUser?.email ?? "U").charAt(0).toUpperCase()}
+                                </div>
                             )}
-                        </button>
-                    </div>
-                ) : collapsed ? (
-                    <div className="flex flex-col items-center gap-3 text-center">
-                        <button
-                            className="relative flex h-10 w-10 items-center justify-center rounded-full border border-white/30 bg-white/5 text-white transition hover:border-white/50 disabled:cursor-not-allowed disabled:opacity-60"
-                            onClick={() => openAuthDialog("login")}
-                            disabled={authLoading}
-                        >
-                            <span aria-hidden className="text-base leading-none">
-                                →
-                            </span>
-                            <span className="sr-only">Zaloguj się</span>
-                        </button>
-                        <button
-                            className="relative flex h-10 w-10 items-center justify-center rounded-full border border-white bg-white text-primary transition hover:border-white/70 disabled:cursor-not-allowed disabled:opacity-60"
-                            onClick={() => openAuthDialog("signup")}
-                            disabled={authLoading}
-                        >
-                            <span aria-hidden className="text-lg leading-none">+</span>
-                            <span className="sr-only">Załóż konto</span>
-                        </button>
-                        <p className="text-[11px] text-white/60">
-                            Historia ustawień jest zapisywana w Twoim koncie Google.
-                        </p>
-                        {!googleClientId && (
-                            <p className="text-[10px] text-amber-200">
-                                Ustaw zmienną NEXT_PUBLIC_GOOGLE_CLIENT_ID, aby włączyć logowanie.
-                            </p>
-                        )}
-                    </div>
+                            {!collapsed && (
+                                <div className="flex-1">
+                                    <p className="font-semibold text-white">
+                                        {authUser?.name ?? authUser?.email ?? "Użytkownik Google"}
+                                    </p>
+                                    {authUser?.email ? (
+                                        <p className="text-xs text-white/60">{authUser.email}</p>
+                                    ) : null}
+                                    <p className="text-[11px] uppercase tracking-wider text-white/40">
+                                        {profileLoading ? "Zapisywanie ustawień..." : "Konto Google"}
+                                    </p>
+                                </div>
+                            )}
+                            <svg
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                xmlns="http://www.w3.org/2000/svg"
+                                className={`h-4 w-4 text-white/40 transition group-hover:text-white ${
+                                    collapsed ? "" : "self-start"
+                                }`}
+                                aria-hidden
+                            >
+                                <path
+                                    d="M9 5L16 12L9 19"
+                                    stroke="currentColor"
+                                    strokeWidth="2"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                />
+                            </svg>
+                            <span className="sr-only">Wyloguj</span>
+                        </div>
+                    </button>
                 ) : (
-                    <div className="space-y-4">
+                    <div
+                        className={`space-y-3 ${
+                            collapsed ? "text-center text-[11px]" : "text-sm"
+                        } text-white/70`}
+                    >
                         <button
-                            className="w-full rounded-lg bg-white/10 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-60"
+                            className={`w-full rounded-2xl border border-white/15 bg-white/5 font-semibold text-white transition hover:border-white/25 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60 ${
+                                collapsed ? "py-2" : "px-4 py-3"
+                            }`}
                             onClick={() => openAuthDialog("login")}
                             disabled={authLoading}
                         >
-                            Zaloguj się
+                            {collapsed ? "Zaloguj" : "Zaloguj się"}
                         </button>
                         <button
-                            className="w-full rounded-lg bg-white px-4 py-2 text-sm font-semibold text-primary transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                            className={`w-full rounded-2xl bg-white font-semibold text-[#0f172a] shadow transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60 ${
+                                collapsed ? "py-2" : "px-4 py-3"
+                            }`}
                             onClick={() => openAuthDialog("signup")}
                             disabled={authLoading}
                         >
-                            Załóż konto
+                            {collapsed ? "Rejestracja" : "Załóż konto"}
                         </button>
-                        <p className="text-xs text-white/60">
+                        <p className={collapsed ? "text-[10px]" : "text-xs"}>
                             Historia ustawień jest zapisywana w Twoim koncie Google.
                         </p>
                         {!googleClientId && (
-                            <p className="text-[11px] text-amber-200">
+                            <p className={`text-amber-200 ${collapsed ? "text-[10px]" : "text-xs"}`}>
                                 Ustaw zmienną NEXT_PUBLIC_GOOGLE_CLIENT_ID, aby włączyć logowanie.
                             </p>
                         )}
@@ -4280,12 +4491,23 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
         }
     }, [isAuthenticated, openAuthDialog]);
     const navItems: NavItem[] = [
-        { href: view === "analysis" ? "#analysis" : "/", label: "Analiza techniczna", key: "analysis" },
-        { href: view === "score" ? "#score" : "/ranking-score", label: "Ranking score", key: "score" },
+        {
+            href: view === "analysis" ? "#analysis" : "/",
+            label: "Analiza techniczna",
+            key: "analysis",
+            icon: IconSparkline,
+        },
+        {
+            href: view === "score" ? "#score" : "/ranking-score",
+            label: "Ranking score",
+            key: "score",
+            icon: IconTrophy,
+        },
         {
             href: view === "portfolio" ? "#portfolio" : "/symulator-portfela",
             label: "Symulacja portfela",
             key: "portfolio",
+            icon: IconPie,
         },
     ];
 
@@ -4678,7 +4900,6 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
             ? "Wróć do zapisanych ustawień"
             : "Załóż konto i synchronizuj konfiguracje";
     const authDialogCtaLabel = authDialogMode === "login" ? "Zaloguj się" : "Załóż konto";
-
     return (
         <div className="flex min-h-screen bg-page text-neutral">
             <Script
@@ -4691,12 +4912,12 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
             />
             {sidebarMobileOpen && (
                 <div
-                    className="fixed inset-0 z-40 bg-slate-950/70 backdrop-blur-sm lg:hidden"
+                    className="fixed inset-0 z-40 bg-black/70 backdrop-blur-sm lg:hidden"
                     onClick={() => setSidebarMobileOpen(false)}
                 />
             )}
             <div
-                className={`fixed inset-y-0 left-0 z-50 w-72 transform border-r border-white/10 bg-[rgba(15,23,42,0.95)] text-white transition-transform duration-300 ease-in-out lg:hidden ${
+                className={`fixed inset-y-0 left-0 z-50 w-80 transform border-r border-white/10 bg-[#0f1014] text-white shadow-[0_20px_50px_rgba(0,0,0,0.45)] transition-transform duration-300 ease-in-out lg:hidden ${
                     sidebarMobileOpen ? "translate-x-0" : "-translate-x-full"
                 }`}
                 role="dialog"
@@ -4730,7 +4951,7 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                 </div>
             </div>
             <aside
-                className={`hidden lg:flex ${sidebarCollapsed ? "lg:w-20" : "lg:w-72"} flex-col border-r border-white/10 bg-[rgba(15,23,42,0.95)] text-white lg:sticky lg:top-0 lg:h-screen lg:flex-shrink-0`}
+                className={`hidden lg:flex ${sidebarCollapsed ? "lg:w-20" : "lg:w-[280px]"} flex-col border-r border-white/10 bg-[#0f1014] text-white lg:sticky lg:top-0 lg:h-screen lg:flex-shrink-0`}
             >
                 <SidebarContent
                     collapsed={sidebarCollapsed}
@@ -4746,12 +4967,13 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                     authError={authError}
                     profileError={profileError}
                     googleClientId={GOOGLE_CLIENT_ID}
+                    onToggleCollapse={() => setSidebarCollapsed((prev) => !prev)}
                 />
             </aside>
             <div className="flex min-h-screen flex-1 flex-col">
-                <header className="border-b border-soft/60 bg-primary/10 text-white backdrop-blur">
-                    <div className="mx-auto w-full max-w-6xl px-4 py-8 md:px-8 md:py-10">
-                        <div className="mb-6 flex items-center justify-between">
+                <header className="text-white lg:hidden">
+                    <div className="mx-auto w-full max-w-6xl px-4 py-4 md:px-8 md:py-6">
+                        <div className="mb-4 flex items-center justify-between lg:mb-0">
                             <div className="flex items-center gap-3">
                                 <button
                                     type="button"
@@ -4777,48 +4999,8 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                                 </button>
                                 <span className="text-sm font-semibold text-white lg:hidden">GPW Analytics</span>
                             </div>
-                            <button
-                                type="button"
-                                onClick={() => setSidebarCollapsed((prev) => !prev)}
-                                className="hidden items-center gap-2 rounded-lg border border-white/20 px-3 py-2 text-xs font-semibold text-white/70 transition hover:border-white/40 hover:text-white lg:inline-flex"
-                                aria-pressed={sidebarCollapsed}
-                            >
-                                <svg
-                                    viewBox="0 0 24 24"
-                                    fill="none"
-                                    xmlns="http://www.w3.org/2000/svg"
-                                    className="h-4 w-4"
-                                >
-                                    {sidebarCollapsed ? (
-                                        <path
-                                            d="M10 6L16 12L10 18"
-                                            stroke="currentColor"
-                                            strokeWidth="2"
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                        />
-                                    ) : (
-                                        <path
-                                            d="M14 6L8 12L14 18"
-                                            stroke="currentColor"
-                                            strokeWidth="2"
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                        />
-                                    )}
-                                </svg>
-                                <span>{sidebarCollapsed ? "Pokaż menu" : "Zwiń menu"}</span>
-                            </button>
                         </div>
-                        <div className="space-y-3">
-                            <span className="text-xs uppercase tracking-[0.35em] text-white/70">Panel demo</span>
-                            <h1 className="text-3xl md:text-4xl font-bold text-white">Analityka Rynków</h1>
-                            <p className="max-w-2xl text-white/80">
-                                Zbieraj notowania, konfiguruj score i sprawdzaj portfel w jednym miejscu połączonym z
-                                backendem.
-                            </p>
-                        </div>
-                        <div className="mt-6 space-y-4 lg:hidden">
+                        <div className="mt-6 space-y-4">
                             {isAuthenticated ? (
                                 <div className="flex items-center gap-3 rounded-2xl bg-white/10 p-4">
                                     {authUser?.picture ? (
@@ -5021,8 +5203,8 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                 </div>
             )}
 
-            <main className="flex-1 overflow-y-auto">
-                <div className="mx-auto w-full max-w-6xl px-4 py-12 md:px-8 md:py-12 space-y-16">
+            <main className="flex-1">
+                <div className="mx-auto w-full max-w-6xl px-4 py-8 md:px-8 md:py-12 space-y-16">
                     {view === "analysis" && (
                         <Section
                             id="analysis"
