@@ -1482,6 +1482,50 @@ const SectionNav = ({ items }: { items: NavItem[] }) => {
     );
 };
 
+const SidebarToggleGlyph = ({ className }: { className?: string }) => (
+    <svg
+        viewBox="0 0 20 20"
+        fill="none"
+        xmlns="http://www.w3.org/2000/svg"
+        className={className}
+        aria-hidden
+    >
+        <rect
+            x="2.75"
+            y="2.75"
+            width="14.5"
+            height="14.5"
+            rx="3"
+            stroke="currentColor"
+            strokeWidth="1.5"
+        />
+        <path
+            d="M7.25 2.75V17.25"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+        />
+        <path
+            d="M10.75 6.75H14.25"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+        />
+        <path
+            d="M10.75 10.25H14.25"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+        />
+        <path
+            d="M10.75 13.75H14.25"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+        />
+    </svg>
+);
+
 const SidebarNav = ({
     items,
     activeKey,
@@ -1604,7 +1648,7 @@ const SidebarContent = ({
 }) => {
     const sectionPadding = collapsed ? "px-3" : "px-5";
     const headerSpacing = collapsed ? "space-y-4" : "space-y-5";
-    const collapseToggleLabel = collapsed ? "Otwórz pasek boczny" : "Zwiń pasek boczny";
+    const collapseToggleLabel = collapsed ? "Otwórz pasek boczny" : "Zamknij pasek boczny";
     return (
         <div className="flex h-full flex-col bg-[#0f1014] text-white">
             <div className={`${sectionPadding} ${headerSpacing} pt-6`}>
@@ -1613,19 +1657,44 @@ const SidebarContent = ({
                         collapsed ? "justify-center" : "gap-3"
                     }`}
                 >
-                    {onToggleCollapse ? (
+                    {onToggleCollapse && !collapsed ? (
                         <button
                             type="button"
                             onClick={onToggleCollapse}
-                            className="group relative flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#10a37f] via-[#0f5d4a] to-[#0b3d2d] text-sm font-semibold text-white transition hover:shadow-[0_0_0_3px_rgba(16,163,127,0.35)] focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0f1014]"
+                            className="group relative flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl border border-white/15 bg-white/5 text-white/70 transition hover:border-white/30 hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0f1014]"
                             aria-label={collapseToggleLabel}
                             aria-expanded={!collapsed}
                         >
-                            <span className="pointer-events-none select-none">GA</span>
-                            <span className="pointer-events-none absolute left-1/2 top-full z-20 mt-2 -translate-x-1/2 whitespace-nowrap rounded-lg border border-white/10 bg-[#1a1c23]/95 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.28em] text-white opacity-0 shadow-[0_12px_30px_rgba(0,0,0,0.45)] transition group-hover:opacity-100 group-focus-visible:opacity-100">
+                            <SidebarToggleGlyph className="h-4 w-4" />
+                            <span className="pointer-events-none absolute left-full top-1/2 z-20 ml-3 -translate-y-1/2 whitespace-nowrap rounded-lg border border-white/10 bg-[#1a1c23]/95 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.28em] text-white opacity-0 shadow-[0_12px_30px_rgba(0,0,0,0.45)] transition group-hover:opacity-100 group-focus-visible:opacity-100">
                                 {collapseToggleLabel}
                             </span>
                         </button>
+                    ) : null}
+                    {onToggleCollapse ? (
+                        collapsed ? (
+                            <button
+                                type="button"
+                                onClick={onToggleCollapse}
+                                className="group relative flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-[#10a37f] via-[#0f5d4a] to-[#0b3d2d] text-sm font-semibold text-white transition focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0f1014]"
+                                aria-label={collapseToggleLabel}
+                                aria-expanded={!collapsed}
+                            >
+                                <span className="pointer-events-none select-none transition-opacity duration-150 group-hover:opacity-0 group-focus-visible:opacity-0">
+                                    GA
+                                </span>
+                                <span className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100">
+                                    <SidebarToggleGlyph className="h-5 w-5 text-white" />
+                                </span>
+                                <span className="pointer-events-none absolute right-full top-1/2 z-20 mr-3 -translate-y-1/2 whitespace-nowrap rounded-lg border border-white/10 bg-[#1a1c23]/95 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.28em] text-white opacity-0 shadow-[0_12px_30px_rgba(0,0,0,0.45)] transition group-hover:opacity-100 group-focus-visible:opacity-100">
+                                    {collapseToggleLabel}
+                                </span>
+                            </button>
+                        ) : (
+                            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-[#10a37f] via-[#0f5d4a] to-[#0b3d2d] text-sm font-semibold">
+                                GA
+                            </div>
+                        )
                     ) : (
                         <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-[#10a37f] via-[#0f5d4a] to-[#0b3d2d] text-sm font-semibold">
                             GA
