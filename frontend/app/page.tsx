@@ -1739,11 +1739,6 @@ const SidebarContent = ({
                         </span>
                     )}
                 </button>
-                {!collapsed && navItems.length > 0 && (
-                    <div className="rounded-xl border border-white/5 bg-white/5 px-3 py-2 text-xs text-white/60">
-                        Szybki dostęp do widoków analitycznych.
-                    </div>
-                )}
             </div>
             <div className={`flex-1 overflow-y-auto pb-6 ${sectionPadding}`}>
                 <div className="space-y-3">
