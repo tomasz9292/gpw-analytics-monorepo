@@ -1654,46 +1654,67 @@ const SidebarContent = ({
             GA
         </div>
     );
+    const renderExpandedHeader = () => (
+        <div className="flex w-full items-center gap-3">
+            {renderBrandBadge()}
+            <div className="leading-tight">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-white/50">
+                    GPW Analytics
+                </p>
+                <p className="text-base font-semibold text-white">Panel demo</p>
+            </div>
+        </div>
+    );
+    const renderExpandedToggle = () => (
+        <button
+            type="button"
+            onClick={onToggleCollapse}
+            className="group relative flex h-10 w-10 items-center justify-center rounded-xl border border-white/15 bg-white/5 text-white/70 transition hover:border-white/30 hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0f1014]"
+            aria-label={collapseToggleLabel}
+            aria-expanded={!collapsed}
+        >
+            <SidebarToggleGlyph className="h-4 w-4" />
+            <span className="pointer-events-none absolute right-full top-1/2 z-20 mr-3 -translate-y-1/2 whitespace-nowrap rounded-lg border border-white/10 bg-[#1a1c23]/95 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.28em] text-white opacity-0 shadow-[0_12px_30px_rgba(0,0,0,0.45)] transition group-hover:opacity-100 group-focus-visible:opacity-100">
+                {collapseToggleLabel}
+            </span>
+        </button>
+    );
+    const headerAlignment = collapsed
+        ? "justify-center"
+        : onToggleCollapse
+        ? "justify-between"
+        : "justify-start";
     return (
         <div className="flex h-full flex-col bg-[#0f1014] text-white">
             <div className={`${sectionPadding} ${headerSpacing} pt-6`}>
-                <div
-                    className={`flex items-center ${
-                        collapsed ? "justify-center" : "gap-3"
-                    }`}
-                >
-                    {onToggleCollapse
-                        ? collapsed
-                            ? (
-                                <button
-                                    type="button"
-                                    onClick={onToggleCollapse}
-                                    className="group relative flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-[#10a37f] via-[#0f5d4a] to-[#0b3d2d] text-sm font-semibold text-white transition focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0f1014]"
-                                    aria-label={collapseToggleLabel}
-                                    aria-expanded={!collapsed}
-                                >
-                                    <span className="pointer-events-none select-none transition-opacity duration-150 group-hover:opacity-0 group-focus-visible:opacity-0">
-                                        GA
-                                    </span>
-                                    <span className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100">
-                                        <SidebarToggleGlyph className="h-5 w-5 text-white" />
-                                    </span>
-                                    <span className="pointer-events-none absolute left-full top-1/2 z-20 ml-3 -translate-y-1/2 whitespace-nowrap rounded-lg border border-white/10 bg-[#1a1c23]/95 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.28em] text-white opacity-0 shadow-[0_12px_30px_rgba(0,0,0,0.45)] transition group-hover:opacity-100 group-focus-visible:opacity-100">
-                                        {collapseToggleLabel}
-                                    </span>
-                                </button>
-                            )
-                            : (
-                                renderBrandBadge()
-                            )
-                        : renderBrandBadge()}
-                    {!collapsed && (
-                        <div className="leading-tight">
-                            <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-white/50">
-                                GPW Analytics
-                            </p>
-                            <p className="text-base font-semibold text-white">Panel demo</p>
-                        </div>
+                <div className={`flex items-center ${headerAlignment} gap-3`}>
+                    {collapsed ? (
+                        onToggleCollapse ? (
+                            <button
+                                type="button"
+                                onClick={onToggleCollapse}
+                                className="group relative flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-[#10a37f] via-[#0f5d4a] to-[#0b3d2d] text-sm font-semibold text-white transition focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0f1014]"
+                                aria-label={collapseToggleLabel}
+                                aria-expanded={!collapsed}
+                            >
+                                <span className="pointer-events-none select-none transition-opacity duration-150 group-hover:opacity-0 group-focus-visible:opacity-0">
+                                    GA
+                                </span>
+                                <span className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100">
+                                    <SidebarToggleGlyph className="h-5 w-5 text-white" />
+                                </span>
+                                <span className="pointer-events-none absolute left-full top-1/2 z-20 ml-3 -translate-y-1/2 whitespace-nowrap rounded-lg border border-white/10 bg-[#1a1c23]/95 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.28em] text-white opacity-0 shadow-[0_12px_30px_rgba(0,0,0,0.45)] transition group-hover:opacity-100 group-focus-visible:opacity-100">
+                                    {collapseToggleLabel}
+                                </span>
+                            </button>
+                        ) : (
+                            renderBrandBadge()
+                        )
+                    ) : (
+                        <>
+                            {renderExpandedHeader()}
+                            {onToggleCollapse ? renderExpandedToggle() : null}
+                        </>
                     )}
                 </div>
                 <button
@@ -4880,10 +4901,6 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
             ? "Wróć do zapisanych ustawień"
             : "Załóż konto i synchronizuj konfiguracje";
     const authDialogCtaLabel = authDialogMode === "login" ? "Zaloguj się" : "Załóż konto";
-    const collapseToggleLabel = sidebarCollapsed
-        ? "Otwórz pasek boczny"
-        : "Zamknij pasek boczny";
-
     return (
         <div className="flex min-h-screen bg-page text-neutral">
             <Script
@@ -4980,18 +4997,6 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                                             strokeLinejoin="round"
                                         />
                                     </svg>
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => setSidebarCollapsed((prev) => !prev)}
-                                    className="group relative hidden h-10 w-10 items-center justify-center rounded-full border border-white/15 bg-white/5 text-white/70 transition hover:border-white/30 hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-[#11151d] lg:inline-flex"
-                                    aria-label={collapseToggleLabel}
-                                    aria-expanded={!sidebarCollapsed}
-                                >
-                                    <SidebarToggleGlyph className="h-4 w-4" />
-                                    <span className="pointer-events-none absolute left-full top-1/2 z-20 ml-3 -translate-y-1/2 whitespace-nowrap rounded-lg border border-white/10 bg-[#1a1c23]/95 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.28em] text-white opacity-0 shadow-[0_12px_30px_rgba(0,0,0,0.45)] transition group-hover:opacity-100 group-focus-visible:opacity-100">
-                                        {collapseToggleLabel}
-                                    </span>
                                 </button>
                                 <span className="text-sm font-semibold text-white lg:hidden">GPW Analytics</span>
                             </div>
