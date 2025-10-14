@@ -1656,7 +1656,14 @@ const SidebarContent = ({
     );
     const renderExpandedHeader = () => (
         <div className="flex w-full items-center gap-3">
-            {renderBrandBadge()}
+            <div className="group relative">
+                {renderBrandBadge()}
+                {onToggleCollapse ? (
+                    <span className="pointer-events-none absolute left-full top-1/2 z-20 ml-3 -translate-y-1/2 whitespace-nowrap rounded-lg border border-white/10 bg-[#1a1c23]/95 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.28em] text-white opacity-0 shadow-[0_12px_30px_rgba(0,0,0,0.45)] transition-opacity duration-150 group-hover:opacity-100">
+                        {collapseToggleLabel}
+                    </span>
+                ) : null}
+            </div>
             <div className="leading-tight">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-white/50">
                     GPW Analytics
