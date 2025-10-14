@@ -5203,7 +5203,7 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                 </div>
             )}
 
-            <main className="flex-1 overflow-y-auto">
+            <main className="flex-1">
                 <div className="mx-auto w-full max-w-6xl px-4 py-8 md:px-8 md:py-12 space-y-16">
                     {view === "analysis" && (
                         <Section
