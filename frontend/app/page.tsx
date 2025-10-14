@@ -1391,37 +1391,59 @@ const SidebarNav = ({
 }) => {
     if (!items.length) return null;
     return (
-        <nav className={`space-y-1 ${collapsed ? "text-xs" : "text-sm"}`}>
+        <nav className={`space-y-1.5 ${collapsed ? "text-[11px]" : "text-sm"}`}>
             {items.map((item) => {
                 const active = item.key && item.key === activeKey;
                 return (
                     <a
                         key={item.href}
                         href={item.href}
-                        className={`flex items-center ${
-                            collapsed ? "justify-center" : "justify-between"
-                        } rounded-lg px-3 py-2 transition ${
+                        className={`group relative flex items-center overflow-hidden rounded-xl border border-transparent px-3 py-2 transition ${
+                            collapsed ? "justify-center" : "gap-3"
+                        } ${
                             active
-                                ? "bg-white/10 text-white"
-                                : "text-white/70 hover:text-white hover:bg-white/5"
+                                ? "bg-white/10 text-white shadow-[0_0_0_1px_rgba(255,255,255,0.08)]"
+                                : "text-white/70 hover:border-white/10 hover:text-white hover:bg-white/5"
                         }`}
                         title={item.label}
                         onClick={() => onNavigate?.()}
                         aria-current={active ? "page" : undefined}
                     >
+                        {active && (
+                            <span
+                                aria-hidden
+                                className={`absolute left-2 top-1/2 h-7 w-1 -translate-y-1/2 rounded-full bg-[#10a37f] ${
+                                    collapsed ? "left-1 h-6" : ""
+                                }`}
+                            />
+                        )}
                         {collapsed ? (
                             <span aria-hidden className="font-semibold">
                                 {item.label.charAt(0).toUpperCase()}
                             </span>
                         ) : (
-                            <span>{item.label}</span>
+                            <span className="relative z-10 font-medium">{item.label}</span>
                         )}
-                        {active && !collapsed && (
-                            <span className="h-2 w-2 rounded-full bg-primary/80" />
+                        {!collapsed && (
+                            <svg
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                xmlns="http://www.w3.org/2000/svg"
+                                className={`relative z-10 h-4 w-4 transition ${
+                                    active ? "text-white" : "text-white/40 group-hover:text-white/70"
+                                }`}
+                                aria-hidden
+                            >
+                                <path
+                                    d="M9 5L16 12L9 19"
+                                    stroke="currentColor"
+                                    strokeWidth="2"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                />
+                            </svg>
                         )}
-                        {active && collapsed && (
-                            <span className="sr-only">(aktywny)</span>
-                        )}
+                        {active && collapsed && <span className="sr-only">(aktywny)</span>}
                     </a>
                 );
             })}
@@ -1460,187 +1482,164 @@ const SidebarContent = ({
     googleClientId: string;
     onNavigate?: () => void;
 }) => {
-    const containerPadding = collapsed ? "px-2" : "px-4";
-    const buttonPadding = collapsed ? "px-0" : "px-4";
+    const sectionPadding = collapsed ? "px-3" : "px-5";
+    const headerSpacing = collapsed ? "space-y-4" : "space-y-5";
     return (
-        <div className="flex h-full flex-col">
-            <div className={`space-y-6 ${containerPadding} py-6`}>
+        <div className="flex h-full flex-col bg-[#0f1014] text-white">
+            <div className={`${sectionPadding} ${headerSpacing} pt-6`}>
                 <div
                     className={`flex items-center ${
                         collapsed ? "justify-center" : "gap-3"
                     }`}
                 >
-                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary font-semibold">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-[#10a37f] via-[#0f5d4a] to-[#0b3d2d] text-sm font-semibold">
                         GA
                     </div>
                     {!collapsed && (
-                        <div>
-                            <p className="text-sm font-semibold">GPW Analytics</p>
-                            <p className="text-xs text-white/60">Panel demo</p>
+                        <div className="leading-tight">
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-white/50">
+                                GPW Analytics
+                            </p>
+                            <p className="text-base font-semibold text-white">Panel demo</p>
                         </div>
                     )}
                 </div>
                 <button
                     type="button"
                     onClick={onStartAnalysis}
-                    className={`w-full rounded-lg bg-white/10 py-3 text-sm font-semibold text-white transition hover:bg-white/20 ${buttonPadding}`}
+                    className={`group w-full rounded-2xl bg-gradient-to-r from-[#10a37f] via-[#0f7f66] to-[#0b5a45] text-sm font-semibold text-white shadow-[0_10px_35px_rgba(16,163,127,0.35)] transition hover:shadow-[0_12px_40px_rgba(16,163,127,0.55)] ${
+                        collapsed ? "py-3" : "px-4 py-3"
+                    }`}
                 >
                     {collapsed ? (
-                        <span className="relative inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/30">
-                            <span aria-hidden className="text-lg leading-none">
-                                +
-                            </span>
-                            <span className="sr-only">Nowa analiza</span>
+                        <span className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-lg leading-none">
+                            +
                         </span>
                     ) : (
-                        "Nowa analiza"
+                        <span className="flex items-center justify-center gap-2">
+                            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-white/20 text-base leading-none">
+                                +
+                            </span>
+                            <span>Nowa analiza</span>
+                        </span>
                     )}
                 </button>
+                {!collapsed && navItems.length > 0 && (
+                    <div className="rounded-xl border border-white/5 bg-white/5 px-3 py-2 text-xs text-white/60">
+                        Szybki dostęp do widoków analitycznych.
+                    </div>
+                )}
             </div>
-            <div className={`flex-1 overflow-y-auto ${containerPadding}`}>
-                <SidebarNav
-                    items={navItems}
-                    activeKey={activeKey}
-                    collapsed={collapsed}
-                    onNavigate={onNavigate}
-                />
+            <div className={`flex-1 overflow-y-auto pb-6 ${sectionPadding}`}>
+                <div className="space-y-3">
+                    {!collapsed && (
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.32em] text-white/40">
+                            Nawigacja
+                        </p>
+                    )}
+                    <SidebarNav
+                        items={navItems}
+                        activeKey={activeKey}
+                        collapsed={collapsed}
+                        onNavigate={onNavigate}
+                    />
+                </div>
             </div>
             <div
-                className={`border-t border-white/10 ${containerPadding} ${
+                className={`border-t border-white/10 ${sectionPadding} ${
                     collapsed ? "py-5" : "py-6"
                 } text-sm`}
             >
                 {isAuthenticated ? (
-                    <div
-                        className={`flex ${
-                            collapsed
-                                ? "flex-col items-center gap-3 text-center"
-                                : "items-center gap-3"
+                    <button
+                        type="button"
+                        onClick={handleLogout}
+                        disabled={authLoading}
+                        className={`group w-full rounded-2xl border border-white/10 bg-white/5 text-left transition hover:border-white/20 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60 ${
+                            collapsed ? "p-2" : "px-4 py-3"
                         }`}
                     >
-                        {authUser?.picture ? (
-                            <Image
-                                src={authUser.picture}
-                                alt="Avatar"
-                                width={40}
-                                height={40}
-                                className="h-10 w-10 rounded-full border border-white/30 object-cover"
-                                unoptimized
-                            />
-                        ) : (
-                            <div className="flex h-10 w-10 items-center justify-center rounded-full border border-white/20 bg-white/10 text-sm font-semibold">
-                                {(authUser?.name ?? authUser?.email ?? "U").charAt(0).toUpperCase()}
-                            </div>
-                        )}
-                        {!collapsed && (
-                            <div className="flex-1">
-                                <p className="font-semibold">
-                                    {authUser?.name ?? authUser?.email ?? "Użytkownik Google"}
-                                </p>
-                                {authUser?.email ? (
-                                    <p className="text-xs text-white/60">{authUser.email}</p>
-                                ) : null}
-                                <p className="text-[11px] uppercase tracking-wider text-white/40">
-                                    {profileLoading ? "Zapisywanie ustawień..." : "Konto Google"}
-                                </p>
-                            </div>
-                        )}
-                        <button
-                            className={`text-xs font-semibold text-white transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60 ${
-                                collapsed
-                                    ? "relative flex h-10 w-10 items-center justify-center rounded-full border border-white/30 bg-white/5 px-0 py-0"
-                                    : "rounded-lg border border-white/20 px-3 py-2"
+                        <div
+                            className={`flex ${
+                                collapsed ? "flex-col items-center gap-3" : "items-center gap-3"
                             }`}
-                            onClick={handleLogout}
-                            disabled={authLoading}
                         >
-                            {collapsed ? (
-                                <>
-                                    <svg
-                                        viewBox="0 0 24 24"
-                                        fill="none"
-                                        xmlns="http://www.w3.org/2000/svg"
-                                        className="h-4 w-4"
-                                    >
-                                        <path
-                                            d="M13 6H6C4.895 6 4 6.895 4 8V16C4 17.105 4.895 18 6 18H13"
-                                            stroke="currentColor"
-                                            strokeWidth="2"
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                        />
-                                        <path
-                                            d="M17 16L21 12L17 8"
-                                            stroke="currentColor"
-                                            strokeWidth="2"
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                        />
-                                        <path
-                                            d="M21 12H9"
-                                            stroke="currentColor"
-                                            strokeWidth="2"
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                        />
-                                    </svg>
-                                    <span className="sr-only">Wyloguj</span>
-                                </>
+                            {authUser?.picture ? (
+                                <Image
+                                    src={authUser.picture}
+                                    alt="Avatar"
+                                    width={40}
+                                    height={40}
+                                    className="h-10 w-10 rounded-full border border-white/20 object-cover"
+                                    unoptimized
+                                />
                             ) : (
-                                "Wyloguj"
+                                <div className="flex h-10 w-10 items-center justify-center rounded-full border border-white/15 bg-white/10 text-sm font-semibold">
+                                    {(authUser?.name ?? authUser?.email ?? "U").charAt(0).toUpperCase()}
+                                </div>
                             )}
-                        </button>
-                    </div>
-                ) : collapsed ? (
-                    <div className="flex flex-col items-center gap-3 text-center">
-                        <button
-                            className="relative flex h-10 w-10 items-center justify-center rounded-full border border-white/30 bg-white/5 text-white transition hover:border-white/50 disabled:cursor-not-allowed disabled:opacity-60"
-                            onClick={() => openAuthDialog("login")}
-                            disabled={authLoading}
-                        >
-                            <span aria-hidden className="text-base leading-none">
-                                →
-                            </span>
-                            <span className="sr-only">Zaloguj się</span>
-                        </button>
-                        <button
-                            className="relative flex h-10 w-10 items-center justify-center rounded-full border border-white bg-white text-primary transition hover:border-white/70 disabled:cursor-not-allowed disabled:opacity-60"
-                            onClick={() => openAuthDialog("signup")}
-                            disabled={authLoading}
-                        >
-                            <span aria-hidden className="text-lg leading-none">+</span>
-                            <span className="sr-only">Załóż konto</span>
-                        </button>
-                        <p className="text-[11px] text-white/60">
-                            Historia ustawień jest zapisywana w Twoim koncie Google.
-                        </p>
-                        {!googleClientId && (
-                            <p className="text-[10px] text-amber-200">
-                                Ustaw zmienną NEXT_PUBLIC_GOOGLE_CLIENT_ID, aby włączyć logowanie.
-                            </p>
-                        )}
-                    </div>
+                            {!collapsed && (
+                                <div className="flex-1">
+                                    <p className="font-semibold text-white">
+                                        {authUser?.name ?? authUser?.email ?? "Użytkownik Google"}
+                                    </p>
+                                    {authUser?.email ? (
+                                        <p className="text-xs text-white/60">{authUser.email}</p>
+                                    ) : null}
+                                    <p className="text-[11px] uppercase tracking-wider text-white/40">
+                                        {profileLoading ? "Zapisywanie ustawień..." : "Konto Google"}
+                                    </p>
+                                </div>
+                            )}
+                            <svg
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                xmlns="http://www.w3.org/2000/svg"
+                                className={`h-4 w-4 text-white/40 transition group-hover:text-white ${
+                                    collapsed ? "" : "self-start"
+                                }`}
+                                aria-hidden
+                            >
+                                <path
+                                    d="M9 5L16 12L9 19"
+                                    stroke="currentColor"
+                                    strokeWidth="2"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                />
+                            </svg>
+                            <span className="sr-only">Wyloguj</span>
+                        </div>
+                    </button>
                 ) : (
-                    <div className="space-y-4">
+                    <div
+                        className={`space-y-3 ${
+                            collapsed ? "text-center text-[11px]" : "text-sm"
+                        } text-white/70`}
+                    >
                         <button
-                            className="w-full rounded-lg bg-white/10 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-60"
+                            className={`w-full rounded-2xl border border-white/15 bg-white/5 font-semibold text-white transition hover:border-white/25 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60 ${
+                                collapsed ? "py-2" : "px-4 py-3"
+                            }`}
                             onClick={() => openAuthDialog("login")}
                             disabled={authLoading}
                         >
-                            Zaloguj się
+                            {collapsed ? "Zaloguj" : "Zaloguj się"}
                         </button>
                         <button
-                            className="w-full rounded-lg bg-white px-4 py-2 text-sm font-semibold text-primary transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                            className={`w-full rounded-2xl bg-white font-semibold text-[#0f172a] shadow transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60 ${
+                                collapsed ? "py-2" : "px-4 py-3"
+                            }`}
                             onClick={() => openAuthDialog("signup")}
                             disabled={authLoading}
                         >
-                            Załóż konto
+                            {collapsed ? "Rejestracja" : "Załóż konto"}
                         </button>
-                        <p className="text-xs text-white/60">
+                        <p className={collapsed ? "text-[10px]" : "text-xs"}>
                             Historia ustawień jest zapisywana w Twoim koncie Google.
                         </p>
                         {!googleClientId && (
-                            <p className="text-[11px] text-amber-200">
+                            <p className={`text-amber-200 ${collapsed ? "text-[10px]" : "text-xs"}`}>
                                 Ustaw zmienną NEXT_PUBLIC_GOOGLE_CLIENT_ID, aby włączyć logowanie.
                             </p>
                         )}
@@ -4691,12 +4690,12 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
             />
             {sidebarMobileOpen && (
                 <div
-                    className="fixed inset-0 z-40 bg-slate-950/70 backdrop-blur-sm lg:hidden"
+                    className="fixed inset-0 z-40 bg-black/70 backdrop-blur-sm lg:hidden"
                     onClick={() => setSidebarMobileOpen(false)}
                 />
             )}
             <div
-                className={`fixed inset-y-0 left-0 z-50 w-72 transform border-r border-white/10 bg-[rgba(15,23,42,0.95)] text-white transition-transform duration-300 ease-in-out lg:hidden ${
+                className={`fixed inset-y-0 left-0 z-50 w-80 transform border-r border-white/10 bg-[#0f1014] text-white shadow-[0_20px_50px_rgba(0,0,0,0.45)] transition-transform duration-300 ease-in-out lg:hidden ${
                     sidebarMobileOpen ? "translate-x-0" : "-translate-x-full"
                 }`}
                 role="dialog"
@@ -4730,7 +4729,7 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                 </div>
             </div>
             <aside
-                className={`hidden lg:flex ${sidebarCollapsed ? "lg:w-20" : "lg:w-72"} flex-col border-r border-white/10 bg-[rgba(15,23,42,0.95)] text-white lg:sticky lg:top-0 lg:h-screen lg:flex-shrink-0`}
+                className={`hidden lg:flex ${sidebarCollapsed ? "lg:w-20" : "lg:w-[280px]"} flex-col border-r border-white/10 bg-[#0f1014] text-white lg:sticky lg:top-0 lg:h-screen lg:flex-shrink-0`}
             >
                 <SidebarContent
                     collapsed={sidebarCollapsed}
