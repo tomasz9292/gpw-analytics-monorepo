@@ -1358,11 +1358,10 @@ const Section = ({
     </section>
 );
 
-const SectionNav = ({
-    items,
-}: {
-    items: { href: string; label: string }[];
-}) => {
+type DashboardView = "analysis" | "score" | "portfolio";
+type NavItem = { href: string; label: string; key?: DashboardView };
+
+const SectionNav = ({ items }: { items: NavItem[] }) => {
     if (!items.length) return null;
     return (
         <nav className="flex flex-wrap gap-2 text-sm">
@@ -1375,6 +1374,37 @@ const SectionNav = ({
                     {item.label}
                 </a>
             ))}
+        </nav>
+    );
+};
+
+const SidebarNav = ({
+    items,
+    activeKey,
+}: {
+    items: NavItem[];
+    activeKey?: DashboardView;
+}) => {
+    if (!items.length) return null;
+    return (
+        <nav className="space-y-1 text-sm">
+            {items.map((item) => {
+                const active = item.key && item.key === activeKey;
+                return (
+                    <a
+                        key={item.href}
+                        href={item.href}
+                        className={`flex items-center justify-between rounded-lg px-3 py-2 transition ${
+                            active
+                                ? "bg-white/10 text-white"
+                                : "text-white/70 hover:text-white hover:bg-white/5"
+                        }`}
+                    >
+                        <span>{item.label}</span>
+                        {active && <span className="h-2 w-2 rounded-full bg-primary/80" />}
+                    </a>
+                );
+            })}
         </nav>
     );
 };
@@ -2868,11 +2898,7 @@ export default function Page() {
     return <AnalyticsDashboard view="analysis" />;
 }
 
-export function AnalyticsDashboard({
-    view,
-}: {
-    view: "analysis" | "score" | "portfolio";
-}) {
+export function AnalyticsDashboard({ view }: { view: DashboardView }) {
     const defaultScoreDraft = useMemo(() => getDefaultScoreDraft(), []);
     const defaultPortfolioDraft = useMemo(() => getDefaultPortfolioDraft(), []);
 
@@ -3976,12 +4002,13 @@ export function AnalyticsDashboard({
     );
 
     const symbolLabel = symbol ?? "—";
-    const navItems = [
-        { href: view === "analysis" ? "#analysis" : "/", label: "Analiza techniczna" },
-        { href: view === "score" ? "#score" : "/ranking-score", label: "Ranking score" },
+    const navItems: NavItem[] = [
+        { href: view === "analysis" ? "#analysis" : "/", label: "Analiza techniczna", key: "analysis" },
+        { href: view === "score" ? "#score" : "/ranking-score", label: "Ranking score", key: "score" },
         {
             href: view === "portfolio" ? "#portfolio" : "/symulator-portfela",
             label: "Symulacja portfela",
+            key: "portfolio",
         },
     ];
 
@@ -4376,7 +4403,7 @@ export function AnalyticsDashboard({
     const authDialogCtaLabel = authDialogMode === "login" ? "Zaloguj się" : "Załóż konto";
 
     return (
-        <div className="min-h-screen bg-page text-neutral">
+        <div className="flex min-h-screen bg-page text-neutral">
             <Script
                 src="https://accounts.google.com/gsi/client"
                 strategy="afterInteractive"
@@ -4385,9 +4412,108 @@ export function AnalyticsDashboard({
                 onLoad={() => setGoogleLoaded(true)}
                 onError={() => setAuthError("Nie udało się wczytać logowania Google.")}
             />
-            <header className="border-b border-soft bg-primary text-white">
-                <div className="max-w-6xl mx-auto px-4 md:px-8 py-10 space-y-8">
-                    <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
+            <aside className="hidden w-72 flex-col border-r border-white/10 bg-[rgba(15,23,42,0.95)] text-white lg:flex">
+                <div className="space-y-6 px-4 py-6">
+                    <div className="flex items-center gap-3">
+                        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary font-semibold">
+                            GA
+                        </div>
+                        <div>
+                            <p className="text-sm font-semibold">GPW Analytics</p>
+                            <p className="text-xs text-white/60">Panel demo</p>
+                        </div>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => {
+                            if (!isAuthenticated) {
+                                openAuthDialog("signup");
+                                return;
+                            }
+                            if (typeof window !== "undefined") {
+                                window.scrollTo({ top: 0, behavior: "smooth" });
+                            }
+                        }}
+                        className="w-full rounded-lg bg-white/10 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/20"
+                    >
+                        Nowa analiza
+                    </button>
+                </div>
+                <div className="flex-1 overflow-y-auto px-4">
+                    <SidebarNav items={navItems} activeKey={view} />
+                </div>
+                <div className="border-t border-white/10 px-4 py-6 text-sm">
+                    {isAuthenticated ? (
+                        <div className="flex items-center gap-3">
+                            {authUser?.picture ? (
+                                <Image
+                                    src={authUser.picture}
+                                    alt="Avatar"
+                                    width={40}
+                                    height={40}
+                                    className="h-10 w-10 rounded-full border border-white/30 object-cover"
+                                    unoptimized
+                                />
+                            ) : (
+                                <div className="flex h-10 w-10 items-center justify-center rounded-full border border-white/20 bg-white/10 text-sm font-semibold">
+                                    {(authUser?.name ?? authUser?.email ?? "U").charAt(0).toUpperCase()}
+                                </div>
+                            )}
+                            <div className="flex-1">
+                                <p className="font-semibold">
+                                    {authUser?.name ?? authUser?.email ?? "Użytkownik Google"}
+                                </p>
+                                {authUser?.email ? (
+                                    <p className="text-xs text-white/60">{authUser.email}</p>
+                                ) : null}
+                                <p className="text-[11px] uppercase tracking-wider text-white/40">
+                                    {profileLoading ? "Zapisywanie ustawień..." : "Konto Google"}
+                                </p>
+                            </div>
+                            <button
+                                className="rounded-lg border border-white/20 px-3 py-2 text-xs font-semibold transition hover:bg-white/10"
+                                onClick={handleLogout}
+                                disabled={authLoading}
+                            >
+                                Wyloguj
+                            </button>
+                        </div>
+                    ) : (
+                        <div className="space-y-4">
+                            <button
+                                className="w-full rounded-lg bg-white/10 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/20 disabled:opacity-60"
+                                onClick={() => openAuthDialog("login")}
+                                disabled={authLoading}
+                            >
+                                Zaloguj się
+                            </button>
+                            <button
+                                className="w-full rounded-lg bg-white px-4 py-2 text-sm font-semibold text-primary transition hover:bg-slate-100 disabled:opacity-60"
+                                onClick={() => openAuthDialog("signup")}
+                                disabled={authLoading}
+                            >
+                                Załóż konto
+                            </button>
+                            <p className="text-xs text-white/60">
+                                Historia ustawień jest zapisywana w Twoim koncie Google.
+                            </p>
+                            {!GOOGLE_CLIENT_ID && (
+                                <p className="text-[11px] text-amber-200">
+                                    Ustaw zmienną NEXT_PUBLIC_GOOGLE_CLIENT_ID, aby włączyć logowanie.
+                                </p>
+                            )}
+                        </div>
+                    )}
+                    {(authError || profileError) && (
+                        <p className="mt-4 text-xs text-rose-200">
+                            {authError ?? profileError}
+                        </p>
+                    )}
+                </div>
+            </aside>
+            <div className="flex min-h-screen flex-1 flex-col">
+                <header className="border-b border-soft/60 bg-primary/10 text-white backdrop-blur">
+                    <div className="mx-auto w-full max-w-6xl px-4 py-8 md:px-8 md:py-10">
                         <div className="space-y-3">
                             <span className="text-xs uppercase tracking-[0.35em] text-white/70">Panel demo</span>
                             <h1 className="text-3xl md:text-4xl font-bold text-white">Analityka Rynków</h1>
@@ -4396,32 +4522,36 @@ export function AnalyticsDashboard({
                                 backendem.
                             </p>
                         </div>
-                        <div className="flex flex-col gap-2 items-stretch md:items-end self-start md:self-auto">
+                        <div className="mt-6 space-y-4 lg:hidden">
                             {isAuthenticated ? (
-                                <div className="flex items-center gap-3">
+                                <div className="flex items-center gap-3 rounded-2xl bg-white/10 p-4">
                                     {authUser?.picture ? (
                                         <Image
                                             src={authUser.picture}
                                             alt="Avatar"
                                             width={40}
                                             height={40}
-                                            className="h-10 w-10 rounded-full border border-white/40 object-cover"
+                                            className="h-10 w-10 rounded-full border border-white/30 object-cover"
                                             unoptimized
                                         />
-                                    ) : null}
-                                    <div className="text-right">
+                                    ) : (
+                                        <div className="flex h-10 w-10 items-center justify-center rounded-full border border-white/20 bg-white/10 text-sm font-semibold">
+                                            {(authUser?.name ?? authUser?.email ?? "U").charAt(0).toUpperCase()}
+                                        </div>
+                                    )}
+                                    <div className="flex-1 text-sm">
                                         <p className="font-semibold text-white">
                                             {authUser?.name ?? authUser?.email ?? "Użytkownik Google"}
                                         </p>
                                         {authUser?.email ? (
-                                            <p className="text-xs text-white/70">{authUser.email}</p>
+                                            <p className="text-xs text-white/60">{authUser.email}</p>
                                         ) : null}
-                                        <p className="text-[11px] uppercase tracking-wider text-white/60">
+                                        <p className="text-[11px] uppercase tracking-wider text-white/40">
                                             {profileLoading ? "Zapisywanie ustawień..." : "Konto Google"}
                                         </p>
                                     </div>
                                     <button
-                                        className="px-4 py-2 rounded-xl border border-white/40 text-white hover:bg-white/10 transition disabled:opacity-60"
+                                        className="rounded-lg border border-white/20 px-3 py-2 text-xs font-semibold text-white transition hover:bg-white/10"
                                         onClick={handleLogout}
                                         disabled={authLoading}
                                     >
@@ -4429,45 +4559,46 @@ export function AnalyticsDashboard({
                                     </button>
                                 </div>
                             ) : (
-                                <>
-                                    <div className="flex items-center gap-3">
+                                <div className="space-y-3">
+                                    <div className="flex flex-col gap-2 sm:flex-row">
                                         <button
-                                            className="rounded-full border border-white/20 px-5 py-2 text-sm font-semibold text-white/80 transition hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                                            className="flex-1 rounded-lg border border-white/20 px-4 py-2 text-sm font-semibold text-white/80 transition hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
                                             onClick={() => openAuthDialog("login")}
                                             disabled={authLoading}
                                         >
                                             Zaloguj się
                                         </button>
                                         <button
-                                            className="rounded-full bg-white px-5 py-2 text-sm font-semibold text-primary shadow-lg shadow-black/10 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                                            className="flex-1 rounded-lg bg-white px-4 py-2 text-sm font-semibold text-primary shadow-lg shadow-black/10 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
                                             onClick={() => openAuthDialog("signup")}
                                             disabled={authLoading}
                                         >
                                             Załóż konto
                                         </button>
                                     </div>
-                                    <p className="text-xs text-white/70 md:text-right">
+                                    <p className="text-xs text-white/70">
                                         Historia ustawień jest zapisywana w Twoim koncie Google.
                                     </p>
                                     {!GOOGLE_CLIENT_ID && (
-                                        <p className="text-[11px] text-amber-200 md:text-right">
+                                        <p className="text-[11px] text-amber-200">
                                             Ustaw zmienną NEXT_PUBLIC_GOOGLE_CLIENT_ID, aby włączyć logowanie.
                                         </p>
                                     )}
-                                </>
+                                </div>
                             )}
                             {(authError || profileError) && (
-                                <p className="text-xs text-red-200 text-right max-w-xs">
+                                <p className="text-xs text-rose-200">
                                     {authError ?? profileError}
                                 </p>
                             )}
                         </div>
+                        <div className="mt-6 lg:hidden">
+                            <SectionNav items={navItems} />
+                        </div>
                     </div>
-                    <SectionNav items={navItems} />
-                </div>
-            </header>
+                </header>
 
-            {!isAuthenticated && authDialogOpen && (
+                {!isAuthenticated && authDialogOpen && (
                 <div
                     className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 px-4 py-6"
                     role="dialog"
@@ -4594,10 +4725,11 @@ export function AnalyticsDashboard({
                 </div>
             )}
 
-            <main className="max-w-6xl mx-auto px-4 md:px-8 py-12 space-y-16">
-                {view === "analysis" && (
-                    <Section
-                        id="analysis"
+            <main className="flex-1 overflow-y-auto">
+                <div className="mx-auto w-full max-w-6xl px-4 py-12 md:px-8 md:py-12 space-y-16">
+                    {view === "analysis" && (
+                        <Section
+                            id="analysis"
                         title="Analiza techniczna i kontekst"
                         description="Dodawaj tickery z GPW do listy obserwacyjnej i analizuj wykres wraz z kluczowymi statystykami, wskaźnikami momentum oraz podglądem fundamentów."
                         actions={
@@ -4796,16 +4928,16 @@ export function AnalyticsDashboard({
                                 </div>
                             </div>
                         </div>
-                    </Section>
-                )}
+                        </Section>
+                    )}
 
-                {view === "score" && (
-                    <Section
-                        id="score"
+                    {view === "score" && (
+                        <Section
+                            id="score"
                         title="Konfigurator score"
                         description="Skonfiguruj zasady rankingu i pobierz wynik z backendu jednym kliknięciem."
                     >
-                    <Card title="Konfigurator score" right={<Chip active>Nowość</Chip>}>
+                        <Card title="Konfigurator score" right={<Chip active>Nowość</Chip>}>
                         <div className="space-y-5 text-sm">
                             <div className="grid gap-4 md:grid-cols-2">
                                 <label className="flex flex-col gap-2">
@@ -5279,7 +5411,7 @@ export function AnalyticsDashboard({
                 </Section>
                 )}
 
-                {view === "portfolio" && (
+                    {view === "portfolio" && (
                     <Section
                         id="portfolio"
                         title="Portfel – symulacja i rebalansing"
@@ -5858,12 +5990,14 @@ export function AnalyticsDashboard({
                         </div>
                     </Card>
                 </Section>
-                )}
+                    )}
 
                 <footer className="pt-6 text-center text-sm text-subtle">
                     © {new Date().getFullYear()} Analityka Rynków • MVP
                 </footer>
+                </div>
             </main>
         </div>
+    </div>
     );
 }
