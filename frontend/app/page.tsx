@@ -1444,6 +1444,7 @@ const SidebarContent = ({
     profileError,
     googleClientId,
     onNavigate,
+    onExpandSidebar,
 }: {
     collapsed?: boolean;
     navItems: NavItem[];
@@ -1459,16 +1460,36 @@ const SidebarContent = ({
     profileError: string | null;
     googleClientId: string;
     onNavigate?: () => void;
+    onExpandSidebar?: () => void;
 }) => {
     const containerPadding = collapsed ? "px-2" : "px-4";
     const buttonPadding = collapsed ? "px-0" : "px-4";
+    const enableCollapsedExpansion = Boolean(collapsed && onExpandSidebar);
+
+    const handleCollapsedKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+        if (!enableCollapsedExpansion) return;
+        if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            onExpandSidebar?.();
+        }
+    };
+
     return (
         <div className="flex h-full flex-col">
             <div className={`space-y-6 ${containerPadding} py-6`}>
                 <div
                     className={`flex items-center ${
                         collapsed ? "justify-center" : "gap-3"
-                    }`}
+                    } ${enableCollapsedExpansion ? "cursor-pointer" : ""}`}
+                    {...(enableCollapsedExpansion
+                        ? {
+                              role: "button" as const,
+                              tabIndex: 0,
+                              onClick: onExpandSidebar,
+                              onKeyDown: handleCollapsedKeyDown,
+                              title: "Rozwiń menu",
+                          }
+                        : {})}
                 >
                     <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary font-semibold">
                         GA
@@ -1510,6 +1531,32 @@ const SidebarContent = ({
                     collapsed ? "py-5" : "py-6"
                 } text-sm`}
             >
+                {enableCollapsedExpansion && (
+                    <div className="mb-4 flex justify-center">
+                        <button
+                            type="button"
+                            className="inline-flex items-center gap-1.5 rounded-full border border-white/30 px-3 py-1.5 text-xs font-semibold text-white/80 transition hover:border-white/50 hover:text-white"
+                            onClick={onExpandSidebar}
+                        >
+                            <svg
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                xmlns="http://www.w3.org/2000/svg"
+                                className="h-3.5 w-3.5"
+                                aria-hidden
+                            >
+                                <path
+                                    d="M9 6L15 12L9 18"
+                                    stroke="currentColor"
+                                    strokeWidth="2"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                />
+                            </svg>
+                            <span>Rozwiń menu</span>
+                        </button>
+                    </div>
+                )}
                 {isAuthenticated ? (
                     <div
                         className={`flex ${
@@ -4689,20 +4736,28 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                 onLoad={() => setGoogleLoaded(true)}
                 onError={() => setAuthError("Nie udało się wczytać logowania Google.")}
             />
-            {sidebarMobileOpen && (
-                <div
-                    className="fixed inset-0 z-40 bg-slate-950/70 backdrop-blur-sm lg:hidden"
-                    onClick={() => setSidebarMobileOpen(false)}
-                />
-            )}
             <div
-                className={`fixed inset-y-0 left-0 z-50 w-72 transform border-r border-white/10 bg-[rgba(15,23,42,0.95)] text-white transition-transform duration-300 ease-in-out lg:hidden ${
+                className={`fixed inset-0 z-40 bg-slate-950/70 backdrop-blur-sm transition-opacity duration-300 lg:hidden ${
+                    sidebarMobileOpen ? "opacity-100" : "pointer-events-none opacity-0"
+                }`}
+                onClick={() => setSidebarMobileOpen(false)}
+                aria-hidden="true"
+            />
+            <nav
+                className={`fixed inset-y-0 left-0 z-50 flex w-[min(320px,85vw)] max-w-[85vw] transform flex-col border-r border-white/10 bg-[rgba(10,16,28,0.96)] text-white shadow-2xl shadow-black/40 transition-transform duration-300 ease-in-out lg:hidden ${
                     sidebarMobileOpen ? "translate-x-0" : "-translate-x-full"
                 }`}
                 role="dialog"
                 aria-modal="true"
+                aria-label="Menu nawigacji"
             >
-                <div className="relative flex h-full flex-col">
+                <div
+                    className="relative flex h-full flex-col overflow-hidden"
+                    style={{
+                        paddingTop: "calc(env(safe-area-inset-top, 0px) + 1.5rem)",
+                        paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 1.5rem)",
+                    }}
+                >
                     <SidebarContent
                         collapsed={false}
                         navItems={navItems}
@@ -4722,15 +4777,35 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                     <button
                         type="button"
                         onClick={() => setSidebarMobileOpen(false)}
-                        className="absolute right-4 top-4 inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/20 text-lg text-white/70 transition hover:border-white/40 hover:text-white"
+                        className="absolute right-4 inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/20 bg-white/5 text-lg text-white/80 transition hover:border-white/40 hover:bg-white/10 hover:text-white"
+                        style={{ top: "calc(env(safe-area-inset-top, 0px) + 0.75rem)" }}
                         aria-label="Zamknij menu"
                     >
                         ×
                     </button>
                 </div>
-            </div>
+            </nav>
             <aside
                 className={`hidden lg:flex ${sidebarCollapsed ? "lg:w-20" : "lg:w-72"} flex-col border-r border-white/10 bg-[rgba(15,23,42,0.95)] text-white lg:sticky lg:top-0 lg:h-screen lg:flex-shrink-0`}
+                {...(sidebarCollapsed
+                    ? {
+                          role: "button" as const,
+                          tabIndex: 0,
+                          "aria-label": "Rozwiń menu nawigacji",
+                          onKeyDown: (event: React.KeyboardEvent<HTMLElement>) => {
+                              if (event.key === "Enter" || event.key === " ") {
+                                  event.preventDefault();
+                                  setSidebarCollapsed(false);
+                              }
+                          },
+                      }
+                    : {})}
+                onClick={(event) => {
+                    if (!sidebarCollapsed) return;
+                    if (event.target === event.currentTarget) {
+                        setSidebarCollapsed(false);
+                    }
+                }}
             >
                 <SidebarContent
                     collapsed={sidebarCollapsed}
@@ -4746,6 +4821,7 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                     authError={authError}
                     profileError={profileError}
                     googleClientId={GOOGLE_CLIENT_ID}
+                    onExpandSidebar={() => setSidebarCollapsed(false)}
                 />
             </aside>
             <div className="flex min-h-screen flex-1 flex-col">
@@ -4811,7 +4887,6 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                             </button>
                         </div>
                         <div className="space-y-3">
-                            <span className="text-xs uppercase tracking-[0.35em] text-white/70">Panel demo</span>
                             <h1 className="text-3xl md:text-4xl font-bold text-white">Analityka Rynków</h1>
                             <p className="max-w-2xl text-white/80">
                                 Zbieraj notowania, konfiguruj score i sprawdzaj portfel w jednym miejscu połączonym z
