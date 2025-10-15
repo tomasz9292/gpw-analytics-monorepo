@@ -1809,15 +1809,21 @@ const SidebarContent = ({
     );
 
     useEffect(() => {
-        if (!collapsed) {
+        if (!toggleFloatingLabel) {
+            return;
+        }
+
+        const element = toggleHoveredElementRef.current;
+        if (!element || !document.body.contains(element)) {
             hideToggleFloatingLabel();
             return;
         }
+
         updateToggleFloatingLabelPosition();
-    }, [collapsed, hideToggleFloatingLabel, updateToggleFloatingLabelPosition]);
+    }, [collapsed, toggleFloatingLabel, hideToggleFloatingLabel, updateToggleFloatingLabelPosition]);
 
     useEffect(() => {
-        if (!collapsed || !toggleFloatingLabel) {
+        if (!toggleFloatingLabel) {
             return;
         }
 
@@ -1832,10 +1838,10 @@ const SidebarContent = ({
             window.removeEventListener("resize", handleScrollOrResize);
             window.removeEventListener("scroll", handleScrollOrResize, true);
         };
-    }, [collapsed, toggleFloatingLabel, updateToggleFloatingLabelPosition]);
+    }, [toggleFloatingLabel, updateToggleFloatingLabelPosition]);
 
     useEffect(() => {
-        if (!collapsed || !toggleFloatingLabel) {
+        if (!toggleFloatingLabel) {
             return;
         }
 
@@ -1848,7 +1854,7 @@ const SidebarContent = ({
                 label: collapseToggleLabel,
             };
         });
-    }, [collapsed, collapseToggleLabel, toggleFloatingLabel]);
+    }, [collapseToggleLabel, toggleFloatingLabel]);
 
     useEffect(() => {
         if (!accountMenuOpen) {
@@ -1913,6 +1919,10 @@ const SidebarContent = ({
             className="group relative flex h-10 w-10 items-center justify-center rounded-xl text-white transition focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0f1014] hover:shadow-[0_0_0_1px_rgba(255,255,255,0.35)] active:shadow-[0_0_0_1px_rgba(255,255,255,0.35)]"
             aria-label={collapseToggleLabel}
             aria-expanded={!collapsed}
+            onMouseEnter={(event) => showToggleFloatingLabel(event.currentTarget)}
+            onFocus={(event) => showToggleFloatingLabel(event.currentTarget)}
+            onMouseLeave={hideToggleFloatingLabel}
+            onBlur={hideToggleFloatingLabel}
         >
             <SidebarToggleGlyph className="h-[1.625rem] w-[1.625rem] text-white" />
         </button>
@@ -1924,7 +1934,7 @@ const SidebarContent = ({
         : "justify-start";
     return (
         <div className="flex h-full flex-col bg-[#0f1014] text-white">
-            {collapsed && toggleFloatingLabel
+            {toggleFloatingLabel
                 ? createPortal(
                       <span
                           className={`${collapsedFloatingTooltipClass} opacity-100`}
@@ -1948,10 +1958,10 @@ const SidebarContent = ({
                                 className="group relative flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-[#10a37f] via-[#0f5d4a] to-[#0b3d2d] text-sm font-semibold text-white transition focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0f1014]"
                                 aria-label={collapseToggleLabel}
                                 aria-expanded={!collapsed}
-                                onMouseEnter={collapsed ? (event) => showToggleFloatingLabel(event.currentTarget) : undefined}
-                                onFocus={collapsed ? (event) => showToggleFloatingLabel(event.currentTarget) : undefined}
-                                onMouseLeave={collapsed ? hideToggleFloatingLabel : undefined}
-                                onBlur={collapsed ? hideToggleFloatingLabel : undefined}
+                                onMouseEnter={(event) => showToggleFloatingLabel(event.currentTarget)}
+                                onFocus={(event) => showToggleFloatingLabel(event.currentTarget)}
+                                onMouseLeave={hideToggleFloatingLabel}
+                                onBlur={hideToggleFloatingLabel}
                             >
                                 <span className="pointer-events-none select-none transition-opacity duration-150 group-hover:opacity-0 group-focus-visible:opacity-0">
                                     GA
