@@ -1548,7 +1548,7 @@ const SidebarNav = ({
     activeKey?: DashboardView;
     collapsed?: boolean;
     onNavigate?: () => void;
-    scrollContainerRef?: React.RefObject<HTMLElement>;
+    scrollContainerRef?: React.RefObject<HTMLElement | null>;
 }) => {
     const [floatingLabel, setFloatingLabel] = useState<{
         label: string;
