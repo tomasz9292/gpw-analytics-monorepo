@@ -1690,6 +1690,11 @@ const SidebarContent = ({
     const accountMenuPositionClass = collapsed
         ? "left-full top-1/2 ml-3 -translate-y-1/2 transform"
         : "right-0 bottom-full mb-3";
+    const accountMenuBaseClass =
+        "absolute z-20 rounded-2xl border border-white/10 bg-[#151821] p-2 shadow-[0_20px_45px_rgba(0,0,0,0.45)]";
+    const accountMenuClassName = collapsed
+        ? `${accountMenuBaseClass} ${accountMenuPositionClass} flex min-w-[240px] max-w-xs`
+        : `${accountMenuBaseClass} ${accountMenuPositionClass} w-full`;
     const toggleTooltipClass =
         "pointer-events-none absolute left-full top-1/2 z-20 ml-3 -translate-y-1/2 whitespace-nowrap rounded-lg bg-[#1a1c23] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.28em] text-white opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100";
     const renderBrandBadge = () => (
@@ -1847,10 +1852,7 @@ const SidebarContent = ({
                             </div>
                         </button>
                         {accountMenuOpen && (
-                            <div
-                                className={`absolute z-20 w-full rounded-2xl border border-white/10 bg-[#151821] p-2 shadow-[0_20px_45px_rgba(0,0,0,0.45)] ${accountMenuPositionClass}`}
-                                role="menu"
-                            >
+                            <div className={accountMenuClassName} role="menu">
                                 {authUser?.email ? (
                                     <div className="rounded-xl bg-white/5 px-3 py-2">
                                         <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-white/40">
