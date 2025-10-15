@@ -1619,7 +1619,6 @@ const SidebarContent = ({
     collapsed,
     navItems,
     activeKey,
-    onStartAnalysis,
     isAuthenticated,
     authUser,
     profileLoading,
@@ -1635,7 +1634,6 @@ const SidebarContent = ({
     collapsed?: boolean;
     navItems: NavItem[];
     activeKey?: DashboardView;
-    onStartAnalysis: () => void;
     isAuthenticated: boolean;
     authUser: AuthUser | null;
     profileLoading: boolean;
@@ -1765,26 +1763,6 @@ const SidebarContent = ({
                         </>
                     )}
                 </div>
-                <button
-                    type="button"
-                    onClick={onStartAnalysis}
-                    className={
-                        collapsed
-                            ? "group flex h-12 w-12 items-center justify-center rounded-xl border border-white/15 bg-white/5 text-white transition hover:border-white/25 hover:bg-white/10"
-                            : "group w-full rounded-2xl bg-gradient-to-r from-[#10a37f] via-[#0f7f66] to-[#0b5a45] px-4 py-3 text-sm font-semibold text-white shadow-[0_10px_35px_rgba(16,163,127,0.35)] transition hover:shadow-[0_12px_40px_rgba(16,163,127,0.55)]"
-                    }
-                >
-                    {collapsed ? (
-                        <span className="text-2xl leading-none">+</span>
-                    ) : (
-                        <span className="flex items-center justify-center gap-2">
-                            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-white/20 text-base leading-none">
-                                +
-                            </span>
-                            <span>Nowa analiza</span>
-                        </span>
-                    )}
-                </button>
             </div>
             <div className={`flex-1 overflow-y-auto pb-6 ${sectionPadding} ${navSpacing}`}>
                 <div className="space-y-3">
@@ -4541,16 +4519,6 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
     );
 
     const symbolLabel = symbol ?? "—";
-    const handleStartAnalysis = useCallback(() => {
-        setSidebarMobileOpen(false);
-        if (!isAuthenticated) {
-            openAuthDialog("signup");
-            return;
-        }
-        if (typeof window !== "undefined") {
-            window.scrollTo({ top: 0, behavior: "smooth" });
-        }
-    }, [isAuthenticated, openAuthDialog]);
     const navItems: NavItem[] = [
         {
             href: view === "analysis" ? "#analysis" : "/",
@@ -4989,7 +4957,6 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                         collapsed={false}
                         navItems={navItems}
                         activeKey={view}
-                        onStartAnalysis={handleStartAnalysis}
                         isAuthenticated={isAuthenticated}
                         authUser={authUser}
                         profileLoading={profileLoading}
@@ -5018,7 +4985,6 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                     collapsed={sidebarCollapsed}
                     navItems={navItems}
                     activeKey={view}
-                    onStartAnalysis={handleStartAnalysis}
                     isAuthenticated={isAuthenticated}
                     authUser={authUser}
                     profileLoading={profileLoading}
