@@ -166,6 +166,7 @@ const SCORE_UNIVERSE_FALLBACK: string[] = [
 ];
 
 const SCORE_TEMPLATE_STORAGE_KEY = "gpw_score_templates_v1";
+const AUTH_USER_STORAGE_KEY = "gpw_auth_user_v1";
 
 const resolveUniverseWithFallback = (
     universe: ScorePreviewRequest["universe"],
@@ -3406,7 +3407,39 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
     const defaultScoreDraft = useMemo(() => getDefaultScoreDraft(), []);
     const defaultPortfolioDraft = useMemo(() => getDefaultPortfolioDraft(), []);
 
-    const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+    const [authUser, setAuthUserState] = useState<AuthUser | null>(() => {
+        if (typeof window === "undefined") {
+            return null;
+        }
+        try {
+            const stored = window.sessionStorage.getItem(AUTH_USER_STORAGE_KEY);
+            if (!stored) {
+                return null;
+            }
+            const parsed = JSON.parse(stored);
+            return parsed && typeof parsed === "object" ? (parsed as AuthUser) : null;
+        } catch {
+            return null;
+        }
+    });
+    const setAuthUser = useCallback((user: AuthUser | null) => {
+        setAuthUserState(user);
+        if (typeof window === "undefined") {
+            return;
+        }
+        try {
+            if (user) {
+                window.sessionStorage.setItem(
+                    AUTH_USER_STORAGE_KEY,
+                    JSON.stringify(user)
+                );
+            } else {
+                window.sessionStorage.removeItem(AUTH_USER_STORAGE_KEY);
+            }
+        } catch {
+            // Ignoruj błędy zapisu w sessionStorage
+        }
+    }, []);
     const [authLoading, setAuthLoading] = useState(true);
     const [authError, setAuthError] = useState<string | null>(null);
     const [profileLoading, setProfileLoading] = useState(false);
@@ -3755,7 +3788,7 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
             setAuthLoading(false);
             setProfileLoading(false);
         }
-    }, [hydrateFromPreferences, resetToDefaults]);
+    }, [hydrateFromPreferences, resetToDefaults, setAuthUser]);
 
     useEffect(() => {
         void fetchProfile();
@@ -3789,7 +3822,7 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                 setAuthError(message);
             }
         },
-        [fetchProfile]
+        [fetchProfile, setAuthUser]
     );
 
     const initializeGoogle = useCallback(() => {
@@ -3850,7 +3883,7 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
         setAuthError(null);
         setProfileError(null);
         window.google?.accounts?.id?.disableAutoSelect?.();
-    }, [resetToDefaults]);
+    }, [resetToDefaults, setAuthUser]);
 
     useEffect(() => {
         if (typeof window === "undefined") return;
@@ -4191,7 +4224,7 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
             clearTimeout(timeout);
             controller.abort();
         };
-    }, [isAuthenticated, preferencesJson, profileHydrated]);
+    }, [isAuthenticated, preferencesJson, profileHydrated, setAuthUser]);
 
     useEffect(() => {
         if (!pfSelectedTemplateId) return;
