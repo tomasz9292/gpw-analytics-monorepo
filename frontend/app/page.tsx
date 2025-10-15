@@ -1530,6 +1530,9 @@ const SidebarToggleGlyph = ({ className }: { className?: string }) => (
     </svg>
 );
 
+const collapsedLabelTooltipClass =
+    "pointer-events-none absolute left-full top-1/2 z-20 ml-3 -translate-y-1/2 whitespace-nowrap rounded-lg bg-[#1a1c23] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.28em] text-white opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100";
+
 const SidebarNav = ({
     items,
     activeKey,
@@ -1542,8 +1545,6 @@ const SidebarNav = ({
     onNavigate?: () => void;
 }) => {
     if (!items.length) return null;
-    const collapsedTooltipClass =
-        "pointer-events-none absolute left-full top-1/2 z-20 ml-3 -translate-y-1/2 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100";
     return (
         <nav className={`space-y-1.5 ${collapsed ? "text-[11px]" : "text-sm"}`}>
             {items.map((item) => {
@@ -1615,27 +1616,7 @@ const SidebarNav = ({
                         )}
                         {active && collapsed && <span className="sr-only">(aktywny)</span>}
                         {collapsed && (
-                            <div className={collapsedTooltipClass} role="presentation">
-                                <div className="relative -left-px">
-                                    <span
-                                        aria-hidden
-                                        className="absolute left-0 top-1/2 -translate-x-[calc(100%-2px)] -translate-y-1/2 text-[#1a1c23]"
-                                    >
-                                        <svg
-                                            width="20"
-                                            height="28"
-                                            viewBox="0 0 20 28"
-                                            fill="none"
-                                            xmlns="http://www.w3.org/2000/svg"
-                                        >
-                                            <path d="M20 14L0 28V0L20 14Z" fill="currentColor" />
-                                        </svg>
-                                    </span>
-                                    <div className="whitespace-nowrap rounded-2xl border border-white/10 bg-[#1a1c23] px-3 py-2 text-sm font-semibold leading-5 text-white shadow-[0_18px_38px_rgba(5,9,20,0.55)]">
-                                        {item.label}
-                                    </div>
-                                </div>
-                            </div>
+                            <span className={collapsedLabelTooltipClass}>{item.label}</span>
                         )}
                     </Link>
                 );
@@ -1722,8 +1703,6 @@ const SidebarContent = ({
     const accountMenuClassName = collapsed
         ? `${accountMenuBaseClass} ${accountMenuPositionClass} min-w-[260px]`
         : `${accountMenuBaseClass} ${accountMenuPositionClass} w-full`;
-    const toggleTooltipClass =
-        "pointer-events-none absolute left-full top-1/2 z-20 ml-3 -translate-y-1/2 whitespace-nowrap rounded-lg bg-[#1a1c23] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.28em] text-white opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100";
     const renderBrandBadge = () => (
         <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-[#10a37f] via-[#0f5d4a] to-[#0b3d2d] text-sm font-semibold">
             GA
@@ -1749,7 +1728,7 @@ const SidebarContent = ({
             aria-expanded={!collapsed}
         >
             <SidebarToggleGlyph className="h-[1.625rem] w-[1.625rem] text-white" />
-            <span className={toggleTooltipClass}>
+            <span className={collapsedLabelTooltipClass}>
                 {collapseToggleLabel}
             </span>
         </button>
@@ -1778,7 +1757,7 @@ const SidebarContent = ({
                                 <span className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100">
                                     <SidebarToggleGlyph className="h-[1.625rem] w-[1.625rem] text-white" />
                                 </span>
-                                <span className={toggleTooltipClass}>
+                                <span className={collapsedLabelTooltipClass}>
                                     {collapseToggleLabel}
                                 </span>
                             </button>
