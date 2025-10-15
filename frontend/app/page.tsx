@@ -1652,6 +1652,44 @@ const SidebarContent = ({
     const navSpacing = collapsed ? "mt-4" : "mt-6";
     const headerSpacing = collapsed ? "space-y-4" : "space-y-5";
     const collapseToggleLabel = collapsed ? "Otwórz pasek boczny" : "Zamknij pasek boczny";
+    const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+    const accountMenuRef = useRef<HTMLDivElement | null>(null);
+
+    useEffect(() => {
+        if (!accountMenuOpen) {
+            return;
+        }
+
+        const handleClickOutside = (event: MouseEvent) => {
+            if (accountMenuRef.current && !accountMenuRef.current.contains(event.target as Node)) {
+                setAccountMenuOpen(false);
+            }
+        };
+
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === "Escape") {
+                setAccountMenuOpen(false);
+            }
+        };
+
+        document.addEventListener("mousedown", handleClickOutside);
+        document.addEventListener("keydown", handleKeyDown);
+
+        return () => {
+            document.removeEventListener("mousedown", handleClickOutside);
+            document.removeEventListener("keydown", handleKeyDown);
+        };
+    }, [accountMenuOpen]);
+
+    useEffect(() => {
+        if (!isAuthenticated && accountMenuOpen) {
+            setAccountMenuOpen(false);
+        }
+    }, [isAuthenticated, accountMenuOpen]);
+
+    const accountMenuPositionClass = collapsed
+        ? "left-full top-1/2 ml-3 -translate-y-1/2 transform"
+        : "right-0 top-full mt-2";
     const toggleTooltipClass =
         "pointer-events-none absolute left-full top-1/2 z-20 ml-3 -translate-y-1/2 whitespace-nowrap rounded-lg bg-[#1a1c23] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.28em] text-white opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100";
     const renderBrandBadge = () => (
@@ -1764,66 +1802,103 @@ const SidebarContent = ({
                 } text-sm`}
             >
                 {isAuthenticated ? (
-                    <button
-                        type="button"
-                        onClick={handleLogout}
-                        disabled={authLoading}
-                        className={`group w-full rounded-2xl border border-white/10 bg-white/5 text-left transition hover:border-white/20 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60 ${
-                            collapsed ? "p-2" : "px-4 py-3"
-                        }`}
-                    >
-                        <div
-                            className={`flex ${
-                                collapsed ? "flex-col items-center gap-3" : "items-center gap-3"
+                    <div ref={accountMenuRef} className="relative">
+                        <button
+                            type="button"
+                            onClick={() => setAccountMenuOpen((prev) => !prev)}
+                            className={`group w-full rounded-2xl border border-white/10 bg-white/5 text-left transition hover:border-white/20 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60 ${
+                                collapsed ? "p-2" : "px-4 py-3"
                             }`}
+                            aria-haspopup="menu"
+                            aria-expanded={accountMenuOpen}
+                            disabled={authLoading}
                         >
-                            {authUser?.picture ? (
-                                <Image
-                                    src={authUser.picture}
-                                    alt="Avatar"
-                                    width={40}
-                                    height={40}
-                                    className="h-10 w-10 rounded-full border border-white/20 object-cover"
-                                    unoptimized
-                                />
-                            ) : (
-                                <div className="flex h-10 w-10 items-center justify-center rounded-full border border-white/15 bg-white/10 text-sm font-semibold">
-                                    {(authUser?.name ?? authUser?.email ?? "U").charAt(0).toUpperCase()}
-                                </div>
-                            )}
-                            {!collapsed && (
-                                <div className="flex-1">
-                                    <p className="font-semibold text-white">
-                                        {authUser?.name ?? authUser?.email ?? "Użytkownik Google"}
-                                    </p>
-                                    {authUser?.email ? (
-                                        <p className="text-xs text-white/60">{authUser.email}</p>
-                                    ) : null}
-                                    <p className="text-[11px] uppercase tracking-wider text-white/40">
-                                        {profileLoading ? "Zapisywanie ustawień..." : "Konto Google"}
-                                    </p>
-                                </div>
-                            )}
-                            <svg
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                xmlns="http://www.w3.org/2000/svg"
-                                className={`h-4 w-4 text-white/40 transition group-hover:text-white ${
-                                    collapsed ? "" : "self-start"
+                            <div
+                                className={`flex ${
+                                    collapsed ? "flex-col items-center gap-3" : "items-center gap-3"
                                 }`}
-                                aria-hidden
                             >
-                                <path
-                                    d="M9 5L16 12L9 19"
-                                    stroke="currentColor"
-                                    strokeWidth="2"
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                />
-                            </svg>
-                            <span className="sr-only">Wyloguj</span>
-                        </div>
-                    </button>
+                                {authUser?.picture ? (
+                                    <Image
+                                        src={authUser.picture}
+                                        alt="Avatar"
+                                        width={40}
+                                        height={40}
+                                        className="h-10 w-10 rounded-full border border-white/20 object-cover"
+                                        unoptimized
+                                    />
+                                ) : (
+                                    <div className="flex h-10 w-10 items-center justify-center rounded-full border border-white/15 bg-white/10 text-sm font-semibold">
+                                        {(authUser?.name ?? authUser?.email ?? "U").charAt(0).toUpperCase()}
+                                    </div>
+                                )}
+                                {!collapsed && (
+                                    <div className="flex-1">
+                                        <p className="font-semibold text-white">
+                                            {authUser?.name ?? authUser?.email ?? "Użytkownik Google"}
+                                        </p>
+                                        {authUser?.email ? <span className="sr-only">{authUser.email}</span> : null}
+                                        <p className="text-[11px] uppercase tracking-wider text-white/40">
+                                            {profileLoading ? "Zapisywanie ustawień..." : "Konto Google"}
+                                        </p>
+                                    </div>
+                                )}
+                                <svg
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    className={`h-4 w-4 text-white/40 transition group-hover:text-white ${
+                                        collapsed ? "" : "self-start"
+                                    } ${accountMenuOpen ? "rotate-90 transform text-white" : ""}`}
+                                    aria-hidden
+                                >
+                                    <path
+                                        d="M9 5L16 12L9 19"
+                                        stroke="currentColor"
+                                        strokeWidth="2"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                    />
+                                </svg>
+                                <span className="sr-only">Otwórz panel konta</span>
+                            </div>
+                        </button>
+                        {accountMenuOpen && (
+                            <div
+                                className={`absolute z-20 w-64 rounded-2xl border border-white/10 bg-[#151821] p-2 shadow-[0_20px_45px_rgba(0,0,0,0.45)] ${accountMenuPositionClass}`}
+                                role="menu"
+                            >
+                                {authUser?.email ? (
+                                    <div className="rounded-xl bg-white/5 px-3 py-2">
+                                        <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-white/40">
+                                            Zalogowano jako
+                                        </p>
+                                        <p className="mt-1 break-all text-sm font-semibold text-white">{authUser.email}</p>
+                                    </div>
+                                ) : null}
+                                <div className="mt-2 space-y-1">
+                                    <button
+                                        type="button"
+                                        className="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-white transition hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-[#151821]"
+                                        onClick={() => setAccountMenuOpen(false)}
+                                    >
+                                        Rozszerz plan
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-white transition hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-200/80 focus-visible:ring-offset-2 focus-visible:ring-offset-[#151821] disabled:cursor-not-allowed disabled:opacity-60"
+                                        onClick={() => {
+                                            setAccountMenuOpen(false);
+                                            handleLogout();
+                                        }}
+                                        disabled={authLoading}
+                                    >
+                                        Wyloguj się
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+                    </div>
                 ) : (
                     <div
                         className={`space-y-3 ${
@@ -5023,7 +5098,7 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                                             {authUser?.name ?? authUser?.email ?? "Użytkownik Google"}
                                         </p>
                                         {authUser?.email ? (
-                                            <p className="text-xs text-white/60">{authUser.email}</p>
+                                            <span className="sr-only">{authUser.email}</span>
                                         ) : null}
                                         <p className="text-[11px] uppercase tracking-wider text-white/40">
                                             {profileLoading ? "Zapisywanie ustawień..." : "Konto Google"}
