@@ -2008,7 +2008,7 @@ const SidebarContent = ({
                         <button
                             type="button"
                             onClick={() => setAccountMenuOpen((prev) => !prev)}
-                            className={`group w-full rounded-2xl border border-white/10 bg-white/5 text-left transition hover:border-white/20 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60 ${
+                            className={`group w-full rounded-2xl border border-white/10 bg-white/5 text-left transition hover:border-white/20 hover:bg-white/10 focus:outline-none focus-visible:ring-0 focus-visible:ring-offset-0 disabled:cursor-not-allowed disabled:opacity-60 ${
                                 collapsed ? "p-2" : "px-4 py-3"
                             }`}
                             aria-haspopup="menu"
