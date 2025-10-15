@@ -1543,7 +1543,7 @@ const SidebarNav = ({
 }) => {
     if (!items.length) return null;
     const collapsedTooltipClass =
-        "pointer-events-none absolute left-full top-1/2 z-20 ml-3 -translate-y-1/2 whitespace-nowrap rounded-lg bg-[#1a1c23] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.28em] text-white opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100";
+        "pointer-events-none absolute left-full top-1/2 z-20 ml-3 -translate-y-1/2 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100";
     return (
         <nav className={`space-y-1.5 ${collapsed ? "text-[11px]" : "text-sm"}`}>
             {items.map((item) => {
@@ -1616,7 +1616,30 @@ const SidebarNav = ({
                         {active && collapsed && <span className="sr-only">(aktywny)</span>}
                         {collapsed && (
                             <div className={collapsedTooltipClass} role="presentation">
-                                {item.label}
+                                <div className="relative -left-px overflow-hidden rounded-2xl border border-white/10 bg-[#1a1c23] px-4 py-3 text-left shadow-[0_18px_38px_rgba(5,9,20,0.55)]">
+                                    <span
+                                        aria-hidden
+                                        className="absolute left-0 top-1/2 -translate-x-[calc(100%-2px)] -translate-y-1/2 text-[#1a1c23]"
+                                    >
+                                        <svg
+                                            width="20"
+                                            height="28"
+                                            viewBox="0 0 20 28"
+                                            fill="none"
+                                            xmlns="http://www.w3.org/2000/svg"
+                                        >
+                                            <path d="M20 14L0 28V0L20 14Z" fill="currentColor" />
+                                        </svg>
+                                    </span>
+                                    <div className="text-sm font-semibold leading-5 text-white">
+                                        {item.label}
+                                    </div>
+                                    {item.description && (
+                                        <p className="mt-1 max-w-[220px] text-xs leading-5 text-white/70">
+                                            {item.description}
+                                        </p>
+                                    )}
+                                </div>
                             </div>
                         )}
                     </Link>
