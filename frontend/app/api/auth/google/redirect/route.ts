@@ -27,7 +27,7 @@ export async function POST(req: NextRequest) {
         const redirectUrl = buildRedirectUrl(req);
         redirectUrl.searchParams.set("auth", "google_success");
 
-        const response = NextResponse.redirect(redirectUrl);
+        const response = NextResponse.redirect(redirectUrl, { status: 303 });
         response.cookies.set({
             name: SESSION_COOKIE_NAME,
             value: token,
@@ -44,7 +44,7 @@ export async function POST(req: NextRequest) {
         const redirectUrl = buildRedirectUrl(req);
         redirectUrl.searchParams.set("auth_error", message);
 
-        const response = NextResponse.redirect(redirectUrl);
+        const response = NextResponse.redirect(redirectUrl, { status: 303 });
         response.cookies.set({
             name: SESSION_COOKIE_NAME,
             value: "",
