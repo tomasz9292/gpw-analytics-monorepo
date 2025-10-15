@@ -5247,9 +5247,9 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
             </aside>
             <div className="flex min-h-screen flex-1 flex-col">
                 <header className="sticky top-0 z-30 border-b border-slate-200/70 bg-[#f5f7fa]/95 text-slate-700 shadow-sm backdrop-blur lg:hidden">
-                    <div className="mx-auto w-full max-w-6xl px-4 py-2.5 md:px-8 md:py-4">
-                        <div className="mb-2 flex items-center justify-between lg:mb-0">
-                            <div className="flex items-center gap-2.5">
+                    <div className="mx-auto w-full max-w-6xl px-4 py-2 md:px-8 md:py-3.5">
+                        <div className="mb-1.5 flex items-center justify-between lg:mb-0">
+                            <div className="flex items-center gap-2">
                                 <button
                                     type="button"
                                     onClick={() => setSidebarMobileOpen(true)}
