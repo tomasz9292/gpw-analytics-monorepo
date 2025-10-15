@@ -5275,7 +5275,7 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                                 <span className="text-sm font-semibold text-white lg:hidden">GPW Analytics</span>
                             </div>
                         </div>
-                        <div className="mt-6 space-y-4">
+                        <div className="mt-6 hidden space-y-4 sm:block">
                             {isAuthenticated ? (
                                 <div className="flex items-center gap-3 rounded-2xl bg-white/10 p-4">
                                     {authUser?.picture ? (
@@ -5340,7 +5340,7 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                                 </p>
                             )}
                         </div>
-                        <div className="mt-6 lg:hidden">
+                        <div className="mt-6 hidden sm:block lg:hidden">
                             <SectionNav items={navItems} />
                         </div>
                     </div>
