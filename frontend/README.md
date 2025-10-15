@@ -23,6 +23,8 @@ Domyślnie aplikacja startuje pod adresem [http://localhost:3000](http://localho
 
    `AUTH_SECRET` służy do podpisywania ciasteczek sesji – w środowisku produkcyjnym ustaw długi, losowy ciąg.
 
+   > Możesz też ustawić jedynie zmienną `GOOGLE_CLIENT_ID`. Panel kliencki wykorzystuje ją automatycznie, więc nie musisz powielać wartości.
+
 3. W konfiguracji identyfikatora OAuth w konsoli Google uzupełnij pola:
 
    | Pole w konsoli Google                     | Wartość dla środowiska lokalnego                     | Wartość produkcyjna (Vercel)                |
@@ -34,7 +36,7 @@ Domyślnie aplikacja startuje pod adresem [http://localhost:3000](http://localho
 
 4. Po zalogowaniu preferencje użytkownika są zapisywane w pliku `data/users.json` (ścieżka ignorowana przez Gita). Dane synchronizują się automatycznie przy zmianach w konfiguratorach.
 
-Jeżeli `NEXT_PUBLIC_GOOGLE_CLIENT_ID` nie jest ustawiony, przycisk logowania zostanie dezaktywowany.
+Jeżeli nie ustawisz `NEXT_PUBLIC_GOOGLE_CLIENT_ID` (ani `GOOGLE_CLIENT_ID`), przycisk logowania zostanie dezaktywowany.
 
 ## Struktura API
 
