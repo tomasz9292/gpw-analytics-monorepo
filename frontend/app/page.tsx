@@ -1540,6 +1540,8 @@ const SidebarNav = ({
     onNavigate?: () => void;
 }) => {
     if (!items.length) return null;
+    const collapsedTooltipClass =
+        "pointer-events-none absolute left-full top-1/2 z-20 ml-3 -translate-y-1/2 whitespace-nowrap rounded-lg bg-[#1a1c23] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.28em] text-white opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100";
     return (
         <nav className={`space-y-1.5 ${collapsed ? "text-[11px]" : "text-sm"}`}>
             {items.map((item) => {
@@ -1550,7 +1552,9 @@ const SidebarNav = ({
                         key={item.href}
                         href={item.href}
                         aria-label={collapsed ? item.label : undefined}
-                        className={`group relative flex items-center overflow-hidden rounded-xl border border-transparent px-3 py-2 transition ${
+                        className={`group relative flex items-center rounded-xl border border-transparent px-3 py-2 transition ${
+                            collapsed ? "overflow-visible" : "overflow-hidden"
+                        } ${
                             collapsed ? "justify-center" : "gap-3"
                         } ${
                             active
@@ -1608,6 +1612,9 @@ const SidebarNav = ({
                             </svg>
                         )}
                         {active && collapsed && <span className="sr-only">(aktywny)</span>}
+                        {collapsed && (
+                            <span className={collapsedTooltipClass}>{item.label}</span>
+                        )}
                     </Link>
                 );
             })}
@@ -1715,11 +1722,11 @@ const SidebarContent = ({
         <button
             type="button"
             onClick={onToggleCollapse}
-            className="group relative flex h-10 w-10 items-center justify-center rounded-xl bg-white/5 text-white/70 shadow-none transition hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0f1014]"
+            className="group relative flex h-10 w-10 items-center justify-center rounded-xl text-white transition focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0f1014] hover:shadow-[0_0_0_1px_rgba(255,255,255,0.35)] active:shadow-[0_0_0_1px_rgba(255,255,255,0.35)]"
             aria-label={collapseToggleLabel}
             aria-expanded={!collapsed}
         >
-            <SidebarToggleGlyph className="h-[1.625rem] w-[1.625rem]" />
+            <SidebarToggleGlyph className="h-[1.625rem] w-[1.625rem] text-white" />
             <span className={toggleTooltipClass}>
                 {collapseToggleLabel}
             </span>
