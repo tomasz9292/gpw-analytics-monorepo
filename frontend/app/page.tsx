@@ -1772,7 +1772,9 @@ const SidebarContent = ({
                     )}
                 </div>
             </div>
-            <div className={`flex-1 overflow-y-auto pb-6 ${sectionPadding} ${navSpacing}`}>
+            <div
+                className={`flex-1 overflow-y-auto overflow-x-visible pb-6 ${sectionPadding} ${navSpacing}`}
+            >
                 <div className="space-y-3">
                     {!collapsed && (
                         <p className="text-[11px] font-semibold uppercase tracking-[0.32em] text-white/40">
