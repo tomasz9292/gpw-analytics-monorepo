@@ -1616,7 +1616,7 @@ const SidebarNav = ({
                         {active && collapsed && <span className="sr-only">(aktywny)</span>}
                         {collapsed && (
                             <div className={collapsedTooltipClass} role="presentation">
-                                <div className="relative -left-px overflow-hidden rounded-2xl border border-white/10 bg-[#1a1c23] px-4 py-3 text-left shadow-[0_18px_38px_rgba(5,9,20,0.55)]">
+                                <div className="relative -left-px">
                                     <span
                                         aria-hidden
                                         className="absolute left-0 top-1/2 -translate-x-[calc(100%-2px)] -translate-y-1/2 text-[#1a1c23]"
@@ -1631,14 +1631,9 @@ const SidebarNav = ({
                                             <path d="M20 14L0 28V0L20 14Z" fill="currentColor" />
                                         </svg>
                                     </span>
-                                    <div className="text-sm font-semibold leading-5 text-white">
+                                    <div className="whitespace-nowrap rounded-2xl border border-white/10 bg-[#1a1c23] px-3 py-2 text-sm font-semibold leading-5 text-white shadow-[0_18px_38px_rgba(5,9,20,0.55)]">
                                         {item.label}
                                     </div>
-                                    {item.description && (
-                                        <p className="mt-1 max-w-[220px] text-xs leading-5 text-white/70">
-                                            {item.description}
-                                        </p>
-                                    )}
                                 </div>
                             </div>
                         )}
