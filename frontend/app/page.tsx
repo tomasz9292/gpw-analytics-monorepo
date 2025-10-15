@@ -5247,13 +5247,13 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
             </aside>
             <div className="flex min-h-screen flex-1 flex-col">
                 <header className="sticky top-0 z-30 border-b border-slate-200/70 bg-[#f5f7fa]/95 text-slate-700 shadow-sm backdrop-blur lg:hidden">
-                    <div className="mx-auto w-full max-w-6xl px-4 py-4 md:px-8 md:py-6">
-                        <div className="mb-4 flex items-center justify-between lg:mb-0">
+                    <div className="mx-auto w-full max-w-6xl px-4 py-3 md:px-8 md:py-[18px]">
+                        <div className="mb-3 flex items-center justify-between lg:mb-0">
                             <div className="flex items-center gap-3">
                                 <button
                                     type="button"
                                     onClick={() => setSidebarMobileOpen(true)}
-                                    className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-300/80 text-slate-600 transition hover:border-slate-400 hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 lg:hidden"
+                                    className="inline-flex h-[30px] w-[30px] items-center justify-center rounded-full border border-slate-300/80 text-slate-600 transition hover:border-slate-400 hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 lg:hidden"
                                     aria-label="Otwórz menu"
                                     aria-expanded={sidebarMobileOpen}
                                 >
@@ -5261,7 +5261,7 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                                         viewBox="0 0 24 24"
                                         fill="none"
                                         xmlns="http://www.w3.org/2000/svg"
-                                        className="h-5 w-5"
+                                        className="h-[15px] w-[15px]"
                                     >
                                         <path
                                             d="M4 6H20M4 12H20M4 18H20"
