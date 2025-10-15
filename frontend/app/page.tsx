@@ -1688,12 +1688,12 @@ const SidebarContent = ({
     }, [isAuthenticated, accountMenuOpen]);
 
     const accountMenuPositionClass = collapsed
-        ? "left-1/2 bottom-full -translate-x-1/2 mb-3"
+        ? "left-0 bottom-full mb-3"
         : "right-0 bottom-full mb-3";
     const accountMenuBaseClass =
-        "absolute z-20 rounded-2xl border border-white/10 bg-[#151821] p-2 shadow-[0_20px_45px_rgba(0,0,0,0.45)]";
+        "absolute z-20 flex flex-col gap-2 rounded-2xl border border-white/10 bg-[#151821] p-3 shadow-[0_20px_45px_rgba(0,0,0,0.45)]";
     const accountMenuClassName = collapsed
-        ? `${accountMenuBaseClass} ${accountMenuPositionClass} flex min-w-[240px] max-w-xs`
+        ? `${accountMenuBaseClass} ${accountMenuPositionClass} min-w-[260px]`
         : `${accountMenuBaseClass} ${accountMenuPositionClass} w-full`;
     const toggleTooltipClass =
         "pointer-events-none absolute left-full top-1/2 z-20 ml-3 -translate-y-1/2 whitespace-nowrap rounded-lg bg-[#1a1c23] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.28em] text-white opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100";
