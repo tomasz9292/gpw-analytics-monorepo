@@ -1367,6 +1367,7 @@ type NavItem = {
     label: string;
     key?: DashboardView;
     icon?: React.ComponentType<{ className?: string }>;
+    description?: string;
 };
 
 const IconSparkline = ({ className }: { className?: string }) => (
@@ -1542,7 +1543,7 @@ const SidebarNav = ({
 }) => {
     if (!items.length) return null;
     const collapsedTooltipClass =
-        "pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 -translate-x-1/2 whitespace-nowrap rounded-lg bg-[#1a1c23] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.28em] text-white opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100";
+        "pointer-events-none absolute bottom-full left-1/2 z-20 mb-3 -translate-x-1/2 whitespace-normal rounded-2xl border border-white/10 bg-[#151821] p-4 text-left shadow-[0_18px_40px_rgba(0,0,0,0.45)] opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100";
     return (
         <nav className={`space-y-1.5 ${collapsed ? "text-[11px]" : "text-sm"}`}>
             {items.map((item) => {
@@ -1614,7 +1615,18 @@ const SidebarNav = ({
                         )}
                         {active && collapsed && <span className="sr-only">(aktywny)</span>}
                         {collapsed && (
-                            <span className={collapsedTooltipClass}>{item.label}</span>
+                            <div className={`${collapsedTooltipClass} min-w-[220px] max-w-[260px]`} role="presentation">
+                                <p className="text-sm font-semibold text-white">{item.label}</p>
+                                {item.description ? (
+                                    <p className="mt-1 text-xs leading-relaxed text-white/60">
+                                        {item.description}
+                                    </p>
+                                ) : null}
+                                <span
+                                    className="pointer-events-none absolute left-1/2 top-full h-3 w-3 -translate-x-1/2 -translate-y-[6px] rotate-45 border border-white/10 border-t-transparent border-l-transparent bg-[#151821]"
+                                    aria-hidden
+                                />
+                            </div>
                         )}
                     </Link>
                 );
@@ -4567,18 +4579,21 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
             label: "Analiza techniczna",
             key: "analysis",
             icon: IconSparkline,
+            description: "Zaawansowane wykresy, wskaźniki i zestawienia notowań GPW.",
         },
         {
             href: view === "score" ? "#score" : "/ranking-score",
             label: "Ranking score",
             key: "score",
             icon: IconTrophy,
+            description: "Buduj rankingi momentum i ryzyka dopasowane do Twojej strategii.",
         },
         {
             href: view === "portfolio" ? "#portfolio" : "/symulator-portfela",
             label: "Symulacja portfela",
             key: "portfolio",
             icon: IconPie,
+            description: "Testuj portfele z rebalancingiem, kosztami i porównaniem do benchmarków.",
         },
     ];
 
