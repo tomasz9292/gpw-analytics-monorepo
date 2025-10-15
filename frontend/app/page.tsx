@@ -228,6 +228,50 @@ const getDefaultScoreRules = (): ScoreBuilderRule[] => {
 
 const GOOGLE_CLIENT_ID =
     process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? process.env.GOOGLE_CLIENT_ID ?? "";
+
+type GoogleCredentialResponse = {
+    credential?: string;
+};
+
+type GoogleIdConfiguration = {
+    client_id: string;
+    callback: (response: GoogleCredentialResponse) => void;
+    ux_mode?: "popup" | "redirect";
+    auto_select?: boolean;
+    cancel_on_tap_outside?: boolean;
+    login_uri?: string;
+};
+
+const isLikelyMobileDevice = () => {
+    if (typeof window === "undefined") {
+        return false;
+    }
+    const userAgent = window.navigator?.userAgent ?? "";
+    if (/Android|webOS|iPhone|iPad|iPod|BlackBerry|Windows Phone/i.test(userAgent)) {
+        return true;
+    }
+    if (typeof window.matchMedia === "function") {
+        try {
+            if (window.matchMedia("(pointer: coarse)").matches) {
+                return true;
+            }
+        } catch {
+            // Ignoruj błędy wykrywania matchMedia
+        }
+    }
+    return false;
+};
+
+const getGoogleRedirectUri = () => {
+    if (typeof window === "undefined") {
+        return null;
+    }
+    try {
+        return `${window.location.origin}/api/auth/google/redirect`;
+    } catch {
+        return null;
+    }
+};
 const DEFAULT_WATCHLIST = ["CDR.WA", "PKN.WA", "PKOBP"];
 
 type ScoreDraftState = {
@@ -3747,6 +3791,37 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
         setAuthDialogOpen(false);
     }, []);
 
+    useEffect(() => {
+        if (typeof window === "undefined") {
+            return;
+        }
+        const url = new URL(window.location.href);
+        const authErrorParam = url.searchParams.get("auth_error");
+        const authStatusParam = url.searchParams.get("auth");
+        let shouldReplace = false;
+
+        if (authErrorParam) {
+            setAuthError(authErrorParam);
+            setProfileError(authErrorParam);
+            setAuthDialogMode("login");
+            setAuthDialogOpen(true);
+            setAuthLoading(false);
+            url.searchParams.delete("auth_error");
+            shouldReplace = true;
+        }
+
+        if (authStatusParam === "google_success") {
+            setAuthDialogOpen(false);
+            url.searchParams.delete("auth");
+            shouldReplace = true;
+        }
+
+        if (shouldReplace) {
+            const nextUrl = `${url.pathname}${url.search}${url.hash}`;
+            window.history.replaceState({}, "", nextUrl);
+        }
+    }, [setAuthDialogMode, setAuthDialogOpen, setAuthError, setProfileError, setAuthLoading]);
+
     const resetToDefaults = useCallback(() => {
         const freshScoreDraft = getDefaultScoreDraft();
         const freshPortfolioDraft = getDefaultPortfolioDraft();
@@ -4040,15 +4115,23 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
         if (!googleApi) {
             return false;
         }
-        googleApi.initialize({
+        const uxMode: "popup" | "redirect" = isLikelyMobileDevice() ? "redirect" : "popup";
+        const config: GoogleIdConfiguration = {
             client_id: GOOGLE_CLIENT_ID,
             callback: (response) => {
                 void handleGoogleCredential(response?.credential);
             },
-            ux_mode: "popup",
+            ux_mode: uxMode,
             auto_select: false,
             cancel_on_tap_outside: true,
-        });
+        };
+        if (uxMode === "redirect") {
+            const redirectUri = getGoogleRedirectUri();
+            if (redirectUri) {
+                config.login_uri = redirectUri;
+            }
+        }
+        googleApi.initialize(config);
         googleInitializedRef.current = true;
         return true;
     }, [googleLoaded, handleGoogleCredential]);
