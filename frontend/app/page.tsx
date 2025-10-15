@@ -4096,6 +4096,9 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
         setAuthError(null);
         setProfileError(null);
         window.google?.accounts?.id?.disableAutoSelect?.();
+        if (typeof window !== "undefined") {
+            window.location.replace("/");
+        }
     }, [resetToDefaults, setAuthUser]);
 
     useEffect(() => {
