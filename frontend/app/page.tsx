@@ -1715,11 +1715,11 @@ const SidebarContent = ({
         <button
             type="button"
             onClick={onToggleCollapse}
-            className="group relative flex h-10 w-10 items-center justify-center rounded-xl border border-white/15 bg-white/5 text-white/70 transition hover:border-white/30 hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0f1014]"
+            className="group relative flex h-10 w-10 items-center justify-center rounded-xl bg-white/5 text-white/70 shadow-none transition hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0f1014]"
             aria-label={collapseToggleLabel}
             aria-expanded={!collapsed}
         >
-            <SidebarToggleGlyph className="h-4 w-4" />
+            <SidebarToggleGlyph className="h-[1.625rem] w-[1.625rem]" />
             <span className={toggleTooltipClass}>
                 {collapseToggleLabel}
             </span>
@@ -1747,7 +1747,7 @@ const SidebarContent = ({
                                     GA
                                 </span>
                                 <span className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100">
-                                    <SidebarToggleGlyph className="h-5 w-5 text-white" />
+                                    <SidebarToggleGlyph className="h-[1.625rem] w-[1.625rem] text-white" />
                                 </span>
                                 <span className={toggleTooltipClass}>
                                     {collapseToggleLabel}
