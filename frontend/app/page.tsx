@@ -1688,7 +1688,7 @@ const SidebarContent = ({
     }, [isAuthenticated, accountMenuOpen]);
 
     const accountMenuPositionClass = collapsed
-        ? "left-full top-1/2 ml-3 -translate-y-1/2 transform"
+        ? "left-1/2 bottom-full -translate-x-1/2 mb-3"
         : "right-0 bottom-full mb-3";
     const accountMenuBaseClass =
         "absolute z-20 rounded-2xl border border-white/10 bg-[#151821] p-2 shadow-[0_20px_45px_rgba(0,0,0,0.45)]";
