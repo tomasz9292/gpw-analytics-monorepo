@@ -1531,10 +1531,7 @@ const SidebarToggleGlyph = ({ className }: { className?: string }) => (
     </svg>
 );
 
-const collapsedToggleTooltipClass =
-    "pointer-events-none absolute left-full top-1/2 z-20 ml-3 -translate-y-1/2 whitespace-nowrap rounded-lg bg-[#1a1c23] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.28em] text-white opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100";
-
-const collapsedNavFloatingTooltipClass =
+const collapsedFloatingTooltipClass =
     "pointer-events-none fixed z-[9999] -translate-y-1/2 whitespace-nowrap rounded-lg bg-[#1a1c23] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.28em] text-white shadow-[0_8px_20px_rgba(15,16,20,0.55)] ring-1 ring-white/10";
 
 const SidebarNav = ({
@@ -1715,7 +1712,7 @@ const SidebarNav = ({
             {collapsed && floatingLabel
                 ? createPortal(
                       <span
-                          className={`${collapsedNavFloatingTooltipClass} opacity-100`}
+                          className={`${collapsedFloatingTooltipClass} opacity-100`}
                           style={{
                               top: `${floatingLabel.top}px`,
                               left: `${floatingLabel.left}px`,
@@ -1768,6 +1765,90 @@ const SidebarContent = ({
     const [accountMenuOpen, setAccountMenuOpen] = useState(false);
     const accountMenuRef = useRef<HTMLDivElement | null>(null);
     const navScrollRef = useRef<HTMLDivElement | null>(null);
+    const toggleHoveredElementRef = useRef<HTMLElement | null>(null);
+    const [toggleFloatingLabel, setToggleFloatingLabel] = useState<{
+        label: string;
+        top: number;
+        left: number;
+    } | null>(null);
+
+    const hideToggleFloatingLabel = useCallback(() => {
+        setToggleFloatingLabel(null);
+        toggleHoveredElementRef.current = null;
+    }, []);
+
+    const updateToggleFloatingLabelPosition = useCallback(() => {
+        const element = toggleHoveredElementRef.current;
+        if (!element) {
+            return;
+        }
+        const rect = element.getBoundingClientRect();
+        setToggleFloatingLabel((prev) => {
+            if (!prev) {
+                return null;
+            }
+            return {
+                ...prev,
+                top: rect.top + rect.height / 2,
+                left: rect.right + 12,
+            };
+        });
+    }, []);
+
+    const showToggleFloatingLabel = useCallback(
+        (element: HTMLElement) => {
+            toggleHoveredElementRef.current = element;
+            const rect = element.getBoundingClientRect();
+            setToggleFloatingLabel({
+                label: collapseToggleLabel,
+                top: rect.top + rect.height / 2,
+                left: rect.right + 12,
+            });
+        },
+        [collapseToggleLabel]
+    );
+
+    useEffect(() => {
+        if (!collapsed) {
+            hideToggleFloatingLabel();
+            return;
+        }
+        updateToggleFloatingLabelPosition();
+    }, [collapsed, hideToggleFloatingLabel, updateToggleFloatingLabelPosition]);
+
+    useEffect(() => {
+        if (!collapsed || !toggleFloatingLabel) {
+            return;
+        }
+
+        const handleScrollOrResize = () => {
+            updateToggleFloatingLabelPosition();
+        };
+
+        window.addEventListener("resize", handleScrollOrResize);
+        window.addEventListener("scroll", handleScrollOrResize, true);
+
+        return () => {
+            window.removeEventListener("resize", handleScrollOrResize);
+            window.removeEventListener("scroll", handleScrollOrResize, true);
+        };
+    }, [collapsed, toggleFloatingLabel, updateToggleFloatingLabelPosition]);
+
+    useEffect(() => {
+        if (!collapsed || !toggleFloatingLabel) {
+            return;
+        }
+
+        setToggleFloatingLabel((prev) => {
+            if (!prev || prev.label === collapseToggleLabel) {
+                return prev;
+            }
+            return {
+                ...prev,
+                label: collapseToggleLabel,
+            };
+        });
+    }, [collapsed, collapseToggleLabel, toggleFloatingLabel]);
 
     useEffect(() => {
         if (!accountMenuOpen) {
@@ -1834,9 +1915,6 @@ const SidebarContent = ({
             aria-expanded={!collapsed}
         >
             <SidebarToggleGlyph className="h-[1.625rem] w-[1.625rem] text-white" />
-            <span className={collapsedToggleTooltipClass}>
-                {collapseToggleLabel}
-            </span>
         </button>
     );
     const headerAlignment = collapsed
@@ -1846,6 +1924,20 @@ const SidebarContent = ({
         : "justify-start";
     return (
         <div className="flex h-full flex-col bg-[#0f1014] text-white">
+            {collapsed && toggleFloatingLabel
+                ? createPortal(
+                      <span
+                          className={`${collapsedFloatingTooltipClass} opacity-100`}
+                          style={{
+                              top: `${toggleFloatingLabel.top}px`,
+                              left: `${toggleFloatingLabel.left}px`,
+                          }}
+                      >
+                          {toggleFloatingLabel.label}
+                      </span>,
+                      document.body
+                  )
+                : null}
             <div className={`${sectionPadding} ${headerSpacing} pt-6`}>
                 <div className={`flex items-center ${headerAlignment} gap-3`}>
                     {collapsed ? (
@@ -1856,15 +1948,16 @@ const SidebarContent = ({
                                 className="group relative flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-[#10a37f] via-[#0f5d4a] to-[#0b3d2d] text-sm font-semibold text-white transition focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0f1014]"
                                 aria-label={collapseToggleLabel}
                                 aria-expanded={!collapsed}
+                                onMouseEnter={collapsed ? (event) => showToggleFloatingLabel(event.currentTarget) : undefined}
+                                onFocus={collapsed ? (event) => showToggleFloatingLabel(event.currentTarget) : undefined}
+                                onMouseLeave={collapsed ? hideToggleFloatingLabel : undefined}
+                                onBlur={collapsed ? hideToggleFloatingLabel : undefined}
                             >
                                 <span className="pointer-events-none select-none transition-opacity duration-150 group-hover:opacity-0 group-focus-visible:opacity-0">
                                     GA
                                 </span>
                                 <span className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100">
                                     <SidebarToggleGlyph className="h-[1.625rem] w-[1.625rem] text-white" />
-                                </span>
-                                <span className={collapsedToggleTooltipClass}>
-                                    {collapseToggleLabel}
                                 </span>
                             </button>
                         ) : (
