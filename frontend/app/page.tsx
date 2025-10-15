@@ -1543,7 +1543,7 @@ const SidebarNav = ({
 }) => {
     if (!items.length) return null;
     const collapsedTooltipClass =
-        "pointer-events-none absolute left-full top-1/2 z-20 ml-4 -translate-y-1/2 whitespace-normal rounded-2xl border border-white/10 bg-[#151821] p-4 text-left shadow-[0_18px_40px_rgba(0,0,0,0.45)] opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100";
+        "pointer-events-none absolute left-full top-1/2 z-20 ml-3 -translate-y-1/2 whitespace-nowrap rounded-lg bg-[#1a1c23] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.28em] text-white opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100";
     return (
         <nav className={`space-y-1.5 ${collapsed ? "text-[11px]" : "text-sm"}`}>
             {items.map((item) => {
@@ -1615,17 +1615,8 @@ const SidebarNav = ({
                         )}
                         {active && collapsed && <span className="sr-only">(aktywny)</span>}
                         {collapsed && (
-                            <div className={`${collapsedTooltipClass} min-w-[220px] max-w-[260px]`} role="presentation">
-                                <p className="text-sm font-semibold text-white">{item.label}</p>
-                                {item.description ? (
-                                    <p className="mt-1 text-xs leading-relaxed text-white/60">
-                                        {item.description}
-                                    </p>
-                                ) : null}
-                                <span
-                                    className="pointer-events-none absolute left-0 top-1/2 h-3 w-3 -translate-x-[9px] -translate-y-1/2 rotate-45 border border-white/10 border-r-transparent border-t-transparent bg-[#151821]"
-                                    aria-hidden
-                                />
+                            <div className={collapsedTooltipClass} role="presentation">
+                                {item.label}
                             </div>
                         )}
                     </Link>
