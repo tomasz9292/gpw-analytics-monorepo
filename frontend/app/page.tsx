@@ -224,7 +224,8 @@ const getDefaultScoreRules = (): ScoreBuilderRule[] => {
     }));
 };
 
-const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? "";
+const GOOGLE_CLIENT_ID =
+    process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? process.env.GOOGLE_CLIENT_ID ?? "";
 const DEFAULT_WATCHLIST = ["CDR.WA", "PKN.WA", "PKOBP"];
 
 type ScoreDraftState = {
@@ -1852,7 +1853,7 @@ const SidebarContent = ({
                         </p>
                         {!googleClientId && (
                             <p className={`text-amber-200 ${collapsed ? "text-[10px]" : "text-xs"}`}>
-                                Ustaw zmienną NEXT_PUBLIC_GOOGLE_CLIENT_ID, aby włączyć logowanie.
+                                Ustaw zmienną NEXT_PUBLIC_GOOGLE_CLIENT_ID (lub GOOGLE_CLIENT_ID), aby włączyć logowanie.
                             </p>
                         )}
                     </div>
@@ -5059,7 +5060,7 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                                     </p>
                                     {!GOOGLE_CLIENT_ID && (
                                         <p className="text-[11px] text-amber-200">
-                                            Ustaw zmienną NEXT_PUBLIC_GOOGLE_CLIENT_ID, aby włączyć logowanie.
+                                            Ustaw zmienną NEXT_PUBLIC_GOOGLE_CLIENT_ID (lub GOOGLE_CLIENT_ID), aby włączyć logowanie.
                                         </p>
                                     )}
                                 </div>
