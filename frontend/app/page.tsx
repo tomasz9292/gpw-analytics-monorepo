@@ -2042,9 +2042,11 @@ const SidebarContent = ({
                                             {authUser?.name ?? authUser?.email ?? "Użytkownik Google"}
                                         </p>
                                         {authUser?.email ? <span className="sr-only">{authUser.email}</span> : null}
-                                        <p className="text-[11px] uppercase tracking-wider text-white/40">
-                                            {profileLoading ? "Zapisywanie ustawień..." : "Konto Google"}
-                                        </p>
+                                        {profileLoading && (
+                                            <p className="text-[11px] uppercase tracking-wider text-white/40">
+                                                Zapisywanie ustawień...
+                                            </p>
+                                        )}
                                     </div>
                                 )}
                                 <span className="sr-only">Otwórz panel konta</span>
@@ -5310,9 +5312,11 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                                         {authUser?.email ? (
                                             <span className="sr-only">{authUser.email}</span>
                                         ) : null}
-                                        <p className="text-[11px] uppercase tracking-wider text-white/40">
-                                            {profileLoading ? "Zapisywanie ustawień..." : "Konto Google"}
-                                        </p>
+                                        {profileLoading && (
+                                            <p className="text-[11px] uppercase tracking-wider text-white/40">
+                                                Zapisywanie ustawień...
+                                            </p>
+                                        )}
                                     </div>
                                     <button
                                         className="rounded-lg border border-white/20 px-3 py-2 text-xs font-semibold text-white transition hover:bg-white/10"
@@ -5340,9 +5344,7 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                                             Załóż konto
                                         </button>
                                     </div>
-                                    <p className="text-xs text-white/70">
-                                        Historia ustawień jest zapisywana w Twoim koncie Google.
-                                    </p>
+                                    <div className="h-3" aria-hidden="true" />
                                     {!GOOGLE_CLIENT_ID && (
                                         <p className="text-[11px] text-amber-200">
                                             Ustaw zmienną NEXT_PUBLIC_GOOGLE_CLIENT_ID (lub GOOGLE_CLIENT_ID), aby włączyć logowanie.
@@ -5364,7 +5366,7 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
 
                 {!isAuthenticated && authDialogOpen && (
                 <div
-                    className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 px-4 py-6"
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-transparent px-4 py-6"
                     role="dialog"
                     aria-modal="true"
                     aria-labelledby="auth-dialog-title"
