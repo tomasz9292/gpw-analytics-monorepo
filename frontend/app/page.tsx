@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useMemo, useState, useEffect, useId, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import Image from "next/image";
 import Link from "next/link";
 import Script from "next/script";
@@ -1367,6 +1368,7 @@ type NavItem = {
     label: string;
     key?: DashboardView;
     icon?: React.ComponentType<{ className?: string }>;
+    description?: string;
 };
 
 const IconSparkline = ({ className }: { className?: string }) => (
@@ -1529,97 +1531,199 @@ const SidebarToggleGlyph = ({ className }: { className?: string }) => (
     </svg>
 );
 
+const collapsedFloatingTooltipClass =
+    "pointer-events-none fixed z-[9999] -translate-y-1/2 whitespace-nowrap rounded-lg bg-[#1a1c23] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.28em] text-white shadow-[0_8px_20px_rgba(15,16,20,0.55)] ring-1 ring-white/10";
+
 const SidebarNav = ({
     items,
     activeKey,
     collapsed,
     onNavigate,
+    scrollContainerRef,
 }: {
     items: NavItem[];
     activeKey?: DashboardView;
     collapsed?: boolean;
     onNavigate?: () => void;
+    scrollContainerRef?: React.RefObject<HTMLElement | null>;
 }) => {
+    const [floatingLabel, setFloatingLabel] = useState<{
+        label: string;
+        top: number;
+        left: number;
+    } | null>(null);
+    const hoveredElementRef = useRef<HTMLElement | null>(null);
+
+    const hideFloatingLabel = useCallback(() => {
+        setFloatingLabel(null);
+        hoveredElementRef.current = null;
+    }, []);
+
+    const updateFloatingLabelPosition = useCallback(() => {
+        const element = hoveredElementRef.current;
+        if (!element) {
+            return;
+        }
+        const rect = element.getBoundingClientRect();
+        setFloatingLabel((prev) => {
+            if (!prev) {
+                return null;
+            }
+            return {
+                ...prev,
+                top: rect.top + rect.height / 2,
+                left: rect.right + 12,
+            };
+        });
+    }, []);
+
+    const showFloatingLabel = useCallback((element: HTMLElement, label: string) => {
+        hoveredElementRef.current = element;
+        const rect = element.getBoundingClientRect();
+        setFloatingLabel({
+            label,
+            top: rect.top + rect.height / 2,
+            left: rect.right + 12,
+        });
+    }, []);
+
+    useEffect(() => {
+        if (!collapsed) {
+            hideFloatingLabel();
+            return;
+        }
+        updateFloatingLabelPosition();
+    }, [collapsed, hideFloatingLabel, updateFloatingLabelPosition]);
+
+    useEffect(() => {
+        if (!collapsed || !floatingLabel) {
+            return;
+        }
+
+        const handleScrollOrResize = () => {
+            updateFloatingLabelPosition();
+        };
+
+        const scrollContainer = scrollContainerRef?.current;
+        scrollContainer?.addEventListener("scroll", handleScrollOrResize, { passive: true });
+        window.addEventListener("resize", handleScrollOrResize);
+        window.addEventListener("scroll", handleScrollOrResize, true);
+
+        return () => {
+            scrollContainer?.removeEventListener("scroll", handleScrollOrResize);
+            window.removeEventListener("resize", handleScrollOrResize);
+            window.removeEventListener("scroll", handleScrollOrResize, true);
+        };
+    }, [collapsed, floatingLabel, scrollContainerRef, updateFloatingLabelPosition]);
+
     if (!items.length) return null;
-    const collapsedTooltipClass =
-        "pointer-events-none absolute left-full top-1/2 z-20 ml-3 -translate-y-1/2 whitespace-nowrap rounded-lg bg-[#1a1c23] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.28em] text-white opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100";
+
     return (
-        <nav className={`space-y-1.5 ${collapsed ? "text-[11px]" : "text-sm"}`}>
-            {items.map((item) => {
-                const active = item.key && item.key === activeKey;
-                const Icon = item.icon;
-                return (
-                    <Link
-                        key={item.href}
-                        href={item.href}
-                        aria-label={collapsed ? item.label : undefined}
-                        className={`group relative flex items-center rounded-xl border border-transparent px-3 py-2 transition ${
-                            collapsed ? "overflow-visible" : "overflow-hidden"
-                        } ${
-                            collapsed ? "justify-center" : "gap-3"
-                        } ${
-                            active
-                                ? "bg-white/10 text-white shadow-[0_0_0_1px_rgba(255,255,255,0.08)]"
-                                : "text-white/70 hover:border-white/10 hover:text-white hover:bg-white/5"
-                        }`}
-                        title={item.label}
-                        onClick={() => onNavigate?.()}
-                        aria-current={active ? "page" : undefined}
-                    >
-                        {active && (
-                            <span
-                                aria-hidden
-                                className={`absolute left-2 top-1/2 h-7 w-1 -translate-y-1/2 rounded-full bg-[#10a37f] ${
-                                    collapsed ? "left-1 h-6" : ""
-                                }`}
-                            />
-                        )}
-                        {Icon ? (
-                            <span
-                                aria-hidden
-                                className={`relative z-10 inline-flex items-center justify-center rounded-lg transition ${
-                                    collapsed
-                                        ? "h-12 w-12 bg-white/5"
-                                        : "h-10 w-10 bg-white/10 group-hover:bg-white/15"
-                                } ${active ? "text-white" : "text-white/60 group-hover:text-white"}`}
-                            >
-                                <Icon className="h-5 w-5" />
-                            </span>
-                        ) : collapsed ? (
-                            <span aria-hidden className="font-semibold">
-                                {item.label.charAt(0).toUpperCase()}
-                            </span>
-                        ) : null}
-                        {!collapsed && (
-                            <span className="relative z-10 font-medium">{item.label}</span>
-                        )}
-                        {!collapsed && (
-                            <svg
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                xmlns="http://www.w3.org/2000/svg"
-                                className={`relative z-10 h-4 w-4 transition ${
-                                    active ? "text-white" : "text-white/40 group-hover:text-white/70"
-                                }`}
-                                aria-hidden
-                            >
-                                <path
-                                    d="M9 5L16 12L9 19"
-                                    stroke="currentColor"
-                                    strokeWidth="2"
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
+        <>
+            <nav className={`space-y-1.5 ${collapsed ? "text-[11px]" : "text-sm"}`}>
+                {items.map((item) => {
+                    const active = item.key && item.key === activeKey;
+                    const Icon = item.icon;
+                    const handleMouseEnter = collapsed
+                        ? (event: React.MouseEvent<HTMLAnchorElement>) =>
+                              showFloatingLabel(event.currentTarget, item.label)
+                        : undefined;
+                    const handleFocus = collapsed
+                        ? (event: React.FocusEvent<HTMLAnchorElement>) =>
+                              showFloatingLabel(event.currentTarget, item.label)
+                        : undefined;
+                    const handleMouseLeave = collapsed ? hideFloatingLabel : undefined;
+                    const handleBlur = collapsed ? hideFloatingLabel : undefined;
+                    return (
+                        <Link
+                            key={item.href}
+                            href={item.href}
+                            aria-label={collapsed ? item.label : undefined}
+                            className={`group relative flex items-center rounded-xl border border-transparent px-3 py-2 transition ${
+                                collapsed ? "overflow-visible" : "overflow-hidden"
+                            } ${
+                                collapsed ? "justify-center" : "gap-3"
+                            } ${
+                                active
+                                    ? "bg-white/10 text-white shadow-[0_0_0_1px_rgba(255,255,255,0.08)]"
+                                    : "text-white/70 hover:border-white/10 hover:text-white hover:bg-white/5"
+                            }`}
+                            title={item.label}
+                            onClick={() => onNavigate?.()}
+                            aria-current={active ? "page" : undefined}
+                            onMouseEnter={handleMouseEnter}
+                            onFocus={handleFocus}
+                            onMouseLeave={handleMouseLeave}
+                            onBlur={handleBlur}
+                        >
+                            {active && (
+                                <span
+                                    aria-hidden
+                                    className={`absolute left-2 top-1/2 h-7 w-1 -translate-y-1/2 rounded-full bg-[#10a37f] ${
+                                        collapsed ? "left-1 h-6" : ""
+                                    }`}
                                 />
-                            </svg>
-                        )}
-                        {active && collapsed && <span className="sr-only">(aktywny)</span>}
-                        {collapsed && (
-                            <span className={collapsedTooltipClass}>{item.label}</span>
-                        )}
-                    </Link>
-                );
-            })}
-        </nav>
+                            )}
+                            {Icon ? (
+                                <span
+                                    aria-hidden
+                                    className={`relative z-10 inline-flex items-center justify-center rounded-lg transition ${
+                                        collapsed
+                                            ? "h-12 w-12 bg-white/5"
+                                            : "h-10 w-10 bg-white/10 group-hover:bg-white/15"
+                                    } ${active ? "text-white" : "text-white/60 group-hover:text-white"}`}
+                                >
+                                    <Icon className="h-5 w-5" />
+                                </span>
+                            ) : collapsed ? (
+                                <span aria-hidden className="font-semibold">
+                                    {item.label.charAt(0).toUpperCase()}
+                                </span>
+                            ) : null}
+                            {!collapsed && (
+                                <span className="relative z-10 font-medium">{item.label}</span>
+                            )}
+                            {!collapsed && (
+                                <svg
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    className={`relative z-10 h-4 w-4 transition ${
+                                        active
+                                            ? "text-white"
+                                            : "text-white/40 group-hover:text-white/70"
+                                    }`}
+                                    aria-hidden
+                                >
+                                    <path
+                                        d="M9 5L16 12L9 19"
+                                        stroke="currentColor"
+                                        strokeWidth="2"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                    />
+                                </svg>
+                            )}
+                            {active && collapsed && <span className="sr-only">(aktywny)</span>}
+                        </Link>
+                    );
+                })}
+            </nav>
+            {collapsed && floatingLabel
+                ? createPortal(
+                      <span
+                          className={`${collapsedFloatingTooltipClass} opacity-100`}
+                          style={{
+                              top: `${floatingLabel.top}px`,
+                              left: `${floatingLabel.left}px`,
+                          }}
+                      >
+                          {floatingLabel.label}
+                      </span>,
+                      document.body
+                  )
+                : null}
+        </>
     );
 };
 
@@ -1660,6 +1764,97 @@ const SidebarContent = ({
     const collapseToggleLabel = collapsed ? "Otwórz pasek boczny" : "Zamknij pasek boczny";
     const [accountMenuOpen, setAccountMenuOpen] = useState(false);
     const accountMenuRef = useRef<HTMLDivElement | null>(null);
+    const navScrollRef = useRef<HTMLDivElement | null>(null);
+    const toggleHoveredElementRef = useRef<HTMLElement | null>(null);
+    const [toggleFloatingLabel, setToggleFloatingLabel] = useState<{
+        label: string;
+        top: number;
+        left: number;
+    } | null>(null);
+
+    const hideToggleFloatingLabel = useCallback(() => {
+        setToggleFloatingLabel(null);
+        toggleHoveredElementRef.current = null;
+    }, []);
+
+    const updateToggleFloatingLabelPosition = useCallback(() => {
+        const element = toggleHoveredElementRef.current;
+        if (!element) {
+            return;
+        }
+        const rect = element.getBoundingClientRect();
+        setToggleFloatingLabel((prev) => {
+            if (!prev) {
+                return null;
+            }
+            return {
+                ...prev,
+                top: rect.top + rect.height / 2,
+                left: rect.right + 12,
+            };
+        });
+    }, []);
+
+    const showToggleFloatingLabel = useCallback(
+        (element: HTMLElement) => {
+            toggleHoveredElementRef.current = element;
+            const rect = element.getBoundingClientRect();
+            setToggleFloatingLabel({
+                label: collapseToggleLabel,
+                top: rect.top + rect.height / 2,
+                left: rect.right + 12,
+            });
+        },
+        [collapseToggleLabel]
+    );
+
+    useEffect(() => {
+        if (!toggleFloatingLabel) {
+            return;
+        }
+
+        const element = toggleHoveredElementRef.current;
+        if (!element || !document.body.contains(element)) {
+            hideToggleFloatingLabel();
+            return;
+        }
+
+        updateToggleFloatingLabelPosition();
+    }, [collapsed, toggleFloatingLabel, hideToggleFloatingLabel, updateToggleFloatingLabelPosition]);
+
+    useEffect(() => {
+        if (!toggleFloatingLabel) {
+            return;
+        }
+
+        const handleScrollOrResize = () => {
+            updateToggleFloatingLabelPosition();
+        };
+
+        window.addEventListener("resize", handleScrollOrResize);
+        window.addEventListener("scroll", handleScrollOrResize, true);
+
+        return () => {
+            window.removeEventListener("resize", handleScrollOrResize);
+            window.removeEventListener("scroll", handleScrollOrResize, true);
+        };
+    }, [toggleFloatingLabel, updateToggleFloatingLabelPosition]);
+
+    useEffect(() => {
+        if (!toggleFloatingLabel) {
+            return;
+        }
+
+        setToggleFloatingLabel((prev) => {
+            if (!prev || prev.label === collapseToggleLabel) {
+                return prev;
+            }
+            return {
+                ...prev,
+                label: collapseToggleLabel,
+            };
+        });
+    }, [collapseToggleLabel, toggleFloatingLabel]);
 
     useEffect(() => {
         if (!accountMenuOpen) {
@@ -1701,8 +1896,6 @@ const SidebarContent = ({
     const accountMenuClassName = collapsed
         ? `${accountMenuBaseClass} ${accountMenuPositionClass} min-w-[260px]`
         : `${accountMenuBaseClass} ${accountMenuPositionClass} w-full`;
-    const toggleTooltipClass =
-        "pointer-events-none absolute left-full top-1/2 z-20 ml-3 -translate-y-1/2 whitespace-nowrap rounded-lg bg-[#1a1c23] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.28em] text-white opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100";
     const renderBrandBadge = () => (
         <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-[#10a37f] via-[#0f5d4a] to-[#0b3d2d] text-sm font-semibold">
             GA
@@ -1726,11 +1919,12 @@ const SidebarContent = ({
             className="group relative flex h-10 w-10 items-center justify-center rounded-xl text-white transition focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0f1014] hover:shadow-[0_0_0_1px_rgba(255,255,255,0.35)] active:shadow-[0_0_0_1px_rgba(255,255,255,0.35)]"
             aria-label={collapseToggleLabel}
             aria-expanded={!collapsed}
+            onMouseEnter={(event) => showToggleFloatingLabel(event.currentTarget)}
+            onFocus={(event) => showToggleFloatingLabel(event.currentTarget)}
+            onMouseLeave={hideToggleFloatingLabel}
+            onBlur={hideToggleFloatingLabel}
         >
             <SidebarToggleGlyph className="h-[1.625rem] w-[1.625rem] text-white" />
-            <span className={toggleTooltipClass}>
-                {collapseToggleLabel}
-            </span>
         </button>
     );
     const headerAlignment = collapsed
@@ -1740,6 +1934,20 @@ const SidebarContent = ({
         : "justify-start";
     return (
         <div className="flex h-full flex-col bg-[#0f1014] text-white">
+            {toggleFloatingLabel
+                ? createPortal(
+                      <span
+                          className={`${collapsedFloatingTooltipClass} opacity-100`}
+                          style={{
+                              top: `${toggleFloatingLabel.top}px`,
+                              left: `${toggleFloatingLabel.left}px`,
+                          }}
+                      >
+                          {toggleFloatingLabel.label}
+                      </span>,
+                      document.body
+                  )
+                : null}
             <div className={`${sectionPadding} ${headerSpacing} pt-6`}>
                 <div className={`flex items-center ${headerAlignment} gap-3`}>
                     {collapsed ? (
@@ -1750,15 +1958,16 @@ const SidebarContent = ({
                                 className="group relative flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-[#10a37f] via-[#0f5d4a] to-[#0b3d2d] text-sm font-semibold text-white transition focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0f1014]"
                                 aria-label={collapseToggleLabel}
                                 aria-expanded={!collapsed}
+                                onMouseEnter={(event) => showToggleFloatingLabel(event.currentTarget)}
+                                onFocus={(event) => showToggleFloatingLabel(event.currentTarget)}
+                                onMouseLeave={hideToggleFloatingLabel}
+                                onBlur={hideToggleFloatingLabel}
                             >
                                 <span className="pointer-events-none select-none transition-opacity duration-150 group-hover:opacity-0 group-focus-visible:opacity-0">
                                     GA
                                 </span>
                                 <span className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100">
                                     <SidebarToggleGlyph className="h-[1.625rem] w-[1.625rem] text-white" />
-                                </span>
-                                <span className={toggleTooltipClass}>
-                                    {collapseToggleLabel}
                                 </span>
                             </button>
                         ) : (
@@ -1772,7 +1981,10 @@ const SidebarContent = ({
                     )}
                 </div>
             </div>
-            <div className={`flex-1 overflow-y-auto pb-6 ${sectionPadding} ${navSpacing}`}>
+            <div
+                ref={navScrollRef}
+                className={`flex-1 overflow-y-auto overflow-x-visible pb-6 ${sectionPadding} ${navSpacing}`}
+            >
                 <div className="space-y-3">
                     {!collapsed && (
                         <p className="text-[11px] font-semibold uppercase tracking-[0.32em] text-white/40">
@@ -1784,6 +1996,7 @@ const SidebarContent = ({
                         activeKey={activeKey}
                         collapsed={collapsed}
                         onNavigate={onNavigate}
+                        scrollContainerRef={navScrollRef}
                     />
                 </div>
             </div>
@@ -4565,18 +4778,21 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
             label: "Analiza techniczna",
             key: "analysis",
             icon: IconSparkline,
+            description: "Zaawansowane wykresy, wskaźniki i zestawienia notowań GPW.",
         },
         {
             href: view === "score" ? "#score" : "/ranking-score",
             label: "Ranking score",
             key: "score",
             icon: IconTrophy,
+            description: "Buduj rankingi momentum i ryzyka dopasowane do Twojej strategii.",
         },
         {
             href: view === "portfolio" ? "#portfolio" : "/symulator-portfela",
             label: "Symulacja portfela",
             key: "portfolio",
             icon: IconPie,
+            description: "Testuj portfele z rebalancingiem, kosztami i porównaniem do benchmarków.",
         },
     ];
 
