@@ -1733,7 +1733,6 @@ const SidebarContent = ({
     activeKey,
     isAuthenticated,
     authUser,
-    profileLoading,
     authLoading,
     handleLogout,
     openAuthDialog,
@@ -1748,7 +1747,6 @@ const SidebarContent = ({
     activeKey?: DashboardView;
     isAuthenticated: boolean;
     authUser: AuthUser | null;
-    profileLoading: boolean;
     authLoading: boolean;
     handleLogout: () => void;
     openAuthDialog: (mode: "login" | "signup") => void;
@@ -2042,11 +2040,6 @@ const SidebarContent = ({
                                             {authUser?.name ?? authUser?.email ?? "Użytkownik Google"}
                                         </p>
                                         {authUser?.email ? <span className="sr-only">{authUser.email}</span> : null}
-                                        {profileLoading && (
-                                            <p className="text-[11px] uppercase tracking-wider text-white/40">
-                                                Zapisywanie ustawień...
-                                            </p>
-                                        )}
                                     </div>
                                 )}
                                 <span className="sr-only">Otwórz panel konta</span>
@@ -3657,7 +3650,6 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
     }, []);
     const [authLoading, setAuthLoading] = useState(true);
     const [authError, setAuthError] = useState<string | null>(null);
-    const [profileLoading, setProfileLoading] = useState(false);
     const [profileError, setProfileError] = useState<string | null>(null);
     const [profileHydrated, setProfileHydrated] = useState(false);
     const [googleLoaded, setGoogleLoaded] = useState(false);
@@ -3789,7 +3781,6 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
         setPfComparisonSymbols([...freshPortfolioDraft.comparisons]);
         lastSavedPreferencesRef.current = null;
         setProfileHydrated(false);
-        setProfileLoading(false);
         setAuthLoading(false);
     }, []);
 
@@ -3971,7 +3962,6 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
 
     const fetchProfile = useCallback(async () => {
         setAuthLoading(true);
-        setProfileLoading(true);
         try {
             const response = await fetch("/api/account/profile", { cache: "no-store" });
             if (!response.ok) {
@@ -4001,7 +3991,6 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
             return null;
         } finally {
             setAuthLoading(false);
-            setProfileLoading(false);
         }
     }, [hydrateFromPreferences, resetToDefaults, setAuthUser]);
 
@@ -5220,7 +5209,6 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                         activeKey={view}
                         isAuthenticated={isAuthenticated}
                         authUser={authUser}
-                        profileLoading={profileLoading}
                         authLoading={authLoading}
                         handleLogout={handleLogout}
                         openAuthDialog={openAuthDialog}
@@ -5248,7 +5236,6 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                     activeKey={view}
                     isAuthenticated={isAuthenticated}
                     authUser={authUser}
-                    profileLoading={profileLoading}
                     authLoading={authLoading}
                     handleLogout={handleLogout}
                     openAuthDialog={openAuthDialog}
@@ -5312,11 +5299,6 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                                         {authUser?.email ? (
                                             <span className="sr-only">{authUser.email}</span>
                                         ) : null}
-                                        {profileLoading && (
-                                            <p className="text-[11px] uppercase tracking-wider text-white/40">
-                                                Zapisywanie ustawień...
-                                            </p>
-                                        )}
                                     </div>
                                     <button
                                         className="rounded-lg border border-white/20 px-3 py-2 text-xs font-semibold text-white transition hover:bg-white/10"
