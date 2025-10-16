@@ -33,19 +33,41 @@ class FakeResponse:
     def __init__(
         self,
         payload: Optional[Dict[str, Any]] = None,
+        *,
+        text: Optional[str] = None,
         status_code: int = 200,
         error: Optional[str] = None,
     ) -> None:
-        if payload is None and error is None:
-            raise ValueError("Należy dostarczyć payload lub komunikat błędu")
+        if payload is None and text is None and error is None and status_code < 400:
+            raise ValueError("Należy dostarczyć payload, tekst lub komunikat błędu")
         self._payload = payload
+        self._text = text
         self._error = error
         self.status_code = status_code
 
     def json(self) -> Dict[str, Any]:
         if self._error is not None:
             raise RuntimeError(self._error)
-        return self._payload or {}
+        if self._payload is None:
+            raise RuntimeError("Brak danych JSON w odpowiedzi testowej")
+        return self._payload
+
+    def text(self, encoding: str = "utf-8", errors: str = "strict") -> str:  # noqa: ARG002
+        if self._error is not None:
+            raise RuntimeError(self._error)
+        if self._text is not None:
+            return self._text
+        if self._payload is not None:
+            return json.dumps(self._payload, ensure_ascii=False)
+        return ""
+
+    @property
+    def content(self) -> bytes:
+        if self._text is not None:
+            return self._text.encode("utf-8")
+        if self._payload is not None:
+            return json.dumps(self._payload, ensure_ascii=False).encode("utf-8")
+        return b""
 
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
@@ -243,6 +265,52 @@ def test_fetch_gpw_profiles_falls_back_to_rest_endpoint():
     assert session.calls[1]["url"].startswith("https://fallback.example")
     assert session.calls[1]["params"] == {"page": 0, "size": 1}
     assert session.calls[2]["params"] == {"page": 1, "size": 1}
+
+def test_fetch_gpw_profiles_uses_stooq_when_rest_fallback_fails():
+    error_message = (
+        "Niepoprawna odpowiedź JSON (serwer zwrócił komunikat: "
+        "HandlerMappingException – Brak dopasowania akcji)"
+    )
+    stooq_html = """
+    <html>
+      <body>
+        <table>
+          <tr><th>Symbol</th><th>Nazwa</th><th>ISIN</th><th>Sektor</th></tr>
+          <tr><td>AAA</td><td>AAA Corp</td><td>PLAAA0000001</td><td>Tech</td></tr>
+          <tr><td>BBB</td><td>BBB Spółka</td><td>PLBBB0000002</td><td>Finanse</td></tr>
+        </table>
+      </body>
+    </html>
+    """
+    session = FakeSession(
+        [
+            FakeResponse(error=error_message),
+            FakeResponse(status_code=500),
+            FakeResponse(text=stooq_html),
+        ]
+    )
+    harvester = CompanyDataHarvester(
+        session=session,
+        gpw_url="https://legacy.example",
+        gpw_fallback_url="https://fallback.example",
+        gpw_stooq_url="https://stooq.example",
+    )
+
+    rows = harvester.fetch_gpw_profiles(limit=1, page_size=1)
+
+    assert rows == [
+        {
+            "stockTicker": "AAA",
+            "companyName": "AAA Corp",
+            "shortName": "AAA Corp",
+            "isin": "PLAAA0000001",
+            "sectorName": "Tech",
+        }
+    ]
+    assert session.calls[0]["url"].startswith("https://legacy.example")
+    assert session.calls[1]["url"].startswith("https://fallback.example")
+    assert session.calls[2]["url"].startswith("https://stooq.example")
+
 
 YAHOO_CDR = {
     "quoteSummary": {
