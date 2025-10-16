@@ -799,6 +799,15 @@ class CompanyDataHarvester:
         self.gpw_stooq_url = gpw_stooq_url
         self.yahoo_url_template = yahoo_url_template
         self.google_url_template = google_url_template
+        self._yahoo_crumb: Optional[str] = None
+        parsed_yahoo_url = urlparse(self.yahoo_url_template)
+        self._yahoo_crumb_url: Optional[str]
+        if parsed_yahoo_url.scheme and parsed_yahoo_url.netloc:
+            self._yahoo_crumb_url = (
+                f"{parsed_yahoo_url.scheme}://{parsed_yahoo_url.netloc}/v1/test/getcrumb"
+            )
+        else:
+            self._yahoo_crumb_url = None
 
     # ---------------------------
     # HTTP helpers
@@ -936,13 +945,48 @@ class CompanyDataHarvester:
     def fetch_yahoo_summary(self, raw_symbol: str) -> Dict[str, Any]:
         normalized = _normalize_gpw_symbol(raw_symbol)
         symbol = f"{normalized}.WA"
-        url = self.yahoo_url_template.format(symbol=symbol)
-        params = {"modules": YAHOO_MODULES}
-        payload = self._get(url, params=params)
+        payload = self._fetch_yahoo_payload(symbol)
         result = (((payload or {}).get("quoteSummary") or {}).get("result") or [])
         if not result:
             raise RuntimeError(f"Brak danych fundamentalnych dla {symbol}")
         return result[0]
+
+    def _fetch_yahoo_payload(self, symbol: str) -> Dict[str, Any]:
+        url = self.yahoo_url_template.format(symbol=symbol)
+        base_params: Dict[str, Any] = {"modules": YAHOO_MODULES}
+        params = dict(base_params)
+        if self._yahoo_crumb:
+            params["crumb"] = self._yahoo_crumb
+        try:
+            return self._get(url, params=params)
+        except RuntimeError as exc:
+            if "HTTP 401" not in str(exc):
+                raise
+            self._yahoo_crumb = None
+            if not self._refresh_yahoo_crumb():
+                raise RuntimeError(
+                    f"Brak autoryzacji Yahoo dla {symbol}: nie udało się pobrać tokenu dostępu"
+                ) from exc
+        retry_params = dict(base_params)
+        retry_params["crumb"] = self._yahoo_crumb
+        try:
+            return self._get(url, params=retry_params)
+        except RuntimeError as exc:
+            raise RuntimeError(f"Brak autoryzacji Yahoo dla {symbol}: {exc}") from exc
+
+    def _refresh_yahoo_crumb(self) -> bool:
+        if not self._yahoo_crumb_url:
+            return False
+        try:
+            crumb = self._get_text(self._yahoo_crumb_url).strip()
+        except Exception:
+            self._yahoo_crumb = None
+            return False
+        if not crumb:
+            self._yahoo_crumb = None
+            return False
+        self._yahoo_crumb = crumb
+        return True
 
     def fetch_google_overview(self, raw_symbol: str) -> Dict[str, Any]:
         normalized = _normalize_gpw_symbol(raw_symbol)

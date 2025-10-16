@@ -26,6 +26,7 @@ from api.company_ingestion import (
     HttpRequestLog,
     SimpleHttpSession,
     SimpleHttpResponse,
+    YAHOO_MODULES,
 )
 
 
@@ -331,6 +332,60 @@ def test_fetch_yahoo_summary_normalizes_gpw_suffix():
 
     assert result == {"price": {"shortName": "CDR"}}
     assert session.calls[0]["url"] == "https://example/CDR.WA"
+
+
+def test_fetch_yahoo_summary_refreshes_crumb_after_unauthorized():
+    session = FakeSession(
+        [
+            FakeResponse(status_code=401),
+            FakeResponse(text="crumb-token\n"),
+            FakeResponse(
+                {"quoteSummary": {"result": [{"price": {"shortName": "CDR"}}]}}
+            ),
+        ]
+    )
+    harvester = CompanyDataHarvester(
+        session=session,
+        yahoo_url_template="https://example/{symbol}",
+    )
+
+    result = harvester.fetch_yahoo_summary("cdr")
+
+    assert result == {"price": {"shortName": "CDR"}}
+    assert session.calls[0]["params"] == {"modules": YAHOO_MODULES}
+    assert session.calls[1]["url"] == "https://example/v1/test/getcrumb"
+    assert session.calls[2]["params"] == {
+        "modules": YAHOO_MODULES,
+        "crumb": "crumb-token",
+    }
+
+
+def test_fetch_yahoo_summary_reuses_cached_crumb():
+    session = FakeSession(
+        [
+            FakeResponse(status_code=401),
+            FakeResponse(text="crumb-token"),
+            FakeResponse({"quoteSummary": {"result": [{}]}}),
+            FakeResponse({"quoteSummary": {"result": [{}]}}),
+        ]
+    )
+    harvester = CompanyDataHarvester(
+        session=session,
+        yahoo_url_template="https://example/{symbol}",
+    )
+
+    harvester.fetch_yahoo_summary("cdr")
+    harvester.fetch_yahoo_summary("ale")
+
+    assert session.calls[2]["params"] == {
+        "modules": YAHOO_MODULES,
+        "crumb": "crumb-token",
+    }
+    assert session.calls[3]["url"] == "https://example/ALE.WA"
+    assert session.calls[3]["params"] == {
+        "modules": YAHOO_MODULES,
+        "crumb": "crumb-token",
+    }
 
 
 def test_fetch_google_overview_parses_metrics():
