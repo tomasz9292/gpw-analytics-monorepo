@@ -206,6 +206,22 @@ def _extract_xml_error_detail(document: str) -> Optional[str]:
     return summary or None
 
 
+def _normalize_gpw_symbol(value: str) -> str:
+    """Zwraca surowy symbol GPW z walidacją sufiksu."""
+
+    normalized = value.strip().upper()
+    if not normalized:
+        raise RuntimeError("Pusty symbol spółki")
+
+    if "." in normalized:
+        if normalized.endswith(".WA"):
+            normalized = normalized.rsplit(".", 1)[0]
+        else:
+            raise RuntimeError(f"Symbol spoza GPW: {normalized}")
+
+    return normalized
+
+
 def _clean_website(url: Optional[str]) -> Optional[str]:
     if not url:
         return None
@@ -709,7 +725,8 @@ class CompanyDataHarvester:
         return any(indicator in message for indicator in indicators)
 
     def fetch_yahoo_summary(self, raw_symbol: str) -> Dict[str, Any]:
-        symbol = raw_symbol if "." in raw_symbol else f"{raw_symbol}.WA"
+        normalized = _normalize_gpw_symbol(raw_symbol)
+        symbol = f"{normalized}.WA"
         url = self.yahoo_url_template.format(symbol=symbol)
         params = {"modules": YAHOO_MODULES}
         payload = self._get(url, params=params)
@@ -726,7 +743,7 @@ class CompanyDataHarvester:
         for key in ("stockTicker", "ticker", "symbol", "code"):
             value = _clean_string(row.get(key))
             if value:
-                return value.upper()
+                return _normalize_gpw_symbol(value)
         raise RuntimeError("Rekord GPW nie zawiera symbolu spółki")
 
     def build_row(
