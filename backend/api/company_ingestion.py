@@ -31,6 +31,15 @@ class SimpleHttpResponse:
             raise RuntimeError(f"HTTP {self.status_code}")
 
 
+class HttpRequestLog(BaseModel):
+    url: str
+    params: Dict[str, Any] = Field(default_factory=dict)
+    started_at: datetime = Field(default_factory=datetime.utcnow)
+    finished_at: Optional[datetime] = None
+    status_code: Optional[int] = None
+    error: Optional[str] = None
+
+
 class SimpleHttpSession:
     """Minimalna sesja HTTP ze wsparciem nagłówków wymaganych przez GPW."""
 
@@ -51,6 +60,7 @@ class SimpleHttpSession:
         self.headers = dict(self.DEFAULT_HEADERS)
         if headers:
             self.headers.update(headers)
+        self.history: List[HttpRequestLog] = []
 
     def get(
         self,
@@ -62,11 +72,26 @@ class SimpleHttpSession:
             query = urlencode(params, doseq=True)
             separator = "&" if "?" in url else "?"
             url = f"{url}{separator}{query}"
-        request = Request(url, headers=self.headers)
-        with urlopen(request, timeout=timeout) as response:  # type: ignore[arg-type]
-            status = getattr(response, "status", 200)
-            body = response.read()
-        return SimpleHttpResponse(status_code=status, body=body)
+        log_entry = HttpRequestLog(url=url, params=params or {})
+        self.history.append(log_entry)
+        try:
+            request = Request(url, headers=self.headers)
+            with urlopen(request, timeout=timeout) as response:  # type: ignore[arg-type]
+                status = getattr(response, "status", 200)
+                body = response.read()
+            log_entry.status_code = status
+            log_entry.finished_at = datetime.utcnow()
+            return SimpleHttpResponse(status_code=status, body=body)
+        except Exception as exc:
+            log_entry.error = str(exc)
+            log_entry.finished_at = datetime.utcnow()
+            raise
+
+    def clear_history(self) -> None:
+        self.history.clear()
+
+    def get_history(self) -> List["HttpRequestLog"]:
+        return list(self.history)
 
 
 def _clean_string(value: Any) -> Optional[str]:
@@ -184,6 +209,12 @@ class CompanySyncResult(BaseModel):
     synced: int = Field(..., description="Liczba spółek wstawionych do bazy")
     failed: int = Field(..., description="Liczba spółek z błędami podczas synchronizacji")
     errors: List[str] = Field(default_factory=list)
+    started_at: datetime = Field(..., description="Czas rozpoczęcia synchronizacji")
+    finished_at: datetime = Field(..., description="Czas zakończenia synchronizacji")
+    request_log: List[HttpRequestLog] = Field(
+        default_factory=list,
+        description="Historia zapytań HTTP wykonanych podczas synchronizacji",
+    )
 
 
 class CompanyDataHarvester:
@@ -422,6 +453,12 @@ class CompanyDataHarvester:
         columns: Sequence[str],
         limit: Optional[int] = None,
     ) -> CompanySyncResult:
+        supports_history = hasattr(self.session, "clear_history") and hasattr(
+            self.session, "get_history"
+        )
+        if supports_history:
+            self.session.clear_history()
+        started_at = datetime.utcnow()
         base_rows = self.fetch_gpw_profiles(limit=limit)
         deduplicated: Dict[str, Dict[str, Any]] = {}
         errors: List[str] = []
@@ -458,11 +495,19 @@ class CompanyDataHarvester:
             )
             synced = len(normalized_rows)
 
+        finished_at = datetime.utcnow()
+        request_log: List[HttpRequestLog] = []
+        if supports_history:
+            request_log = self.session.get_history()
+
         return CompanySyncResult(
             fetched=len(base_rows),
             synced=synced,
             failed=len(errors),
             errors=errors,
+            started_at=started_at,
+            finished_at=finished_at,
+            request_log=request_log,
         )
 
 
