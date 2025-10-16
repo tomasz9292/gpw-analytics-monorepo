@@ -14,6 +14,12 @@
   --color-muted: #5D6D7E;
   --color-subtle: #95A5A6;
   --color-tech: #3498DB;
+  --color-primary-strong: #06152A;
+  --color-primary-soft: #123A63;
+  --color-accent-strong: #28B463;
+  --color-accent-deep: #1E8449;
+  --shadow-brand-elevated: 0 20px 45px rgba(10, 35, 66, 0.35);
+  --shadow-brand-floating: 0 8px 20px rgba(10, 35, 66, 0.4);
   --font-geist-sans: "Inter", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont,
     "Helvetica Neue", Arial, sans-serif;
   --font-geist-mono: "IBM Plex Mono", "SFMono-Regular", "Menlo", Monaco, Consolas,
@@ -98,12 +104,53 @@ body {
     background-color: var(--color-primary);
   }
 
+  .bg-primary-strong {
+    background-color: var(--color-primary-strong);
+  }
+
+  .bg-primary-soft {
+    background-color: var(--color-primary-soft);
+  }
+
   .bg-accent {
     background-color: var(--color-accent);
   }
 
+  .bg-accent-strong {
+    background-color: var(--color-accent-strong);
+  }
+
+  .bg-accent-deep {
+    background-color: var(--color-accent-deep);
+  }
+
+  .bg-accent-gradient {
+    background-image: linear-gradient(
+      135deg,
+      var(--color-accent) 0%,
+      var(--color-accent-strong) 55%,
+      var(--color-primary) 100%
+    );
+  }
+
   .border-soft {
     border-color: var(--color-border);
+  }
+
+  .shadow-brand-elevated {
+    box-shadow: var(--shadow-brand-elevated);
+  }
+
+  .shadow-brand-floating {
+    box-shadow: var(--shadow-brand-floating);
+  }
+
+  .ring-offset-primary-strong {
+    --tw-ring-offset-color: var(--color-primary-strong);
+  }
+
+  .ring-offset-primary-soft {
+    --tw-ring-offset-color: var(--color-primary-soft);
   }
 }
 

@@ -1560,7 +1560,7 @@ const SidebarToggleGlyph = ({ className }: { className?: string }) => (
 );
 
 const collapsedFloatingTooltipClass =
-    "pointer-events-none fixed z-[9999] -translate-y-1/2 whitespace-nowrap rounded-lg bg-[#1a1c23] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.28em] text-white shadow-[0_8px_20px_rgba(15,16,20,0.55)] ring-1 ring-white/10";
+    "pointer-events-none fixed z-[9999] -translate-y-1/2 whitespace-nowrap rounded-lg bg-primary-soft px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.28em] text-white shadow-brand-floating ring-1 ring-white/10";
 
 const SidebarNav = ({
     items,
@@ -1687,7 +1687,7 @@ const SidebarNav = ({
                             {active && (
                                 <span
                                     aria-hidden
-                                    className={`absolute left-2 top-1/2 h-7 w-1 -translate-y-1/2 rounded-full bg-[#10a37f] ${
+                                    className={`absolute left-2 top-1/2 h-7 w-1 -translate-y-1/2 rounded-full bg-accent ${
                                         collapsed ? "left-1 h-6" : ""
                                     }`}
                                 />
@@ -1918,12 +1918,12 @@ const SidebarContent = ({
         ? "left-0 bottom-full mb-3"
         : "right-0 bottom-full mb-3";
     const accountMenuBaseClass =
-        "absolute z-20 flex flex-col gap-2 rounded-2xl border border-white/10 bg-[#151821] p-3 shadow-[0_20px_45px_rgba(0,0,0,0.45)]";
+        "absolute z-20 flex flex-col gap-2 rounded-2xl border border-white/10 bg-primary-soft p-3 shadow-brand-elevated";
     const accountMenuClassName = collapsed
         ? `${accountMenuBaseClass} ${accountMenuPositionClass} min-w-[260px]`
         : `${accountMenuBaseClass} ${accountMenuPositionClass} w-full`;
     const renderBrandBadge = () => (
-        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-[#10a37f] via-[#0f5d4a] to-[#0b3d2d] text-sm font-semibold">
+        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-gradient text-sm font-semibold text-white">
             GA
         </div>
     );
@@ -1942,7 +1942,7 @@ const SidebarContent = ({
         <button
             type="button"
             onClick={onToggleCollapse}
-            className="group relative flex h-10 w-10 items-center justify-center rounded-xl text-white transition focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0f1014] hover:shadow-[0_0_0_1px_rgba(255,255,255,0.35)] active:shadow-[0_0_0_1px_rgba(255,255,255,0.35)]"
+            className="group relative flex h-10 w-10 items-center justify-center rounded-xl text-white transition focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-primary-strong hover:shadow-[0_0_0_1px_rgba(255,255,255,0.35)] active:shadow-[0_0_0_1px_rgba(255,255,255,0.35)]"
             aria-label={collapseToggleLabel}
             aria-expanded={!collapsed}
             onMouseEnter={(event) => showToggleFloatingLabel(event.currentTarget)}
@@ -1959,7 +1959,7 @@ const SidebarContent = ({
         ? "justify-between"
         : "justify-start";
     return (
-        <div className="flex h-full flex-col bg-[#0f1014] text-white">
+        <div className="flex h-full flex-col bg-primary-strong text-white">
             {toggleFloatingLabel
                 ? createPortal(
                       <span
@@ -1981,7 +1981,7 @@ const SidebarContent = ({
                             <button
                                 type="button"
                                 onClick={onToggleCollapse}
-                                className="group relative flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-[#10a37f] via-[#0f5d4a] to-[#0b3d2d] text-sm font-semibold text-white transition focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0f1014]"
+                                className="group relative flex h-12 w-12 items-center justify-center rounded-xl bg-accent-gradient text-sm font-semibold text-white transition focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-primary-strong"
                                 aria-label={collapseToggleLabel}
                                 aria-expanded={!collapsed}
                                 onMouseEnter={(event) => showToggleFloatingLabel(event.currentTarget)}
@@ -2086,14 +2086,14 @@ const SidebarContent = ({
                                 <div className="mt-2 space-y-1">
                                     <button
                                         type="button"
-                                        className="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-white transition hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-[#151821]"
+                                        className="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-white transition hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-primary-soft"
                                         onClick={() => setAccountMenuOpen(false)}
                                     >
                                         Rozszerz plan
                                     </button>
                                     <button
                                         type="button"
-                                        className="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-white transition hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-200/80 focus-visible:ring-offset-2 focus-visible:ring-offset-[#151821] disabled:cursor-not-allowed disabled:opacity-60"
+                                        className="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-white transition hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-200/80 focus-visible:ring-offset-2 focus-visible:ring-offset-primary-soft disabled:cursor-not-allowed disabled:opacity-60"
                                         onClick={() => {
                                             setAccountMenuOpen(false);
                                             handleLogout();
@@ -5273,7 +5273,7 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                 />
             )}
             <div
-                className={`fixed inset-y-0 left-0 z-50 w-80 transform border-r border-white/10 bg-[#0f1014] text-white shadow-[0_20px_50px_rgba(0,0,0,0.45)] transition-transform duration-300 ease-in-out lg:hidden ${
+                className={`fixed inset-y-0 left-0 z-50 w-80 transform border-r border-white/10 bg-primary-strong text-white shadow-brand-elevated transition-transform duration-300 ease-in-out lg:hidden ${
                     sidebarMobileOpen ? "translate-x-0" : "-translate-x-full"
                 }`}
                 role="dialog"
@@ -5305,7 +5305,7 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                 </div>
             </div>
             <aside
-                className={`hidden lg:flex ${sidebarCollapsed ? "lg:w-20" : "lg:w-[280px]"} flex-col border-r border-white/10 bg-[#0f1014] text-white lg:sticky lg:top-0 lg:h-screen lg:flex-shrink-0`}
+                className={`hidden lg:flex ${sidebarCollapsed ? "lg:w-20" : "lg:w-[280px]"} flex-col border-r border-white/10 bg-primary-strong text-white lg:sticky lg:top-0 lg:h-screen lg:flex-shrink-0`}
             >
                 <SidebarContent
                     collapsed={sidebarCollapsed}
