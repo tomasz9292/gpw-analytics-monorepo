@@ -22,10 +22,22 @@ class SimpleHttpResponse:
         self._body = body
 
     def json(self) -> Dict[str, Any]:
-        try:
-            return json.loads(self._body.decode("utf-8"))
-        except json.JSONDecodeError as exc:  # pragma: no cover - defensive
-            raise RuntimeError("Niepoprawna odpowiedź JSON") from exc
+        """Zwraca sparsowaną odpowiedź JSON z zabezpieczeniami na typowe błędy."""
+
+        decoded = self._body.decode("utf-8-sig", errors="replace")
+        stripped = decoded.strip()
+        if not stripped:
+            raise RuntimeError("Pusta odpowiedź serwera (oczekiwano JSON)")
+
+        for strict in (True, False):
+            try:
+                return json.loads(stripped, strict=strict)
+            except json.JSONDecodeError:
+                continue
+
+        snippet = " ".join(stripped.split())[:200]
+        detail = f" (fragment: {snippet})" if snippet else ""
+        raise RuntimeError(f"Niepoprawna odpowiedź JSON{detail}")
 
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
