@@ -228,6 +228,7 @@ const getDefaultScoreRules = (): ScoreBuilderRule[] => {
 
 const GOOGLE_CLIENT_ID =
     process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? process.env.GOOGLE_CLIENT_ID ?? "";
+const GOOGLE_REDIRECT_PATH = "/api/auth/google/redirect";
 
 type GoogleCredentialResponse = {
     credential?: string;
@@ -240,6 +241,20 @@ type GoogleIdConfiguration = {
     auto_select?: boolean;
     cancel_on_tap_outside?: boolean;
     login_uri?: string;
+};
+
+const shouldUseGoogleRedirect = (): boolean => {
+    if (typeof window === "undefined") {
+        return false;
+    }
+    const userAgent = `${window.navigator?.userAgent ?? ""} ${
+        (window.navigator as Navigator & { vendor?: string }).vendor ?? ""
+    }`;
+    const isMobileDevice = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
+        userAgent
+    );
+    const isSmallViewport = window.innerWidth <= 768;
+    return isMobileDevice || isSmallViewport;
 };
 const DEFAULT_WATCHLIST = ["CDR.WA", "PKN.WA", "PKOBP"];
 
@@ -3667,6 +3682,7 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
     const [profileHydrated, setProfileHydrated] = useState(false);
     const [googleLoaded, setGoogleLoaded] = useState(false);
     const googleInitializedRef = useRef(false);
+    const googleInitModeRef = useRef<"popup" | "redirect" | null>(null);
     const lastSavedPreferencesRef = useRef<string | null>(null);
     const [authDialogOpen, setAuthDialogOpen] = useState(false);
     const [authDialogMode, setAuthDialogMode] = useState<"login" | "signup">("login");
@@ -4074,27 +4090,43 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
     );
 
     const initializeGoogle = useCallback(() => {
-        if (googleInitializedRef.current) {
-            return Boolean(window.google?.accounts?.id);
-        }
         if (!googleLoaded || !GOOGLE_CLIENT_ID) {
+            return false;
+        }
+        if (typeof window === "undefined") {
             return false;
         }
         const googleApi = window.google?.accounts?.id;
         if (!googleApi) {
             return false;
         }
+        const shouldRedirect = shouldUseGoogleRedirect();
+        const desiredMode: "popup" | "redirect" = shouldRedirect ? "redirect" : "popup";
+        if (googleInitializedRef.current && googleInitModeRef.current === desiredMode) {
+            return true;
+        }
+        if (googleInitModeRef.current && googleInitModeRef.current !== desiredMode) {
+            googleApi.disableAutoSelect?.();
+        }
+        const loginUri = shouldRedirect
+            ? `${window.location.origin}${GOOGLE_REDIRECT_PATH}`
+            : undefined;
         const config: GoogleIdConfiguration = {
             client_id: GOOGLE_CLIENT_ID,
             callback: (response) => {
                 void handleGoogleCredential(response?.credential);
             },
-            ux_mode: "popup",
+            ux_mode: desiredMode,
             auto_select: false,
-            cancel_on_tap_outside: true,
         };
+        if (!shouldRedirect) {
+            config.cancel_on_tap_outside = true;
+        } else if (loginUri) {
+            config.login_uri = loginUri;
+        }
         googleApi.initialize(config);
         googleInitializedRef.current = true;
+        googleInitModeRef.current = desiredMode;
         return true;
     }, [googleLoaded, handleGoogleCredential]);
 
