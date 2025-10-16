@@ -108,6 +108,23 @@ def test_simple_http_response_json_detects_empty_body():
     assert "Pusta odpowiedź serwera" in str(exc.value)
 
 
+def test_simple_http_response_json_extracts_xml_error_message():
+    xml_body = (
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        "<response>\n"
+        "  <status>HandlerMappingException</status>\n"
+        "  <details>Brak dopasowania akcji</details>\n"
+        "</response>"
+    )
+    response = SimpleHttpResponse(200, xml_body.encode("utf-8"))
+    with pytest.raises(RuntimeError) as exc:
+        response.json()
+    message = str(exc.value)
+    assert "Niepoprawna odpowiedź JSON" in message
+    assert "HandlerMappingException" in message
+    assert "fragment" not in message
+
+
 def reset_sync_globals() -> None:
     main._SYNC_STATE = main.CompanySyncJobStatus()
     main._SYNC_THREAD = None
