@@ -5,7 +5,7 @@ from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Sequence
 from urllib.error import URLError
 from urllib.parse import urlencode, urlparse
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 from pydantic import BaseModel, Field
 
 GPW_COMPANY_PROFILES_URL = "https://www.gpw.pl/ajaxindex.php"
@@ -32,6 +32,26 @@ class SimpleHttpResponse:
 
 
 class SimpleHttpSession:
+    """Minimalna sesja HTTP ze wsparciem nagłówków wymaganych przez GPW."""
+
+    DEFAULT_HEADERS: Dict[str, str] = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0 Safari/537.36"
+        ),
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "Accept-Language": "pl-PL,pl;q=0.9,en-US;q=0.7,en;q=0.6",
+        "X-Requested-With": "XMLHttpRequest",
+        "Referer": "https://www.gpw.pl/",
+        "Connection": "keep-alive",
+    }
+
+    def __init__(self, headers: Optional[Dict[str, str]] = None) -> None:
+        self.headers = dict(self.DEFAULT_HEADERS)
+        if headers:
+            self.headers.update(headers)
+
     def get(
         self,
         url: str,
@@ -42,7 +62,8 @@ class SimpleHttpSession:
             query = urlencode(params, doseq=True)
             separator = "&" if "?" in url else "?"
             url = f"{url}{separator}{query}"
-        with urlopen(url, timeout=timeout) as response:  # type: ignore[arg-type]
+        request = Request(url, headers=self.headers)
+        with urlopen(request, timeout=timeout) as response:  # type: ignore[arg-type]
             status = getattr(response, "status", 200)
             body = response.read()
         return SimpleHttpResponse(status_code=status, body=body)
