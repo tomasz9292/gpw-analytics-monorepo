@@ -312,6 +312,40 @@ def test_fetch_gpw_profiles_uses_stooq_when_rest_fallback_fails():
     assert session.calls[2]["url"].startswith("https://stooq.example")
 
 
+def test_fetch_yahoo_summary_normalizes_gpw_suffix():
+    session = FakeSession(
+        [
+            FakeResponse(
+                {
+                    "quoteSummary": {"result": [{"price": {"shortName": "CDR"}}]}
+                }
+            )
+        ]
+    )
+    harvester = CompanyDataHarvester(
+        session=session,
+        yahoo_url_template="https://example/{symbol}",
+    )
+
+    result = harvester.fetch_yahoo_summary("cdr.wa")
+
+    assert result == {"price": {"shortName": "CDR"}}
+    assert session.calls[0]["url"] == "https://example/CDR.WA"
+
+
+def test_extract_symbol_rejects_non_gpw_symbols():
+    harvester = CompanyDataHarvester(session=FakeSession([]))
+
+    with pytest.raises(RuntimeError, match="Symbol spoza GPW"):
+        harvester._extract_symbol({"stockTicker": "CB.F"})
+
+
+def test_extract_symbol_trims_wa_suffix():
+    harvester = CompanyDataHarvester(session=FakeSession([]))
+
+    assert harvester._extract_symbol({"stockTicker": " ale.wa "}) == "ALE"
+
+
 YAHOO_CDR = {
     "quoteSummary": {
         "result": [
