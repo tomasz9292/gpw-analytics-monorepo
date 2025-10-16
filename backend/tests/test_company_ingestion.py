@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import sys
@@ -12,7 +13,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from api import main
-from api.company_ingestion import CompanyDataHarvester, CompanySyncResult
+from api.company_ingestion import (
+    CompanyDataHarvester,
+    CompanySyncResult,
+    HttpRequestLog,
+)
 
 
 class FakeResponse:
@@ -32,12 +37,26 @@ class FakeSession:
     def __init__(self, responses: List[FakeResponse]) -> None:
         self._responses = list(responses)
         self.calls: List[Dict[str, Any]] = []
+        self._history: List[HttpRequestLog] = []
 
     def get(self, url: str, params: Optional[Dict[str, Any]] = None, timeout: Optional[int] = None):
         self.calls.append({"url": url, "params": params, "timeout": timeout})
+        entry = HttpRequestLog(url=url, params=params or {})
+        self._history.append(entry)
         if not self._responses:
-            raise AssertionError("Brak przygotowanych odpowiedzi testowych")
-        return self._responses.pop(0)
+            entry.error = "Brak przygotowanych odpowiedzi testowych"
+            entry.finished_at = datetime.utcnow()
+            raise AssertionError(entry.error)
+        response = self._responses.pop(0)
+        entry.status_code = response.status_code
+        entry.finished_at = datetime.utcnow()
+        return response
+
+    def clear_history(self) -> None:
+        self._history.clear()
+
+    def get_history(self) -> List[HttpRequestLog]:
+        return list(self._history)
 
 
 class FakeClickHouseClient:
@@ -196,7 +215,14 @@ def test_harvester_sync_inserts_expected_rows():
         columns=columns,
     )
 
-    assert result == CompanySyncResult(fetched=2, synced=2, failed=0, errors=[])
+    assert result.fetched == 2
+    assert result.synced == 2
+    assert result.failed == 0
+    assert result.errors == []
+    assert result.started_at <= result.finished_at
+    assert len(result.request_log) == 3
+    assert all(entry.finished_at is not None for entry in result.request_log)
+    assert result.request_log[0].url.startswith("https://www.gpw.pl")
     assert len(fake_client.insert_calls) == 1
     insert_call = fake_client.insert_calls[0]
     assert insert_call["table"] == "companies"
@@ -221,7 +247,16 @@ def test_harvester_sync_inserts_expected_rows():
 
 
 def test_companies_sync_endpoint(monkeypatch):
-    fake_stats = CompanySyncResult(fetched=5, synced=3, failed=1, errors=["PKN: timeout"])
+    now = datetime.utcnow()
+    fake_stats = CompanySyncResult(
+        fetched=5,
+        synced=3,
+        failed=1,
+        errors=["PKN: timeout"],
+        started_at=now,
+        finished_at=now,
+        request_log=[],
+    )
     harvester_instances: List[Any] = []
 
     class StubHarvester:
