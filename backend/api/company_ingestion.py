@@ -11,6 +11,7 @@ from urllib.request import Request, urlopen
 from pydantic import BaseModel, Field
 
 GPW_COMPANY_PROFILES_URL = "https://www.gpw.pl/ajaxindex.php"
+GPW_COMPANY_PROFILES_FALLBACK_URL = "https://www.gpw.pl/restapi/GPWCompanyProfiles"
 YAHOO_QUOTE_SUMMARY_URL = "https://query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol}"
 YAHOO_MODULES = (
     "price,assetProfile,summaryDetail,defaultKeyStatistics,financialData"
@@ -316,6 +317,34 @@ class CompanySyncResult(BaseModel):
     )
 
 
+def _extract_company_rows(payload: Any) -> List[Dict[str, Any]]:
+    """Wydobywa listę słowników z różnych wariantów odpowiedzi GPW."""
+
+    if isinstance(payload, list):
+        return [row for row in payload if isinstance(row, dict)]
+
+    if isinstance(payload, dict):
+        candidate_keys = (
+            "data",
+            "content",
+            "items",
+            "results",
+            "records",
+            "rows",
+            "companies",
+        )
+        for key in candidate_keys:
+            rows = payload.get(key)
+            if isinstance(rows, list):
+                return [row for row in rows if isinstance(row, dict)]
+
+        # Niektóre odpowiedzi mogą być mapą symbol -> dane
+        if all(isinstance(value, dict) for value in payload.values()):
+            return [value for value in payload.values() if isinstance(value, dict)]
+
+    return []
+
+
 class CompanyDataHarvester:
     """Pobiera dane o spółkach z darmowych źródeł i zapisuje do ClickHouse."""
 
@@ -323,10 +352,13 @@ class CompanyDataHarvester:
         self,
         session: Optional[Any] = None,
         gpw_url: str = GPW_COMPANY_PROFILES_URL,
+        *,
+        gpw_fallback_url: Optional[str] = GPW_COMPANY_PROFILES_FALLBACK_URL,
         yahoo_url_template: str = YAHOO_QUOTE_SUMMARY_URL,
     ) -> None:
         self.session = session or SimpleHttpSession()
         self.gpw_url = gpw_url
+        self.gpw_fallback_url = gpw_fallback_url
         self.yahoo_url_template = yahoo_url_template
 
     # ---------------------------
@@ -353,6 +385,21 @@ class CompanyDataHarvester:
         limit: Optional[int] = None,
         page_size: int = 200,
     ) -> List[Dict[str, Any]]:
+        try:
+            return self._fetch_gpw_profiles_legacy(limit=limit, page_size=page_size)
+        except RuntimeError as exc:
+            if not self._should_try_gpw_fallback(exc):
+                raise
+            if not self.gpw_fallback_url:
+                raise
+            return self._fetch_gpw_profiles_fallback(limit=limit, page_size=page_size)
+
+    def _fetch_gpw_profiles_legacy(
+        self,
+        *,
+        limit: Optional[int],
+        page_size: int,
+    ) -> List[Dict[str, Any]]:
         start = 0
         collected: List[Dict[str, Any]] = []
         while True:
@@ -362,7 +409,7 @@ class CompanyDataHarvester:
                 "limit": page_size,
             }
             payload = self._get(self.gpw_url, params=params)
-            rows = payload.get("data") or []
+            rows = _extract_company_rows(payload)
             collected.extend(rows)
             if limit is not None and len(collected) >= limit:
                 return collected[:limit]
@@ -370,6 +417,39 @@ class CompanyDataHarvester:
                 break
             start += len(rows)
         return collected
+
+    def _fetch_gpw_profiles_fallback(
+        self,
+        *,
+        limit: Optional[int],
+        page_size: int,
+    ) -> List[Dict[str, Any]]:
+        if not self.gpw_fallback_url:
+            raise RuntimeError("Brak alternatywnego adresu GPW do pobrania danych")
+
+        page = 0
+        collected: List[Dict[str, Any]] = []
+        while True:
+            params = {"page": page, "size": page_size}
+            payload = self._get(self.gpw_fallback_url, params=params)
+            rows = _extract_company_rows(payload)
+            if not rows:
+                break
+            collected.extend(rows)
+            if limit is not None and len(collected) >= limit:
+                return collected[:limit]
+            if len(rows) < page_size:
+                break
+            page += 1
+        return collected
+
+    def _should_try_gpw_fallback(self, exc: Exception) -> bool:
+        message = str(exc)
+        indicators = (
+            "HandlerMappingException",
+            "Brak dopasowania akcji",
+        )
+        return any(indicator in message for indicator in indicators)
 
     def fetch_yahoo_summary(self, raw_symbol: str) -> Dict[str, Any]:
         symbol = raw_symbol if "." in raw_symbol else f"{raw_symbol}.WA"
