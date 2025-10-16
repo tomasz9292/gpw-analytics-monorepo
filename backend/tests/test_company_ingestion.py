@@ -122,6 +122,7 @@ def test_simple_http_response_json_extracts_xml_error_message():
     message = str(exc.value)
     assert "Niepoprawna odpowiedź JSON" in message
     assert "HandlerMappingException" in message
+    assert "Brak dopasowania akcji" in message
     assert "fragment" not in message
 
 

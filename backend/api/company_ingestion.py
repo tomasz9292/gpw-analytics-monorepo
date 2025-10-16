@@ -133,13 +133,34 @@ def _extract_xml_error_detail(document: str) -> Optional[str]:
     if root.tag.lower() == "html":
         return None
 
-    preferred_tags = ("status", "message", "error", "title", "description")
-    for tag in preferred_tags:
-        element = root.find(f".//{tag}")
-        if element is not None and element.text:
-            text = " ".join(element.text.split())
-            if text:
-                return f"{tag}: {text}" if tag != "status" else text
+    def _collect_texts(tag: str) -> List[str]:
+        values: List[str] = []
+        for element in root.findall(f".//{tag}"):
+            text = " ".join(" ".join(element.itertext()).split())
+            if text and text not in values:
+                values.append(text)
+        return values
+
+    def _truncate(value: str) -> str:
+        return value if len(value) <= 200 else f"{value[:197]}..."
+
+    status_texts = _collect_texts("status")
+    status_text = status_texts[0] if status_texts else None
+
+    detail_tags = ("message", "error", "title", "description", "details", "detail", "reason")
+    detail_values: List[str] = []
+    for tag in detail_tags:
+        for value in _collect_texts(tag):
+            if value not in detail_values and value != status_text:
+                detail_values.append(value)
+
+    if status_text and detail_values:
+        combined = f"{status_text} – {'; '.join(detail_values)}"
+        return _truncate(combined)
+    if status_text:
+        return _truncate(status_text)
+    if detail_values:
+        return _truncate("; ".join(detail_values))
 
     collected = [" ".join(text.split()) for text in root.itertext()]
     summary = " ".join(filter(None, collected))[:200]
