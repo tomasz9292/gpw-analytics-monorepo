@@ -3,6 +3,15 @@ import { getOrCreateUserProfile } from "@/lib/user-storage";
 
 const GOOGLE_TOKENINFO_URL = "https://oauth2.googleapis.com/tokeninfo";
 
+const getConfiguredClientIds = (): string[] => {
+    const raw =
+        process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID || "";
+    return raw
+        .split(/[,\s]+/)
+        .map((value) => value.trim())
+        .filter(Boolean);
+};
+
 type GoogleProfile = {
     sub: string;
     email: string | null;
@@ -17,9 +26,13 @@ export const verifyGoogleCredential = async (credential: string): Promise<Google
         throw new Error("Nie udało się zweryfikować tokenu Google");
     }
     const payload = (await response.json()) as Record<string, unknown>;
-    const aud = typeof payload.aud === "string" ? payload.aud : "";
-    const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID || "";
-    if (!clientId || aud !== clientId) {
+    const aud = typeof payload.aud === "string" ? payload.aud.trim() : "";
+    const azp = typeof payload.azp === "string" ? payload.azp.trim() : "";
+    const allowedClientIds = getConfiguredClientIds();
+    if (
+        !allowedClientIds.length ||
+        (!allowedClientIds.includes(aud) && !allowedClientIds.includes(azp))
+    ) {
         throw new Error("Nieprawidłowy identyfikator klienta Google");
     }
     const sub = typeof payload.sub === "string" ? payload.sub : "";
