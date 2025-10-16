@@ -5,6 +5,7 @@ import io
 import json
 import os
 import statistics
+import textwrap
 from datetime import date, datetime, timedelta, timezone
 from math import sqrt
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -28,6 +29,57 @@ from .company_ingestion import CompanyDataHarvester, CompanySyncProgress, Compan
 
 TABLE_OHLC = os.getenv("TABLE_OHLC", "ohlc")
 TABLE_COMPANIES = os.getenv("TABLE_COMPANIES", "companies")
+
+DEFAULT_COMPANIES_TABLE_DDL = textwrap.dedent(
+    f"""
+    CREATE TABLE IF NOT EXISTS {TABLE_COMPANIES} (
+        symbol String,
+        ticker String,
+        code String,
+        isin Nullable(String),
+        name Nullable(String),
+        company_name Nullable(String),
+        full_name Nullable(String),
+        short_name Nullable(String),
+        sector Nullable(String),
+        industry Nullable(String),
+        country Nullable(String),
+        headquarters Nullable(String),
+        city Nullable(String),
+        website Nullable(String),
+        url Nullable(String),
+        description Nullable(String),
+        profile Nullable(String),
+        logo Nullable(String),
+        logo_url Nullable(String),
+        image_url Nullable(String),
+        employees Nullable(Int32),
+        employee_count Nullable(Int32),
+        founded Nullable(Int32),
+        founded_year Nullable(Int32),
+        established Nullable(Int32),
+        listing_date Nullable(String),
+        ipo_date Nullable(String),
+        market_cap Nullable(Float64),
+        revenue_ttm Nullable(Float64),
+        net_income_ttm Nullable(Float64),
+        ebitda_ttm Nullable(Float64),
+        eps Nullable(Float64),
+        pe_ratio Nullable(Float64),
+        pb_ratio Nullable(Float64),
+        dividend_yield Nullable(Float64),
+        debt_to_equity Nullable(Float64),
+        roe Nullable(Float64),
+        roa Nullable(Float64),
+        gross_margin Nullable(Float64),
+        operating_margin Nullable(Float64),
+        profit_margin Nullable(Float64),
+        raw_payload String
+    )
+    ENGINE = MergeTree()
+    ORDER BY symbol
+    """
+)
 
 ALLOWED_SCORE_METRICS = {"total_return", "volatility", "max_drawdown", "sharpe"}
 
@@ -491,6 +543,22 @@ _COMPANY_COLUMNS_CACHE: Optional[List[str]] = None
 _COMPANY_COLUMNS_LOCK = threading.Lock()
 
 
+def _is_unknown_table_error(exc: Exception) -> bool:
+    code = getattr(exc, "code", None)
+    if isinstance(code, int) and code == 60:
+        return True
+    message = str(exc)
+    return "UNKNOWN_TABLE" in message or "does not exist" in message
+
+
+def _create_companies_table_if_missing(ch_client) -> None:
+    ch_client.command(DEFAULT_COMPANIES_TABLE_DDL)
+
+
+def _describe_companies_table(ch_client):
+    return ch_client.query(f"DESCRIBE TABLE {TABLE_COMPANIES}").result_rows
+
+
 def _coerce_float(value: Any) -> Optional[float]:
     if value is None:
         return None
@@ -585,9 +653,29 @@ def _get_company_columns(ch_client) -> List[str]:
             return _COMPANY_COLUMNS_CACHE
 
         try:
-            rows = ch_client.query(f"DESCRIBE TABLE {TABLE_COMPANIES}").result_rows
+            rows = _describe_companies_table(ch_client)
         except Exception as exc:  # pragma: no cover - zależy od konfiguracji DB
-            raise HTTPException(500, f"Nie udało się pobrać schematu tabeli {TABLE_COMPANIES}: {exc}") from exc
+            if not _is_unknown_table_error(exc):
+                raise HTTPException(
+                    500,
+                    f"Nie udało się pobrać schematu tabeli {TABLE_COMPANIES}: {exc}",
+                ) from exc
+
+            try:
+                _create_companies_table_if_missing(ch_client)
+            except Exception as create_exc:  # pragma: no cover - środowisko DB
+                raise HTTPException(
+                    500,
+                    f"Nie udało się utworzyć tabeli {TABLE_COMPANIES}: {create_exc}",
+                ) from create_exc
+
+            try:
+                rows = _describe_companies_table(ch_client)
+            except Exception as describe_exc:  # pragma: no cover - środowisko DB
+                raise HTTPException(
+                    500,
+                    f"Nie udało się pobrać schematu tabeli {TABLE_COMPANIES} po utworzeniu: {describe_exc}",
+                ) from describe_exc
 
         columns = [str(row[0]) for row in rows]
         if not columns:

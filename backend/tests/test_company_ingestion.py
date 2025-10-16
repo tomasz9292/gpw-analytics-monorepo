@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from types import SimpleNamespace
 import sys
 import time
 
@@ -69,6 +70,15 @@ class FakeClickHouseClient:
 
     def insert(self, *, table: str, data: List[List[Any]], column_names: List[str]) -> None:
         self.insert_calls.append({"table": table, "data": data, "columns": column_names})
+
+
+class FakeUnknownTableError(Exception):
+    code = 60
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Code: 60. DB::Exception: Table default.companies does not exist. (UNKNOWN_TABLE)"
+        )
 
 
 def reset_sync_globals() -> None:
@@ -411,6 +421,36 @@ def test_companies_sync_background_endpoint(monkeypatch):
 
     main._SYNC_STATE = main.CompanySyncJobStatus()
     main._SYNC_THREAD = None
+
+
+def test_get_company_columns_creates_table_when_missing(monkeypatch):
+    class FakeClient:
+        def __init__(self) -> None:
+            self._describe_calls = 0
+            self.command_calls: List[str] = []
+
+        def query(self, sql: str):
+            self._describe_calls += 1
+            if self._describe_calls == 1:
+                raise FakeUnknownTableError()
+            assert sql.startswith("DESCRIBE TABLE")
+            return SimpleNamespace(result_rows=[("symbol",), ("name",)])
+
+        def command(self, sql: str) -> None:
+            self.command_calls.append(sql)
+
+    client = FakeClient()
+    previous_cache = main._COMPANY_COLUMNS_CACHE
+    main._COMPANY_COLUMNS_CACHE = None
+    try:
+        columns = main._get_company_columns(client)
+    finally:
+        main._COMPANY_COLUMNS_CACHE = previous_cache
+
+    assert columns == ["symbol", "name"]
+    assert client._describe_calls == 2
+    assert client.command_calls
+    assert "CREATE TABLE IF NOT EXISTS" in client.command_calls[0]
 
 
 def test_get_company_profile_endpoint(monkeypatch):
