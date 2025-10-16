@@ -333,6 +333,23 @@ def test_fetch_yahoo_summary_normalizes_gpw_suffix():
     assert session.calls[0]["url"] == "https://example/CDR.WA"
 
 
+def test_fetch_google_overview_parses_metrics():
+    session = FakeSession([FakeResponse(text=GOOGLE_CDR_HTML)])
+    harvester = CompanyDataHarvester(
+        session=session,
+        google_url_template="https://example/{symbol}",
+    )
+
+    result = harvester.fetch_google_overview("cdr.wa")
+
+    assert result["symbol"] == "CDR:WSE"
+    assert session.calls[0]["url"] == "https://example/CDR:WSE"
+    assert session.calls[0]["params"] == {"hl": "pl"}
+    assert pytest.approx(result["metrics"]["last_price"], rel=1e-6) == 102.5
+    assert result["metrics"]["currency"] == "PLN"
+    assert result["structured_data"], "Oczekiwano danych ustrukturyzowanych"
+
+
 def test_extract_symbol_rejects_non_gpw_symbols():
     harvester = CompanyDataHarvester(session=FakeSession([]))
 
@@ -415,13 +432,74 @@ YAHOO_PKN = {
     }
 }
 
+GOOGLE_CDR_HTML = """
+<html>
+  <head>
+    <script type="application/json" id="__NEXT_DATA__">
+    {
+      "quote": {
+        "lastPrice": {"raw": 102.5},
+        "priceChange": {"raw": -1.2},
+        "priceChangePercent": {"raw": -1.1},
+        "previousClose": {"raw": 103.7},
+        "open": {"raw": 104.0},
+        "dayLow": {"raw": 101.5},
+        "dayHigh": {"raw": 104.5},
+        "fiftyTwoWeekLow": {"raw": 90.0},
+        "fiftyTwoWeekHigh": {"raw": 150.0},
+        "marketCap": {"raw": 43000000000},
+        "peRatio": {"raw": 21.5},
+        "dividendYield": {"raw": 0.018},
+        "eps": {"raw": 11.5},
+        "employees": {"raw": 1200},
+        "foundedYear": "2002",
+        "headquarters": "Warsaw, Poland",
+        "currencyCode": "PLN"
+      }
+    }
+    </script>
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "FinancialProduct",
+      "name": "CD PROJEKT",
+      "price": "102.5",
+      "priceCurrency": "PLN"
+    }
+    </script>
+  </head>
+</html>
+"""
+
+GOOGLE_PKN_HTML = """
+<html>
+  <head>
+    <script type="application/json">
+    {
+      "quote": {
+        "marketCap": "145,5 mld PLN",
+        "peRatio": "7.3",
+        "dividendYield": "6.2%",
+        "eps": "12.1",
+        "employees": "18000",
+        "foundedYear": "1999",
+        "headquarters": "Płock, Poland"
+      }
+    }
+    </script>
+  </head>
+</html>
+"""
+
 
 def test_harvester_sync_inserts_expected_rows():
     session = FakeSession(
         [
             FakeResponse(GPW_FIXTURE),
             FakeResponse(YAHOO_CDR),
+            FakeResponse(text=GOOGLE_CDR_HTML),
             FakeResponse(YAHOO_PKN),
+            FakeResponse(text=GOOGLE_PKN_HTML),
         ]
     )
     harvester = CompanyDataHarvester(session=session)
@@ -468,7 +546,7 @@ def test_harvester_sync_inserts_expected_rows():
     assert result.failed == 0
     assert result.errors == []
     assert result.started_at <= result.finished_at
-    assert len(result.request_log) == 3
+    assert len(result.request_log) == 5
     assert all(entry.finished_at is not None for entry in result.request_log)
     assert result.request_log[0].url.startswith("https://www.gpw.pl")
     assert len(fake_client.insert_calls) == 1
@@ -487,11 +565,15 @@ def test_harvester_sync_inserts_expected_rows():
     payload = json.loads(first["raw_payload"])
     assert payload["gpw"]["stockTicker"] == "CDR"
     assert payload["yahoo"]["assetProfile"]["industry"] == "Electronic Gaming & Multimedia"
+    assert payload["google"]["metrics"]["market_cap"] == 43000000000
 
     second = rows[1]
     assert second["symbol"] == "PKN"
     assert second["website"] == "https://www.orlen.pl"
     assert second["description"].startswith("PKN Orlen")
+    assert pytest.approx(second["dividend_yield"], rel=1e-6) == 0.062
+    second_payload = json.loads(second["raw_payload"])
+    assert pytest.approx(second_payload["google"]["metrics"]["dividend_yield"], rel=1e-6) == 0.062
 
 
 def test_harvester_sync_reports_progress_events():
@@ -499,7 +581,9 @@ def test_harvester_sync_reports_progress_events():
         [
             FakeResponse(GPW_FIXTURE),
             FakeResponse(YAHOO_CDR),
+            FakeResponse(text=GOOGLE_CDR_HTML),
             FakeResponse(YAHOO_PKN),
+            FakeResponse(text=GOOGLE_PKN_HTML),
         ]
     )
     harvester = CompanyDataHarvester(session=session)

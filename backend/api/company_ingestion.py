@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 from http.cookiejar import CookieJar
+from html import unescape as html_unescape
 from html.parser import HTMLParser
+import re
 from xml.etree import ElementTree
 from datetime import date, datetime
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
 from typing import Literal
 from urllib.error import URLError
 from urllib.parse import urlencode, urlparse
@@ -19,6 +21,8 @@ YAHOO_QUOTE_SUMMARY_URL = "https://query2.finance.yahoo.com/v10/finance/quoteSum
 YAHOO_MODULES = (
     "price,assetProfile,summaryDetail,defaultKeyStatistics,financialData"
 )
+
+GOOGLE_FINANCE_QUOTE_URL = "https://www.google.com/finance/quote/{symbol}"
 
 
 class SimpleHttpResponse:
@@ -573,6 +577,209 @@ def _extract_stooq_company_rows(document: str) -> List[Dict[str, Any]]:
     return []
 
 
+_JSON_SCRIPT_RE = re.compile(
+    r"<script[^>]+type=\"application/(?:json|ld\+json)\"[^>]*>(.*?)</script>",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _normalize_json_key(key: str) -> str:
+    return "".join(ch for ch in key.lower() if ch.isalnum())
+
+
+def _iter_key_values(payload: Any) -> Iterable[tuple[str, Any]]:
+    stack = [payload]
+    while stack:
+        current = stack.pop()
+        if isinstance(current, dict):
+            for key, value in current.items():
+                yield key, value
+                stack.append(value)
+        elif isinstance(current, list):
+            stack.extend(current)
+
+
+def _search_value(payloads: Iterable[Any], aliases: Iterable[str]) -> Any:
+    alias_set = {_normalize_json_key(alias) for alias in aliases}
+    for payload in payloads:
+        for key, value in _iter_key_values(payload):
+            if _normalize_json_key(str(key)) not in alias_set:
+                continue
+            if isinstance(value, dict):
+                for candidate_key in ("raw", "value", "amount", "text", "data"):
+                    candidate = value.get(candidate_key)
+                    if candidate is not None:
+                        return candidate
+            return value
+    return None
+
+
+_SCALED_NUMBER_RE = re.compile(
+    r"^(-?\d+(?:[\.,]\d+)?)(k|m|b|t|tys|mln|mld)?([a-z]{1,4})?$",
+    re.IGNORECASE,
+)
+
+
+def _parse_scaled_number(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return float(value)
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, dict):
+        for key in ("raw", "value", "amount"):
+            if key in value and value[key] is not None:
+                parsed = _parse_scaled_number(value[key])
+                if parsed is not None:
+                    return parsed
+        return None
+    if isinstance(value, str):
+        cleaned = value.strip().replace("\xa0", " ")
+        if not cleaned:
+            return None
+        percent = False
+        if cleaned.endswith("%"):
+            percent = True
+            cleaned = cleaned[:-1]
+        cleaned = cleaned.replace(" ", "")
+        cleaned = cleaned.replace(",", ".")
+        match = _SCALED_NUMBER_RE.match(cleaned)
+        if not match:
+            try:
+                return float(cleaned)
+            except ValueError:
+                return None
+        number = float(match.group(1))
+        suffix = (match.group(2) or "").lower()
+        multiplier = {
+            "": 1.0,
+            "k": 1e3,
+            "tys": 1e3,
+            "m": 1e6,
+            "mln": 1e6,
+            "b": 1e9,
+            "mld": 1e9,
+            "t": 1e12,
+        }.get(suffix, 1.0)
+        result = number * multiplier
+        if percent:
+            result /= 100
+        return result
+    return None
+
+
+def _extract_google_json_payloads(document: str) -> List[Any]:
+    payloads: List[Any] = []
+    for match in _JSON_SCRIPT_RE.finditer(document):
+        raw = html_unescape(match.group(1)).strip()
+        if raw.startswith("<!--") and raw.endswith("-->"):
+            raw = raw[4:-3].strip()
+        if raw.startswith(")]}'"):
+            raw = raw[4:]
+        if not raw:
+            continue
+        for candidate in (raw, raw.replace("\u2028", ""), raw.replace("\u2029", "")):
+            try:
+                payloads.append(json.loads(candidate))
+                break
+            except json.JSONDecodeError:
+                continue
+    return payloads
+
+
+def _flatten_payloads(payloads: Iterable[Any]) -> List[Any]:
+    flattened: List[Any] = []
+    for payload in payloads:
+        flattened.append(payload)
+        if isinstance(payload, list):
+            flattened.extend(_flatten_payloads(payload))
+        elif isinstance(payload, dict):
+            flattened.extend(_flatten_payloads(payload.values()))
+    return flattened
+
+
+def _parse_google_finance_document(document: str) -> Dict[str, Any]:
+    payloads = _extract_google_json_payloads(document)
+    if not payloads:
+        raise RuntimeError(
+            "Nie udało się odnaleźć danych JSON w odpowiedzi Google Finance"
+        )
+
+    flattened = _flatten_payloads(payloads)
+    metrics: Dict[str, Any] = {}
+
+    def _set_metric(name: str, aliases: Iterable[str], *, parser: Callable[[Any], Any]) -> None:
+        value = _search_value(flattened, aliases)
+        if value is None:
+            return
+        parsed = parser(value)
+        if parsed is None:
+            return
+        metrics[name] = parsed
+
+    _set_metric("last_price", ["lastPrice", "regularMarketLastPrice", "price"], parser=_parse_scaled_number)
+    _set_metric("price_change", ["priceChange", "change", "regularMarketChange"], parser=_parse_scaled_number)
+    _set_metric(
+        "price_change_percent",
+        ["priceChangePercent", "changePercent", "regularMarketChangePercent"],
+        parser=_parse_scaled_number,
+    )
+    _set_metric("previous_close", ["previousClose", "prevClose"], parser=_parse_scaled_number)
+    _set_metric("open", ["open", "openingPrice"], parser=_parse_scaled_number)
+    _set_metric("day_low", ["dayLow", "low", "lowPrice"], parser=_parse_scaled_number)
+    _set_metric("day_high", ["dayHigh", "high", "highPrice"], parser=_parse_scaled_number)
+    _set_metric(
+        "year_low",
+        ["fiftyTwoWeekLow", "52WeekLow", "yearLow"],
+        parser=_parse_scaled_number,
+    )
+    _set_metric(
+        "year_high",
+        ["fiftyTwoWeekHigh", "52WeekHigh", "yearHigh"],
+        parser=_parse_scaled_number,
+    )
+    _set_metric("market_cap", ["marketCap", "marketCapitalization"], parser=_parse_scaled_number)
+    _set_metric("pe_ratio", ["peRatio", "pe"], parser=_parse_scaled_number)
+    _set_metric("dividend_yield", ["dividendYield"], parser=_parse_scaled_number)
+    _set_metric("eps", ["eps", "earningsPerShare"], parser=_parse_scaled_number)
+    _set_metric("volume", ["volume", "regularMarketVolume"], parser=_parse_scaled_number)
+    _set_metric("average_volume", ["averageVolume", "avgVolume"], parser=_parse_scaled_number)
+    _set_metric("beta", ["beta"], parser=_parse_scaled_number)
+
+    def _string_parser(value: Any) -> Optional[str]:
+        return _clean_string(value)
+
+    _set_metric("currency", ["currency", "currencyCode", "priceCurrency"], parser=_string_parser)
+    _set_metric("exchange", ["exchange", "exchangeCode"], parser=_string_parser)
+    _set_metric("ceo", ["ceo"], parser=_string_parser)
+    _set_metric("headquarters", ["headquarters", "headquarterLocation"], parser=_string_parser)
+
+    def _int_parser(value: Any) -> Optional[int]:
+        parsed = _parse_scaled_number(value)
+        if parsed is None:
+            return None
+        return int(parsed)
+
+    _set_metric("employees", ["employees", "numberOfEmployees", "fullTimeEmployees"], parser=_int_parser)
+    _set_metric("founded_year", ["foundedYear", "founded", "foundedDate"], parser=_int_parser)
+
+    structured_data: List[Any] = []
+    for payload in payloads:
+        if isinstance(payload, dict) and payload.get("@context"):
+            structured_data.append(payload)
+        elif isinstance(payload, list):
+            for item in payload:
+                if isinstance(item, dict) and item.get("@context"):
+                    structured_data.append(item)
+
+    return {
+        "metrics": metrics,
+        "structured_data": structured_data,
+        "json_payloads": payloads,
+    }
+
+
 class CompanyDataHarvester:
     """Pobiera dane o spółkach z darmowych źródeł i zapisuje do ClickHouse."""
 
@@ -584,12 +791,14 @@ class CompanyDataHarvester:
         gpw_fallback_url: Optional[str] = GPW_COMPANY_PROFILES_FALLBACK_URL,
         gpw_stooq_url: Optional[str] = STOOQ_COMPANY_CATALOG_URL,
         yahoo_url_template: str = YAHOO_QUOTE_SUMMARY_URL,
+        google_url_template: str = GOOGLE_FINANCE_QUOTE_URL,
     ) -> None:
         self.session = session or SimpleHttpSession()
         self.gpw_url = gpw_url
         self.gpw_fallback_url = gpw_fallback_url
         self.gpw_stooq_url = gpw_stooq_url
         self.yahoo_url_template = yahoo_url_template
+        self.google_url_template = google_url_template
 
     # ---------------------------
     # HTTP helpers
@@ -735,6 +944,21 @@ class CompanyDataHarvester:
             raise RuntimeError(f"Brak danych fundamentalnych dla {symbol}")
         return result[0]
 
+    def fetch_google_overview(self, raw_symbol: str) -> Dict[str, Any]:
+        normalized = _normalize_gpw_symbol(raw_symbol)
+        symbol = f"{normalized}:WSE"
+        url = self.google_url_template.format(symbol=symbol)
+        document = self._get_text(url, params={"hl": "pl"})
+        parsed = _parse_google_finance_document(document)
+        parsed.update(
+            {
+                "url": url,
+                "symbol": symbol,
+                "retrieved_at": datetime.utcnow().isoformat(),
+            }
+        )
+        return parsed
+
     # ---------------------------
     # Normalizacja
     # ---------------------------
@@ -750,6 +974,7 @@ class CompanyDataHarvester:
         self,
         base: Dict[str, Any],
         fundamentals: Optional[Dict[str, Any]],
+        google: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         raw_symbol = self._extract_symbol(base)
         asset_profile = fundamentals.get("assetProfile") if fundamentals else None
@@ -890,7 +1115,40 @@ class CompanyDataHarvester:
             }
         )
 
-        payload = {"gpw": base, "yahoo": fundamentals}
+        google_metrics = ((google or {}).get("metrics") or {}) if google else {}
+
+        def _metric_value(name: str) -> Any:
+            if not google_metrics:
+                return None
+            return google_metrics.get(name)
+
+        def _assign_from_google(field: str, metric_name: str) -> None:
+            if row.get(field) is not None:
+                return
+            value = _metric_value(metric_name)
+            if value is not None:
+                row[field] = value
+
+        _assign_from_google("market_cap", "market_cap")
+        _assign_from_google("pe_ratio", "pe_ratio")
+        _assign_from_google("dividend_yield", "dividend_yield")
+        _assign_from_google("eps", "eps")
+        _assign_from_google("employees", "employees")
+        _assign_from_google("employee_count", "employees")
+        _assign_from_google("headquarters", "headquarters")
+
+        founded_metric = _metric_value("founded_year")
+        if founded_metric is not None:
+            founded_int = _clean_int(founded_metric)
+            if founded_int:
+                if row.get("founded") is None:
+                    row["founded"] = founded_int
+                if row.get("founded_year") is None:
+                    row["founded_year"] = founded_int
+                if row.get("established") is None:
+                    row["established"] = founded_int
+
+        payload = {"gpw": base, "yahoo": fundamentals, "google": google}
         row["raw_payload"] = json.dumps(payload, ensure_ascii=False)
         return row
 
@@ -965,12 +1223,18 @@ class CompanyDataHarvester:
                 continue
 
             fundamentals: Dict[str, Any] = {}
+            google_data: Dict[str, Any] = {}
             try:
                 fundamentals = self.fetch_yahoo_summary(symbol)
             except Exception as exc:  # pragma: no cover - network/API specific
-                errors.append(f"{symbol}: {exc}")
+                errors.append(f"{symbol} [Yahoo]: {exc}")
                 failed_count = len(errors)
-            row = self.build_row(base, fundamentals)
+            try:
+                google_data = self.fetch_google_overview(symbol)
+            except Exception as exc:  # pragma: no cover - network/API specific
+                errors.append(f"{symbol} [Google]: {exc}")
+                failed_count = len(errors)
+            row = self.build_row(base, fundamentals, google_data)
             deduplicated[symbol] = row
             deduplicated_count = len(deduplicated)
             emit(
