@@ -18,6 +18,8 @@ from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
+from .company_ingestion import CompanyDataHarvester, CompanySyncResult
+
 # =========================
 # Konfiguracja / połączenie
 # =========================
@@ -834,6 +836,20 @@ class ScorePreviewResponse(BaseModel):
 # =========================
 # /companies – dane o spółkach
 # =========================
+
+
+@app.post("/companies/sync", response_model=CompanySyncResult)
+def sync_companies(limit: Optional[int] = Query(default=None, ge=1, le=5000)):
+    ch = get_ch()
+    columns = _get_company_columns(ch)
+    harvester = CompanyDataHarvester()
+    result = harvester.sync(
+        ch_client=ch,
+        table_name=TABLE_COMPANIES,
+        columns=columns,
+        limit=limit,
+    )
+    return result
 
 
 @app.get("/companies", response_model=List[CompanyProfile])
