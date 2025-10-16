@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from xml.etree import ElementTree
 from datetime import date, datetime
 from typing import Any, Callable, Dict, List, Optional, Sequence
 from typing import Literal
@@ -22,10 +23,26 @@ class SimpleHttpResponse:
         self._body = body
 
     def json(self) -> Dict[str, Any]:
-        try:
-            return json.loads(self._body.decode("utf-8"))
-        except json.JSONDecodeError as exc:  # pragma: no cover - defensive
-            raise RuntimeError("Niepoprawna odpowiedź JSON") from exc
+        """Zwraca sparsowaną odpowiedź JSON z zabezpieczeniami na typowe błędy."""
+
+        decoded = self._body.decode("utf-8-sig", errors="replace")
+        stripped = decoded.strip()
+        if not stripped:
+            raise RuntimeError("Pusta odpowiedź serwera (oczekiwano JSON)")
+
+        for strict in (True, False):
+            try:
+                return json.loads(stripped, strict=strict)
+            except json.JSONDecodeError:
+                continue
+
+        xml_detail = _extract_xml_error_detail(stripped)
+        if xml_detail:
+            detail = f" (serwer zwrócił komunikat: {xml_detail})"
+        else:
+            snippet = " ".join(stripped.split())[:200]
+            detail = f" (fragment: {snippet})" if snippet else ""
+        raise RuntimeError(f"Niepoprawna odpowiedź JSON{detail}")
 
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
@@ -102,6 +119,31 @@ def _clean_string(value: Any) -> Optional[str]:
         stripped = value.strip()
         return stripped or None
     return str(value)
+
+
+def _extract_xml_error_detail(document: str) -> Optional[str]:
+    cleaned = document.lstrip("\ufeff").strip()
+    if not cleaned.startswith("<"):
+        return None
+    try:
+        root = ElementTree.fromstring(cleaned)
+    except ElementTree.ParseError:
+        return None
+
+    if root.tag.lower() == "html":
+        return None
+
+    preferred_tags = ("status", "message", "error", "title", "description")
+    for tag in preferred_tags:
+        element = root.find(f".//{tag}")
+        if element is not None and element.text:
+            text = " ".join(element.text.split())
+            if text:
+                return f"{tag}: {text}" if tag != "status" else text
+
+    collected = [" ".join(text.split()) for text in root.itertext()]
+    summary = " ".join(filter(None, collected))[:200]
+    return summary or None
 
 
 def _clean_website(url: Optional[str]) -> Optional[str]:
