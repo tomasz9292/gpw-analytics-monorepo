@@ -22,6 +22,7 @@ from api.company_ingestion import (
     CompanySyncProgress,
     CompanySyncResult,
     HttpRequestLog,
+    SimpleHttpResponse,
 )
 
 
@@ -79,6 +80,32 @@ class FakeUnknownTableError(Exception):
         super().__init__(
             "Code: 60. DB::Exception: Table default.companies does not exist. (UNKNOWN_TABLE)"
         )
+
+
+def test_simple_http_response_json_handles_utf8_bom():
+    response = SimpleHttpResponse(200, "\ufeff{\"ok\": true}".encode("utf-8"))
+    assert response.json() == {"ok": True}
+
+
+def test_simple_http_response_json_allows_control_characters():
+    response = SimpleHttpResponse(200, b'{"message": "\x10"}')
+    assert response.json() == {"message": "\x10"}
+
+
+def test_simple_http_response_json_reports_snippet_on_error():
+    response = SimpleHttpResponse(200, b"<html>error</html>")
+    with pytest.raises(RuntimeError) as exc:
+        response.json()
+    message = str(exc.value)
+    assert "Niepoprawna odpowiedź JSON" in message
+    assert "fragment: <html>error</html>" in message
+
+
+def test_simple_http_response_json_detects_empty_body():
+    response = SimpleHttpResponse(200, b"   \n  ")
+    with pytest.raises(RuntimeError) as exc:
+        response.json()
+    assert "Pusta odpowiedź serwera" in str(exc.value)
 
 
 def reset_sync_globals() -> None:
