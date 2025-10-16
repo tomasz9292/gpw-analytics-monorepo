@@ -7,12 +7,13 @@ import os
 import statistics
 from datetime import date, datetime, timedelta
 from math import sqrt
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from urllib.parse import parse_qs, urlparse
 
 import clickhouse_connect
 import threading
+from decimal import Decimal
 from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
@@ -22,6 +23,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator, model_v
 # =========================
 
 TABLE_OHLC = os.getenv("TABLE_OHLC", "ohlc")
+TABLE_COMPANIES = os.getenv("TABLE_COMPANIES", "companies")
 
 ALLOWED_SCORE_METRICS = {"total_return", "volatility", "max_drawdown", "sharpe"}
 
@@ -291,6 +293,266 @@ def normalize_input_symbol(s: str) -> str:
 
 
 # =========================
+# Dane o spółkach (mapowania + cache)
+# =========================
+
+COMPANY_SYMBOL_CANDIDATES = [
+    "symbol",
+    "ticker",
+    "code",
+    "company_symbol",
+    "company_code",
+]
+
+COMPANY_NAME_CANDIDATES = [
+    "name",
+    "company_name",
+    "full_name",
+    "short_name",
+]
+
+CompanyFieldTarget = Tuple[str, str, str]
+
+
+COMPANY_COLUMN_MAP: Dict[str, CompanyFieldTarget] = {
+    # podstawowe informacje identyfikacyjne
+    "symbol": ("company", "raw_symbol", "text"),
+    "ticker": ("company", "raw_symbol", "text"),
+    "code": ("company", "raw_symbol", "text"),
+    "isin": ("company", "isin", "text"),
+    "name": ("company", "name", "text"),
+    "company_name": ("company", "name", "text"),
+    "full_name": ("company", "name", "text"),
+    "short_name": ("company", "short_name", "text"),
+    "sector": ("company", "sector", "text"),
+    "industry": ("company", "industry", "text"),
+    "branch": ("company", "industry", "text"),
+    "country": ("company", "country", "text"),
+    "region": ("company", "country", "text"),
+    "headquarters": ("company", "headquarters", "text"),
+    "city": ("company", "headquarters", "text"),
+    "website": ("company", "website", "text"),
+    "url": ("company", "website", "text"),
+    "description": ("company", "description", "text"),
+    "profile": ("company", "description", "text"),
+    "long_description": ("company", "description", "text"),
+    "about": ("company", "description", "text"),
+    "logo": ("company", "logo_url", "text"),
+    "logo_url": ("company", "logo_url", "text"),
+    "image_url": ("company", "logo_url", "text"),
+    "employees": ("company", "employees", "int"),
+    "employee_count": ("company", "employees", "int"),
+    "founded": ("company", "founded_year", "int"),
+    "founded_year": ("company", "founded_year", "int"),
+    "established": ("company", "founded_year", "int"),
+    "listing_date": ("company", "listing_date", "date"),
+    "ipo_date": ("company", "listing_date", "date"),
+    # fundamenty (liczby)
+    "market_cap": ("fundamentals", "market_cap", "float"),
+    "marketcapitalization": ("fundamentals", "market_cap", "float"),
+    "market_capitalization": ("fundamentals", "market_cap", "float"),
+    "revenue": ("fundamentals", "revenue_ttm", "float"),
+    "revenue_ttm": ("fundamentals", "revenue_ttm", "float"),
+    "total_revenue": ("fundamentals", "revenue_ttm", "float"),
+    "net_income": ("fundamentals", "net_income_ttm", "float"),
+    "net_income_ttm": ("fundamentals", "net_income_ttm", "float"),
+    "netincome": ("fundamentals", "net_income_ttm", "float"),
+    "ebitda": ("fundamentals", "ebitda_ttm", "float"),
+    "ebitda_ttm": ("fundamentals", "ebitda_ttm", "float"),
+    "eps": ("fundamentals", "eps", "float"),
+    "earnings_per_share": ("fundamentals", "eps", "float"),
+    "pe_ratio": ("fundamentals", "pe_ratio", "float"),
+    "price_earnings": ("fundamentals", "pe_ratio", "float"),
+    "pb_ratio": ("fundamentals", "pb_ratio", "float"),
+    "price_book": ("fundamentals", "pb_ratio", "float"),
+    "dividend_yield": ("fundamentals", "dividend_yield", "float"),
+    "dividend": ("fundamentals", "dividend_yield", "float"),
+    "debt_to_equity": ("fundamentals", "debt_to_equity", "float"),
+    "total_debt_to_equity": ("fundamentals", "debt_to_equity", "float"),
+    "roa": ("fundamentals", "roa", "float"),
+    "roe": ("fundamentals", "roe", "float"),
+    "gross_margin": ("fundamentals", "gross_margin", "float"),
+    "operating_margin": ("fundamentals", "operating_margin", "float"),
+    "profit_margin": ("fundamentals", "profit_margin", "float"),
+}
+
+_COMPANY_COLUMNS_CACHE: Optional[List[str]] = None
+_COMPANY_COLUMNS_LOCK = threading.Lock()
+
+
+def _coerce_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, str):
+        stripped = value.strip().replace(",", ".")
+        if not stripped:
+            return None
+        try:
+            return float(stripped)
+        except ValueError:
+            return None
+    return None
+
+
+def _coerce_int(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, Decimal):
+        return int(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        try:
+            return int(float(stripped))
+        except ValueError:
+            return None
+    return None
+
+
+def _coerce_date(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        try:
+            return date.fromisoformat(stripped).isoformat()
+        except ValueError:
+            return stripped
+    return None
+
+
+def _convert_clickhouse_value(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, bytes):
+        try:
+            return value.decode("utf-8")
+        except Exception:
+            return value.hex()
+    if isinstance(value, (list, tuple)):
+        return [_convert_clickhouse_value(v) for v in value]
+    return str(value)
+
+
+def _quote_identifier(identifier: str) -> str:
+    escaped = identifier.replace("`", "``")
+    return f"`{escaped}`"
+
+
+def _get_company_columns(ch_client) -> List[str]:
+    global _COMPANY_COLUMNS_CACHE
+    if _COMPANY_COLUMNS_CACHE is not None:
+        return _COMPANY_COLUMNS_CACHE
+
+    with _COMPANY_COLUMNS_LOCK:
+        if _COMPANY_COLUMNS_CACHE is not None:
+            return _COMPANY_COLUMNS_CACHE
+
+        try:
+            rows = ch_client.query(f"DESCRIBE TABLE {TABLE_COMPANIES}").result_rows
+        except Exception as exc:  # pragma: no cover - zależy od konfiguracji DB
+            raise HTTPException(500, f"Nie udało się pobrać schematu tabeli {TABLE_COMPANIES}: {exc}") from exc
+
+        columns = [str(row[0]) for row in rows]
+        if not columns:
+            raise HTTPException(500, f"Tabela {TABLE_COMPANIES} nie ma zdefiniowanych kolumn")
+
+        _COMPANY_COLUMNS_CACHE = columns
+        return _COMPANY_COLUMNS_CACHE
+
+
+def _normalize_company_row(row: Dict[str, Any], symbol_column: str) -> Optional[Dict[str, Any]]:
+    canonical: Dict[str, Any] = {
+        "raw_symbol": None,
+        "name": None,
+        "short_name": None,
+        "isin": None,
+        "sector": None,
+        "industry": None,
+        "country": None,
+        "headquarters": None,
+        "website": None,
+        "description": None,
+        "logo_url": None,
+        "employees": None,
+        "founded_year": None,
+        "listing_date": None,
+    }
+    fundamentals: Dict[str, Optional[float]] = {}
+    extra: Dict[str, Any] = {}
+
+    for column, raw_value in row.items():
+        key = column.lower()
+        converted_value = _convert_clickhouse_value(raw_value)
+        mapping = COMPANY_COLUMN_MAP.get(key)
+
+        if mapping is None:
+            extra[column] = converted_value
+            continue
+
+        target_section, field_name, field_type = mapping
+
+        if target_section == "company":
+            if field_type == "text":
+                if converted_value is None:
+                    continue
+                canonical[field_name] = str(converted_value)
+            elif field_type == "int":
+                coerced = _coerce_int(converted_value)
+                if coerced is not None:
+                    canonical[field_name] = coerced
+            elif field_type == "date":
+                coerced_date = _coerce_date(raw_value)
+                if coerced_date:
+                    canonical[field_name] = coerced_date
+            else:
+                canonical[field_name] = converted_value
+        else:
+            # fundamentals -> zawsze liczby
+            fundamentals[field_name] = _coerce_float(converted_value)
+
+    raw_symbol_value = canonical.get("raw_symbol")
+    if not raw_symbol_value:
+        fallback = row.get(symbol_column)
+        if fallback is None:
+            return None
+        raw_symbol_value = str(_convert_clickhouse_value(fallback))
+        canonical["raw_symbol"] = raw_symbol_value
+
+    canonical["symbol"] = pretty_symbol(str(raw_symbol_value))
+    canonical["fundamentals"] = fundamentals
+    canonical["extra"] = extra
+    canonical["raw"] = {col: _convert_clickhouse_value(val) for col, val in row.items()}
+
+    return canonical
+
+
+# =========================
 # MODELE
 # =========================
 
@@ -307,6 +569,44 @@ class DataCollectionItem(BaseModel):
     symbol: str
     raw: str
     quotes: List[QuoteRow] = Field(default_factory=list)
+
+
+class CompanyFundamentals(BaseModel):
+    market_cap: Optional[float] = None
+    revenue_ttm: Optional[float] = None
+    net_income_ttm: Optional[float] = None
+    ebitda_ttm: Optional[float] = None
+    eps: Optional[float] = None
+    pe_ratio: Optional[float] = None
+    pb_ratio: Optional[float] = None
+    dividend_yield: Optional[float] = None
+    debt_to_equity: Optional[float] = None
+    roa: Optional[float] = None
+    roe: Optional[float] = None
+    gross_margin: Optional[float] = None
+    operating_margin: Optional[float] = None
+    profit_margin: Optional[float] = None
+
+
+class CompanyProfile(BaseModel):
+    symbol: str
+    raw_symbol: str
+    name: Optional[str] = None
+    short_name: Optional[str] = None
+    isin: Optional[str] = None
+    sector: Optional[str] = None
+    industry: Optional[str] = None
+    country: Optional[str] = None
+    headquarters: Optional[str] = None
+    website: Optional[str] = None
+    description: Optional[str] = None
+    logo_url: Optional[str] = None
+    employees: Optional[int] = None
+    founded_year: Optional[int] = None
+    listing_date: Optional[str] = None
+    fundamentals: CompanyFundamentals = Field(default_factory=CompanyFundamentals)
+    extra: Dict[str, Any] = Field(default_factory=dict)
+    raw: Dict[str, Any] = Field(default_factory=dict)
 
 
 class PortfolioPoint(BaseModel):
@@ -529,6 +829,80 @@ class ScorePreviewResponse(BaseModel):
     universe_count: int
     rows: List[ScorePreviewRow]
     meta: Dict[str, object]
+
+
+# =========================
+# /companies – dane o spółkach
+# =========================
+
+
+@app.get("/companies", response_model=List[CompanyProfile])
+def list_companies(
+    q: Optional[str] = Query(
+        default=None, description="Fragment symbolu, nazwy, branży lub ISIN spółki."
+    ),
+    limit: int = Query(default=500, ge=1, le=5000),
+):
+    ch = get_ch()
+
+    columns = _get_company_columns(ch)
+    lowered_to_original = {col.lower(): col for col in columns}
+
+    symbol_column = None
+    for candidate in COMPANY_SYMBOL_CANDIDATES:
+        existing = lowered_to_original.get(candidate)
+        if existing:
+            symbol_column = existing
+            break
+
+    if not symbol_column:
+        raise HTTPException(
+            500,
+            f"Tabela {TABLE_COMPANIES} musi zawierać kolumnę z symbolem (np. symbol lub ticker)",
+        )
+
+    searchable_columns = [symbol_column]
+    for candidate in COMPANY_NAME_CANDIDATES + ["isin", "sector", "industry"]:
+        existing = lowered_to_original.get(candidate)
+        if existing and existing not in searchable_columns:
+            searchable_columns.append(existing)
+
+    where_clause = ""
+    params: Dict[str, Any] = {"limit": limit}
+    if q:
+        params["q"] = q
+        conditions = [
+            f"positionCaseInsensitive({_quote_identifier(col)}, %(q)s) > 0"
+            for col in searchable_columns
+        ]
+        where_clause = " WHERE " + " OR ".join(conditions)
+
+    order_expr = _quote_identifier(symbol_column)
+    sql = (
+        f"SELECT * FROM {TABLE_COMPANIES}{where_clause} "
+        f"ORDER BY {order_expr} LIMIT %(limit)s"
+    )
+
+    try:
+        result = ch.query(sql, parameters=params)
+    except Exception as exc:  # pragma: no cover - zależy od konfiguracji DB
+        raise HTTPException(500, f"Nie udało się pobrać danych spółek: {exc}") from exc
+
+    column_names = list(result.column_names)
+    output: List[CompanyProfile] = []
+
+    for row in result.result_rows:
+        raw_row = {col: value for col, value in zip(column_names, row)}
+        normalized = _normalize_company_row(raw_row, symbol_column)
+        if not normalized:
+            continue
+
+        fundamentals_payload = normalized.pop("fundamentals", {})
+        fundamentals_model = CompanyFundamentals(**fundamentals_payload)
+        profile = CompanyProfile(fundamentals=fundamentals_model, **normalized)
+        output.append(profile)
+
+    return output
 
 
 # =========================
