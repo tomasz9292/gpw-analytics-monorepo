@@ -241,37 +241,6 @@ type GoogleIdConfiguration = {
     cancel_on_tap_outside?: boolean;
     login_uri?: string;
 };
-
-const isLikelyMobileDevice = () => {
-    if (typeof window === "undefined") {
-        return false;
-    }
-    const userAgent = window.navigator?.userAgent ?? "";
-    if (/Android|webOS|iPhone|iPad|iPod|BlackBerry|Windows Phone/i.test(userAgent)) {
-        return true;
-    }
-    if (typeof window.matchMedia === "function") {
-        try {
-            if (window.matchMedia("(pointer: coarse)").matches) {
-                return true;
-            }
-        } catch {
-            // Ignoruj błędy wykrywania matchMedia
-        }
-    }
-    return false;
-};
-
-const getGoogleRedirectUri = () => {
-    if (typeof window === "undefined") {
-        return null;
-    }
-    try {
-        return `${window.location.origin}/api/auth/google/redirect`;
-    } catch {
-        return null;
-    }
-};
 const DEFAULT_WATCHLIST = ["CDR.WA", "PKN.WA", "PKOBP"];
 
 type ScoreDraftState = {
@@ -4115,22 +4084,15 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
         if (!googleApi) {
             return false;
         }
-        const uxMode: "popup" | "redirect" = isLikelyMobileDevice() ? "redirect" : "popup";
         const config: GoogleIdConfiguration = {
             client_id: GOOGLE_CLIENT_ID,
             callback: (response) => {
                 void handleGoogleCredential(response?.credential);
             },
-            ux_mode: uxMode,
+            ux_mode: "popup",
             auto_select: false,
             cancel_on_tap_outside: true,
         };
-        if (uxMode === "redirect") {
-            const redirectUri = getGoogleRedirectUri();
-            if (redirectUri) {
-                config.login_uri = redirectUri;
-            }
-        }
         googleApi.initialize(config);
         googleInitializedRef.current = true;
         return true;
