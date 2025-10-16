@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
 import threading
+import time
+from datetime import datetime, timedelta
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
+from socketserver import TCPServer
 from typing import Any, Dict, List, Optional
 from types import SimpleNamespace
 import sys
-import time
 
 import pytest
 from fastapi import HTTPException
@@ -22,6 +24,7 @@ from api.company_ingestion import (
     CompanySyncProgress,
     CompanySyncResult,
     HttpRequestLog,
+    SimpleHttpSession,
     SimpleHttpResponse,
 )
 
@@ -134,6 +137,40 @@ def test_simple_http_response_json_extracts_xml_error_message():
     assert "HandlerMappingException" in message
     assert "Brak dopasowania akcji" in message
     assert "fragment" not in message
+
+
+def test_simple_http_session_handles_cookie_redirect():
+    class RedirectHandler(BaseHTTPRequestHandler):
+        def do_GET(self):  # type: ignore[override]
+            if "session=ok" not in (self.headers.get("Cookie") or ""):
+                self.send_response(302)
+                self.send_header("Location", self.path)
+                self.send_header("Set-Cookie", "session=ok")
+                self.end_headers()
+                return
+
+            body = b"{\"ok\": true}"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args, **kwargs):  # type: ignore[override]
+            return
+
+    with TCPServer(("127.0.0.1", 0), RedirectHandler) as server:
+        port = server.server_address[1]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            session = SimpleHttpSession()
+            response = session.get(f"http://127.0.0.1:{port}/test")
+            assert response.status_code == 200
+            assert response.json() == {"ok": True}
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
 
 
 def reset_sync_globals() -> None:

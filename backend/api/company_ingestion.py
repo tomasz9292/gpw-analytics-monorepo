@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
+from http.cookiejar import CookieJar
 from xml.etree import ElementTree
 from datetime import date, datetime
 from typing import Any, Callable, Dict, List, Optional, Sequence
 from typing import Literal
 from urllib.error import URLError
 from urllib.parse import urlencode, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPCookieProcessor, Request, build_opener
 from pydantic import BaseModel, Field
 
 GPW_COMPANY_PROFILES_URL = "https://www.gpw.pl/ajaxindex.php"
@@ -75,11 +76,18 @@ class SimpleHttpSession:
         "Connection": "keep-alive",
     }
 
-    def __init__(self, headers: Optional[Dict[str, str]] = None) -> None:
+    def __init__(
+        self,
+        headers: Optional[Dict[str, str]] = None,
+        *,
+        opener: Optional[Any] = None,
+    ) -> None:
         self.headers = dict(self.DEFAULT_HEADERS)
         if headers:
             self.headers.update(headers)
         self.history: List[HttpRequestLog] = []
+        self.cookie_jar = CookieJar()
+        self._opener = opener or build_opener(HTTPCookieProcessor(self.cookie_jar))
 
     def get(
         self,
@@ -95,7 +103,7 @@ class SimpleHttpSession:
         self.history.append(log_entry)
         try:
             request = Request(url, headers=self.headers)
-            with urlopen(request, timeout=timeout) as response:  # type: ignore[arg-type]
+            with self._opener.open(request, timeout=timeout) as response:  # type: ignore[arg-type]
                 status = getattr(response, "status", 200)
                 body = response.read()
             log_entry.status_code = status
