@@ -55,7 +55,7 @@ const writeAdminStore = async (store: Record<string, AdminEntry>) => {
             return;
         } catch (error: unknown) {
             const code = (error as NodeJS.ErrnoException)?.code;
-            if (code === "EROFS" || code === "EACCES") {
+            if (code === "EROFS" || code === "EACCES" || code === "ENOENT") {
                 lastError = error;
                 continue;
             }
