@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 
 GPW_COMPANY_PROFILES_URL = "https://www.gpw.pl/ajaxindex.php"
 GPW_COMPANY_PROFILES_FALLBACK_URL = "https://www.gpw.pl/restapi/GPWCompanyProfiles"
-STOOQ_COMPANY_CATALOG_URL = "https://stooq.pl/t/?i=512"
+STOOQ_COMPANY_CATALOG_URL = "https://stooq.pl/t/?i=513"
 YAHOO_QUOTE_SUMMARY_URL = "https://query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol}"
 YAHOO_MODULES = (
     "price,assetProfile,summaryDetail,defaultKeyStatistics,financialData"
