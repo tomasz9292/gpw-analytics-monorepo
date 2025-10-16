@@ -12,8 +12,17 @@ from api import main
 
 
 class FakeResult:
-    def __init__(self, rows):
+    def __init__(self, rows, columns=None):
         self.result_rows = rows
+        self._columns = columns or []
+
+    def named_results(self):
+        if not self._columns:
+            raise AssertionError("named_results requested without column metadata")
+        out = []
+        for row in self.result_rows:
+            out.append({name: value for name, value in zip(self._columns, row)})
+        return out
 
 
 class FakeClickHouse:
@@ -27,6 +36,30 @@ class FakeClickHouse:
         if "SELECT DISTINCT symbol" in normalized_sql:
             rows = [(sym,) for sym in sorted(self.data.keys())]
             return FakeResult(rows)
+
+        if "SELECT toString(date) as date, open, high, low, close, volume" in normalized_sql:
+            symbol = parameters.get("sym")
+            start = parameters.get("dt")
+            if isinstance(start, date):
+                start_str = start.isoformat()
+            else:
+                start_str = str(start)
+            rows = [
+                (
+                    ds,
+                    float(close),
+                    float(close),
+                    float(close),
+                    float(close),
+                    0.0,
+                )
+                for (ds, close) in self.data.get(symbol, [])
+                if ds >= start_str
+            ]
+            return FakeResult(
+                rows,
+                columns=["date", "open", "high", "low", "close", "volume"],
+            )
 
         if "WHERE symbol = %(sym)s AND date >= %(dt)s" in normalized_sql:
             symbol = parameters.get("sym")
@@ -200,6 +233,35 @@ def test_score_preview_returns_metrics(monkeypatch):
     row = response.rows[0]
     assert "total_return_4" in row.metrics
     assert "volatility_4" in row.metrics
+
+
+def test_collect_data_returns_filtered_quotes(monkeypatch):
+    data = {
+        "AAA": [
+            ("2023-01-01", 100.0),
+            ("2023-01-02", 105.0),
+            ("2023-01-03", 110.0),
+        ],
+        "BBB": [
+            ("2023-01-01", 200.0),
+            ("2023-01-02", 195.0),
+            ("2023-01-03", 190.0),
+            ("2023-01-04", 185.0),
+        ],
+    }
+
+    fake = FakeClickHouse(data)
+    monkeypatch.setattr(main, "get_ch", lambda: fake)
+
+    response = main.collect_data(
+        symbols=["AAA", "BBB"], start="2023-01-02", end="2023-01-03"
+    )
+
+    assert [item.raw for item in response] == ["AAA", "BBB"]
+    assert [q.date for q in response[0].quotes] == ["2023-01-02", "2023-01-03"]
+    assert [q.close for q in response[0].quotes] == [105.0, 110.0]
+    assert [q.date for q in response[1].quotes] == ["2023-01-02", "2023-01-03"]
+    assert [q.close for q in response[1].quotes] == [195.0, 190.0]
 
 
 def test_parse_backtest_get_accepts_comma_separated_values():

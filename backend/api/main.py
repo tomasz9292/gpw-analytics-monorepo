@@ -303,6 +303,12 @@ class QuoteRow(BaseModel):
     volume: float
 
 
+class DataCollectionItem(BaseModel):
+    symbol: str
+    raw: str
+    quotes: List[QuoteRow] = Field(default_factory=list)
+
+
 class PortfolioPoint(BaseModel):
     date: str
     value: float
@@ -612,6 +618,60 @@ def quotes(symbol: str, start: Optional[str] = None):
             )
         )
     return out
+
+
+@app.get("/data-collection", response_model=List[DataCollectionItem])
+def collect_data(
+    symbols: List[str] = Query(
+        ...,
+        description="Lista symboli, dla których mają zostać pobrane notowania",
+    ),
+    start: Optional[str] = Query(
+        default=None, description="Początek zakresu w formacie YYYY-MM-DD"
+    ),
+    end: Optional[str] = Query(
+        default=None, description="Koniec zakresu w formacie YYYY-MM-DD"
+    ),
+):
+    """Zwraca listę notowań dla wielu spółek jednocześnie."""
+
+    if not symbols:
+        raise HTTPException(400, "symbols must not be empty")
+
+    try:
+        start_dt = date.fromisoformat(start) if start else None
+    except ValueError as exc:
+        raise HTTPException(400, "start must be in format YYYY-MM-DD") from exc
+
+    try:
+        end_dt = date.fromisoformat(end) if end else None
+    except ValueError as exc:
+        raise HTTPException(400, "end must be in format YYYY-MM-DD") from exc
+
+    if start_dt and end_dt and end_dt < start_dt:
+        raise HTTPException(400, "end must not be earlier than start")
+
+    items: List[DataCollectionItem] = []
+    for raw_input in symbols:
+        raw_symbol = normalize_input_symbol(raw_input)
+        if not raw_symbol:
+            raise HTTPException(400, "symbol must not be empty")
+
+        rows = quotes(symbol=raw_input, start=start)
+        if end_dt:
+            rows = [
+                row for row in rows if date.fromisoformat(row.date) <= end_dt
+            ]
+
+        items.append(
+            DataCollectionItem(
+                symbol=pretty_symbol(raw_symbol),
+                raw=raw_symbol,
+                quotes=rows,
+            )
+        )
+
+    return items
 
 
 # =========================
