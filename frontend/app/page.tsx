@@ -48,6 +48,7 @@ declare global {
  *  API base (proxy w next.config.mjs)
  *  ========================= */
 const API = "/api";
+const ADMIN_API = "/api/admin";
 
 const removeUndefined = (obj: Record<string, unknown>) =>
     Object.fromEntries(
@@ -168,6 +169,7 @@ const SCORE_UNIVERSE_FALLBACK: string[] = [
 
 const SCORE_TEMPLATE_STORAGE_KEY = "gpw_score_templates_v1";
 const AUTH_USER_STORAGE_KEY = "gpw_auth_user_v1";
+const AUTH_ADMIN_STORAGE_KEY = "gpw_auth_admin_v1";
 
 const resolveUniverseWithFallback = (
     universe: ScorePreviewRequest["universe"],
@@ -312,6 +314,13 @@ type PersistedPreferences = {
 type PublicUserProfile = {
     user: AuthUser;
     preferences: PersistedPreferences;
+    isAdmin: boolean;
+};
+
+type AdminEntry = {
+    email: string;
+    createdAt: string;
+    addedBy: string | null;
 };
 
 const getDefaultScoreDraft = (): ScoreDraftState => ({
@@ -570,6 +579,160 @@ type PortfolioResp = {
     allocations?: PortfolioAllocation[];
     rebalances?: PortfolioRebalanceEvent[];
     benchmark?: PortfolioPoint[];
+};
+
+type CompanyFundamentalsResponse = Record<string, number | null>;
+
+type CompanyProfileResponse = {
+    symbol: string;
+    raw_symbol: string;
+    name?: string | null;
+    short_name?: string | null;
+    isin?: string | null;
+    sector?: string | null;
+    industry?: string | null;
+    country?: string | null;
+    headquarters?: string | null;
+    website?: string | null;
+    description?: string | null;
+    logo_url?: string | null;
+    employees?: number | null;
+    founded_year?: number | null;
+    listing_date?: string | null;
+    fundamentals: CompanyFundamentalsResponse;
+    extra: Record<string, unknown>;
+    raw: Record<string, unknown>;
+};
+
+type CompanySyncResultPayload = {
+    fetched: number;
+    synced: number;
+    failed: number;
+    errors: string[];
+    started_at: string;
+    finished_at: string;
+};
+
+type CompanySyncStatusPayload = {
+    job_id: string | null;
+    status: "idle" | "running" | "completed" | "failed";
+    stage: "idle" | "fetching" | "harvesting" | "inserting" | "finished" | "failed";
+    total: number | null;
+    processed: number;
+    synced: number;
+    failed: number;
+    started_at: string | null;
+    finished_at: string | null;
+    current_symbol: string | null;
+    message: string | null;
+    errors: string[];
+    result?: CompanySyncResultPayload | null;
+};
+
+type CompanySyncScheduleStatusPayload = {
+    mode: "idle" | "once" | "recurring";
+    next_run_at: string | null;
+    recurring_interval_minutes: number | null;
+    recurring_start_at: string | null;
+    last_run_started_at: string | null;
+    last_run_finished_at: string | null;
+    last_run_status: "idle" | "running" | "success" | "failed";
+};
+
+const COMPANY_STAGE_LABELS: Record<CompanySyncStatusPayload["stage"], string> = {
+    idle: "Oczekiwanie",
+    fetching: "Pobieranie listy spółek",
+    harvesting: "Pobieranie profili",
+    inserting: "Zapisywanie do bazy",
+    finished: "Zakończono",
+    failed: "Błąd",
+};
+
+const COMPANY_STATUS_LABELS: Record<CompanySyncStatusPayload["status"], string> = {
+    idle: "Brak aktywnej synchronizacji",
+    running: "Synchronizacja w toku",
+    completed: "Synchronizacja zakończona",
+    failed: "Synchronizacja zakończona błędem",
+};
+
+const SCHEDULE_MODE_LABELS: Record<CompanySyncScheduleStatusPayload["mode"], string> = {
+    idle: "Brak aktywnego harmonogramu",
+    once: "Jednorazowy",
+    recurring: "Cykliczny",
+};
+
+const SCHEDULE_STATUS_LABELS: Record<CompanySyncScheduleStatusPayload["last_run_status"], string> = {
+    idle: "Brak uruchomień",
+    running: "W trakcie",
+    success: "Zakończono pomyślnie",
+    failed: "Zakończono błędem",
+};
+
+const FUNDAMENTAL_LABELS: Record<string, string> = {
+    market_cap: "Kapitalizacja rynkowa",
+    revenue_ttm: "Przychody (TTM)",
+    net_income_ttm: "Zysk netto (TTM)",
+    ebitda_ttm: "EBITDA (TTM)",
+    eps: "Zysk na akcję (EPS)",
+    pe_ratio: "P/E",
+    pb_ratio: "P/BV",
+    dividend_yield: "Stopa dywidendy",
+    roe: "ROE",
+    roa: "ROA",
+    gross_margin: "Marża brutto",
+    operating_margin: "Marża operacyjna",
+    profit_margin: "Marża netto",
+};
+
+const FUNDAMENTAL_ORDER = [
+    "market_cap",
+    "revenue_ttm",
+    "net_income_ttm",
+    "ebitda_ttm",
+    "eps",
+    "pe_ratio",
+    "pb_ratio",
+    "dividend_yield",
+    "roe",
+    "roa",
+    "gross_margin",
+    "operating_margin",
+    "profit_margin",
+];
+
+const FUNDAMENTAL_PERCENT_KEYS = new Set<string>([
+    "dividend_yield",
+    "roe",
+    "roa",
+    "gross_margin",
+    "operating_margin",
+    "profit_margin",
+]);
+
+const FUNDAMENTAL_CURRENCY_KEYS = new Set<string>([
+    "market_cap",
+    "revenue_ttm",
+    "net_income_ttm",
+    "ebitda_ttm",
+]);
+
+const COMPANY_POLL_INTERVAL = 4000;
+const COMPANY_FETCH_LIMIT = 200;
+
+const parseApiError = async (response: Response): Promise<string> => {
+    const text = await response.text();
+    if (!text) {
+        return response.statusText || "Wystąpił nieznany błąd";
+    }
+    try {
+        const parsed = JSON.parse(text);
+        if (parsed && typeof parsed.detail === "string") {
+            return parsed.detail;
+        }
+    } catch {
+        // ignorujemy – odpowiedź nie musi być JSON-em
+    }
+    return text;
 };
 
 const portfolioPointsToRows = (points: PortfolioPoint[]): Row[] =>
@@ -1389,6 +1552,1184 @@ const Section = ({
         <div className="mt-8">{children}</div>
     </section>
 );
+
+const CompanySyncPanel = () => {
+    const [status, setStatus] = useState<CompanySyncStatusPayload | null>(null);
+    const [statusError, setStatusError] = useState<string | null>(null);
+    const [companies, setCompanies] = useState<CompanyProfileResponse[]>([]);
+    const [companiesError, setCompaniesError] = useState<string | null>(null);
+    const [companiesLoading, setCompaniesLoading] = useState(false);
+    const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null);
+    const [selectedCompany, setSelectedCompany] = useState<CompanyProfileResponse | null>(null);
+    const [detailsError, setDetailsError] = useState<string | null>(null);
+    const [detailsLoading, setDetailsLoading] = useState(false);
+    const [isStarting, setIsStarting] = useState(false);
+    const [search, setSearch] = useState("");
+    const [activeQuery, setActiveQuery] = useState<string | undefined>(undefined);
+    const [schedule, setSchedule] = useState<CompanySyncScheduleStatusPayload | null>(null);
+    const [scheduleError, setScheduleError] = useState<string | null>(null);
+    const [scheduleSuccess, setScheduleSuccess] = useState<string | null>(null);
+    const [isScheduling, setIsScheduling] = useState(false);
+    const [onceDateInput, setOnceDateInput] = useState("");
+    const [recurringIntervalInput, setRecurringIntervalInput] = useState("1440");
+    const [recurringStartInput, setRecurringStartInput] = useState("");
+    const [admins, setAdmins] = useState<AdminEntry[]>([]);
+    const [adminsError, setAdminsError] = useState<string | null>(null);
+    const [adminsSuccess, setAdminsSuccess] = useState<string | null>(null);
+    const [isAddingAdmin, setIsAddingAdmin] = useState(false);
+    const [newAdminEmail, setNewAdminEmail] = useState("");
+
+    const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const selectedSymbolRef = useRef<string | null>(null);
+
+    useEffect(() => {
+        selectedSymbolRef.current = selectedSymbol;
+    }, [selectedSymbol]);
+
+    const numberFormatter = useMemo(
+        () => new Intl.NumberFormat("pl-PL", { maximumFractionDigits: 2 }),
+        []
+    );
+    const integerFormatter = useMemo(
+        () => new Intl.NumberFormat("pl-PL", { maximumFractionDigits: 0 }),
+        []
+    );
+    const percentFormatter = useMemo(
+        () => new Intl.NumberFormat("pl-PL", { style: "percent", maximumFractionDigits: 2 }),
+        []
+    );
+
+    const formatDateTime = (value?: string | null) => {
+        if (!value) return "—";
+        const parsed = new Date(value);
+        if (Number.isNaN(parsed.getTime())) return value;
+        return parsed.toLocaleString("pl-PL", { hour12: false });
+    };
+
+    const formatDate = (value?: string | null) => {
+        if (!value) return "—";
+        const parsed = new Date(value);
+        if (Number.isNaN(parsed.getTime())) return value;
+        return parsed.toLocaleDateString("pl-PL");
+    };
+
+    const formatFundamentalValue = (key: string, value: number | null) => {
+        if (value === null || value === undefined || Number.isNaN(value)) {
+            return "—";
+        }
+        if (FUNDAMENTAL_PERCENT_KEYS.has(key)) {
+            return percentFormatter.format(value);
+        }
+        if (FUNDAMENTAL_CURRENCY_KEYS.has(key)) {
+            return integerFormatter.format(value);
+        }
+        return numberFormatter.format(value);
+    };
+
+    const toLocalDateTimeInputValue = useCallback((value: string | null | undefined) => {
+        if (!value) return "";
+        const parsed = new Date(value);
+        if (Number.isNaN(parsed.getTime())) return "";
+        const pad = (num: number) => num.toString().padStart(2, "0");
+        const date = `${parsed.getFullYear()}-${pad(parsed.getMonth() + 1)}-${pad(parsed.getDate())}`;
+        const time = `${pad(parsed.getHours())}:${pad(parsed.getMinutes())}`;
+        return `${date}T${time}`;
+    }, []);
+
+    const toIsoDateTime = useCallback((value: string, errorMessage: string) => {
+        const trimmed = value.trim();
+        if (!trimmed) {
+            throw new Error(errorMessage);
+        }
+        const parsed = new Date(trimmed);
+        if (Number.isNaN(parsed.getTime())) {
+            throw new Error(errorMessage);
+        }
+        return parsed.toISOString();
+    }, []);
+
+    const toOptionalIsoDateTime = useCallback(
+        (value: string, errorMessage: string) => {
+            const trimmed = value.trim();
+            if (!trimmed) {
+                return null;
+            }
+            const parsed = new Date(trimmed);
+            if (Number.isNaN(parsed.getTime())) {
+                throw new Error(errorMessage);
+            }
+            return parsed.toISOString();
+        },
+        []
+    );
+
+    const formatIntervalLabel = useCallback((minutes: number | null) => {
+        if (!minutes || !Number.isFinite(minutes)) {
+            return "—";
+        }
+        if (minutes % 1440 === 0) {
+            const days = Math.round(minutes / 1440);
+            return `co ${days} ${days === 1 ? "dzień" : days < 5 ? "dni" : "dni"}`;
+        }
+        if (minutes % 60 === 0) {
+            const hours = Math.round(minutes / 60);
+            return `co ${hours} ${hours === 1 ? "godzinę" : hours < 5 ? "godziny" : "godzin"}`;
+        }
+        return `co ${minutes} minut`;
+    }, []);
+
+    const stopPolling = useCallback(() => {
+        if (pollingRef.current) {
+            clearInterval(pollingRef.current);
+            pollingRef.current = null;
+        }
+    }, []);
+
+    const fetchStatus = useCallback(async () => {
+        try {
+            const response = await fetch(`${ADMIN_API}/companies/sync/status`, {
+                cache: "no-store",
+            });
+            if (!response.ok) {
+                throw new Error(await parseApiError(response));
+            }
+            const payload = (await response.json()) as CompanySyncStatusPayload;
+            setStatus(payload);
+            setStatusError(null);
+        } catch (error) {
+            if (error instanceof Error && error.message) {
+                setStatusError(error.message);
+            } else {
+                setStatusError("Nie udało się pobrać statusu synchronizacji");
+            }
+        }
+    }, []);
+
+    const fetchSchedule = useCallback(async () => {
+        setScheduleError(null);
+        try {
+            const response = await fetch(`${ADMIN_API}/companies/sync/schedule`, {
+                cache: "no-store",
+            });
+            if (!response.ok) {
+                throw new Error(await parseApiError(response));
+            }
+            const payload = (await response.json()) as CompanySyncScheduleStatusPayload;
+            setSchedule(payload);
+        } catch (error) {
+            if (error instanceof Error && error.message) {
+                setScheduleError(error.message);
+            } else {
+                setScheduleError("Nie udało się pobrać harmonogramu synchronizacji");
+            }
+        }
+    }, []);
+
+    const fetchAdmins = useCallback(async () => {
+        setAdminsError(null);
+        try {
+            const response = await fetch(`/api/admins`, { cache: "no-store" });
+            if (!response.ok) {
+                throw new Error(await parseApiError(response));
+            }
+            const payload = (await response.json()) as { admins: AdminEntry[] };
+            setAdmins(payload.admins);
+        } catch (error) {
+            if (error instanceof Error && error.message) {
+                setAdminsError(error.message);
+            } else {
+                setAdminsError("Nie udało się pobrać listy administratorów");
+            }
+        }
+    }, []);
+
+    const fetchCompanyDetails = useCallback(async (symbol: string) => {
+        const response = await fetch(`${API}/companies/${encodeURIComponent(symbol)}`, {
+            cache: "no-store",
+        });
+        if (!response.ok) {
+            throw new Error(await parseApiError(response));
+        }
+        return (await response.json()) as CompanyProfileResponse;
+    }, []);
+
+    const fetchCompanies = useCallback(async (query?: string) => {
+        setCompaniesLoading(true);
+        try {
+            const params = new URLSearchParams({ limit: String(COMPANY_FETCH_LIMIT) });
+            if (query && query.trim()) {
+                params.set("q", query.trim());
+            }
+            const response = await fetch(`${API}/companies?${params.toString()}`, {
+                cache: "no-store",
+            });
+            if (!response.ok) {
+                throw new Error(await parseApiError(response));
+            }
+            const data = (await response.json()) as CompanyProfileResponse[];
+            setCompanies(data);
+            setCompaniesError(null);
+            const current = selectedSymbolRef.current;
+            let nextSymbol: string | null = null;
+            if (
+                current &&
+                data.some((item) => item.symbol === current || item.raw_symbol === current)
+            ) {
+                nextSymbol = current;
+            } else if (data.length > 0) {
+                nextSymbol = data[0].symbol;
+            }
+            if (nextSymbol !== current) {
+                setSelectedSymbol(nextSymbol);
+            }
+            selectedSymbolRef.current = nextSymbol;
+            if (nextSymbol) {
+                const local = data.find(
+                    (item) => item.symbol === nextSymbol || item.raw_symbol === nextSymbol
+                );
+                if (local) {
+                    setSelectedCompany(local);
+                }
+            } else {
+                setSelectedCompany(null);
+            }
+        } catch (error) {
+            if (error instanceof Error && error.message) {
+                setCompaniesError(error.message);
+            } else {
+                setCompaniesError("Nie udało się pobrać listy spółek");
+            }
+        } finally {
+            setCompaniesLoading(false);
+        }
+    }, []);
+
+    const startSync = useCallback(async () => {
+        setIsStarting(true);
+        setStatusError(null);
+        try {
+            const response = await fetch(`${ADMIN_API}/companies/sync/background`, {
+                method: "POST",
+            });
+            if (!response.ok) {
+                throw new Error(await parseApiError(response));
+            }
+            const payload = (await response.json()) as CompanySyncStatusPayload;
+            setStatus(payload);
+        } catch (error) {
+            if (error instanceof Error && error.message) {
+                setStatusError(error.message);
+            } else {
+                setStatusError("Nie udało się uruchomić synchronizacji");
+            }
+        } finally {
+            setIsStarting(false);
+        }
+    }, []);
+
+    const handleSearchSubmit = useCallback(
+        (event: React.FormEvent<HTMLFormElement>) => {
+            event.preventDefault();
+            const normalized = search.trim();
+            const query = normalized.length ? normalized : undefined;
+            setActiveQuery(query);
+            fetchCompanies(query);
+        },
+        [search, fetchCompanies]
+    );
+
+    const handleResetSearch = useCallback(() => {
+        setSearch("");
+        setActiveQuery(undefined);
+        fetchCompanies();
+    }, [fetchCompanies]);
+
+    const handleScheduleOnce = useCallback(
+        async (event: React.FormEvent<HTMLFormElement>) => {
+            event.preventDefault();
+            setIsScheduling(true);
+            setScheduleError(null);
+            setScheduleSuccess(null);
+            try {
+                const iso = toIsoDateTime(
+                    onceDateInput,
+                    "Wybierz poprawną datę i godzinę synchronizacji."
+                );
+                const response = await fetch(`${ADMIN_API}/companies/sync/schedule`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ mode: "once", scheduled_for: iso }),
+                });
+                if (!response.ok) {
+                    throw new Error(await parseApiError(response));
+                }
+                const payload = (await response.json()) as CompanySyncScheduleStatusPayload;
+                setSchedule(payload);
+                setScheduleSuccess("Zaplanowano synchronizację jednorazową.");
+            } catch (error) {
+                setScheduleError(
+                    error instanceof Error
+                        ? error.message
+                        : "Nie udało się zaplanować synchronizacji."
+                );
+            } finally {
+                setIsScheduling(false);
+            }
+        },
+        [onceDateInput, toIsoDateTime]
+    );
+
+    const handleScheduleRecurring = useCallback(
+        async (event: React.FormEvent<HTMLFormElement>) => {
+            event.preventDefault();
+            setIsScheduling(true);
+            setScheduleError(null);
+            setScheduleSuccess(null);
+            try {
+                const interval = Number(recurringIntervalInput);
+                if (!Number.isFinite(interval) || interval <= 0) {
+                    throw new Error("Interwał musi być dodatnią liczbą minut.");
+                }
+                const startIso = toOptionalIsoDateTime(
+                    recurringStartInput,
+                    "Podaj poprawną datę rozpoczęcia harmonogramu."
+                );
+                const payload: Record<string, unknown> = {
+                    mode: "recurring",
+                    interval_minutes: Math.round(interval),
+                };
+                if (startIso) {
+                    payload.start_at = startIso;
+                }
+                const response = await fetch(`${ADMIN_API}/companies/sync/schedule`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload),
+                });
+                if (!response.ok) {
+                    throw new Error(await parseApiError(response));
+                }
+                const result = (await response.json()) as CompanySyncScheduleStatusPayload;
+                setSchedule(result);
+                setScheduleSuccess("Zaktualizowano harmonogram cykliczny.");
+            } catch (error) {
+                setScheduleError(
+                    error instanceof Error
+                        ? error.message
+                        : "Nie udało się zapisać harmonogramu."
+                );
+            } finally {
+                setIsScheduling(false);
+            }
+        },
+        [recurringIntervalInput, recurringStartInput, toOptionalIsoDateTime]
+    );
+
+    const handleCancelSchedule = useCallback(async () => {
+        setIsScheduling(true);
+        setScheduleError(null);
+        setScheduleSuccess(null);
+        try {
+            const response = await fetch(`${ADMIN_API}/companies/sync/schedule`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ mode: "cancel" }),
+            });
+            if (!response.ok) {
+                throw new Error(await parseApiError(response));
+            }
+            const payload = (await response.json()) as CompanySyncScheduleStatusPayload;
+            setSchedule(payload);
+            setScheduleSuccess("Usunięto harmonogram synchronizacji.");
+        } catch (error) {
+            setScheduleError(
+                error instanceof Error
+                    ? error.message
+                    : "Nie udało się usunąć harmonogramu."
+            );
+        } finally {
+            setIsScheduling(false);
+        }
+    }, []);
+
+    const handleAddAdmin = useCallback(
+        async (event: React.FormEvent<HTMLFormElement>) => {
+            event.preventDefault();
+            setIsAddingAdmin(true);
+            setAdminsError(null);
+            setAdminsSuccess(null);
+            try {
+                const trimmed = newAdminEmail.trim();
+                if (!trimmed) {
+                    throw new Error("Podaj adres e-mail administratora.");
+                }
+                const response = await fetch(`/api/admins`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ email: trimmed }),
+                });
+                if (!response.ok) {
+                    throw new Error(await parseApiError(response));
+                }
+                const payload = (await response.json()) as { admins: AdminEntry[] };
+                setAdmins(payload.admins);
+                setAdminsSuccess("Dodano administratora.");
+                setNewAdminEmail("");
+            } catch (error) {
+                setAdminsError(
+                    error instanceof Error
+                        ? error.message
+                        : "Nie udało się dodać administratora."
+                );
+            } finally {
+                setIsAddingAdmin(false);
+            }
+        },
+        [newAdminEmail]
+    );
+
+    const refreshSchedule = useCallback(() => {
+        setScheduleSuccess(null);
+        void fetchSchedule();
+    }, [fetchSchedule]);
+
+    const refreshAdmins = useCallback(() => {
+        setAdminsSuccess(null);
+        void fetchAdmins();
+    }, [fetchAdmins]);
+
+    const handleSelectCompany = useCallback(
+        (symbol: string) => {
+            setSelectedSymbol(symbol);
+            selectedSymbolRef.current = symbol;
+            const local = companies.find(
+                (item) => item.symbol === symbol || item.raw_symbol === symbol
+            );
+            if (local) {
+                setSelectedCompany(local);
+            }
+        },
+        [companies]
+    );
+
+    useEffect(() => {
+        fetchStatus();
+        fetchCompanies();
+        fetchSchedule();
+        fetchAdmins();
+        return () => stopPolling();
+    }, [fetchStatus, fetchCompanies, fetchSchedule, fetchAdmins, stopPolling]);
+
+    useEffect(() => {
+        if (status?.status === "running") {
+            if (!pollingRef.current) {
+                pollingRef.current = setInterval(() => {
+                    fetchStatus();
+                }, COMPANY_POLL_INTERVAL);
+            }
+        } else {
+            stopPolling();
+            if (status?.status === "completed") {
+                fetchCompanies(activeQuery);
+                fetchSchedule();
+            }
+        }
+    }, [
+        status?.status,
+        fetchStatus,
+        stopPolling,
+        fetchCompanies,
+        activeQuery,
+        fetchSchedule,
+    ]);
+
+    useEffect(() => () => stopPolling(), [stopPolling]);
+
+    useEffect(() => {
+        if (!schedule) {
+            setOnceDateInput("");
+            setRecurringStartInput("");
+            return;
+        }
+        if (schedule.mode === "once") {
+            setOnceDateInput(toLocalDateTimeInputValue(schedule.next_run_at));
+        }
+        if (schedule.mode === "recurring") {
+            if (schedule.recurring_interval_minutes) {
+                setRecurringIntervalInput(String(schedule.recurring_interval_minutes));
+            }
+            const nextInput = schedule.next_run_at || schedule.recurring_start_at;
+            setRecurringStartInput(toLocalDateTimeInputValue(nextInput));
+        }
+        if (schedule.mode === "idle") {
+            setOnceDateInput("");
+            setRecurringStartInput("");
+        }
+    }, [schedule, toLocalDateTimeInputValue]);
+
+    useEffect(() => {
+        if (!selectedSymbol) {
+            setSelectedCompany(null);
+            setDetailsLoading(false);
+            return;
+        }
+        let cancelled = false;
+        setDetailsLoading(true);
+        setDetailsError(null);
+        fetchCompanyDetails(selectedSymbol)
+            .then((data) => {
+                if (!cancelled) {
+                    setSelectedCompany(data);
+                }
+            })
+            .catch((error) => {
+                if (!cancelled) {
+                    setDetailsError(
+                        error instanceof Error && error.message
+                            ? error.message
+                            : "Nie udało się pobrać szczegółów spółki"
+                    );
+                }
+            })
+            .finally(() => {
+                if (!cancelled) {
+                    setDetailsLoading(false);
+                }
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [selectedSymbol, fetchCompanyDetails, status?.status]);
+
+    const fundamentalEntries = useMemo(() => {
+        if (!selectedCompany) return [] as [string, number | null][];
+        const entries = Object.entries(selectedCompany.fundamentals || {});
+        return entries
+            .filter(([key]) => Boolean(key))
+            .sort((a, b) => {
+                const idxA = FUNDAMENTAL_ORDER.indexOf(a[0]);
+                const idxB = FUNDAMENTAL_ORDER.indexOf(b[0]);
+                if (idxA === -1 && idxB === -1) {
+                    return a[0].localeCompare(b[0]);
+                }
+                if (idxA === -1) return 1;
+                if (idxB === -1) return -1;
+                return idxA - idxB;
+            });
+    }, [selectedCompany]);
+
+    const total = status?.total ?? status?.result?.fetched ?? 0;
+    const processed = status?.processed ?? status?.result?.fetched ?? 0;
+    const synced = status?.synced ?? status?.result?.synced ?? 0;
+    const failed = status?.failed ?? status?.result?.failed ?? 0;
+    const progressPercent = total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : status?.status === "completed" ? 100 : 0;
+    const statusLabel = status ? COMPANY_STATUS_LABELS[status.status] : "Brak danych";
+    const stageLabel = status ? COMPANY_STAGE_LABELS[status.stage] : "";
+    const visibleErrors = (status?.errors ?? []).filter((message) => Boolean(message));
+    const descriptionSnippet = selectedCompany?.description
+        ? selectedCompany.description.length > 600
+            ? `${selectedCompany.description.slice(0, 600)}…`
+            : selectedCompany.description
+        : null;
+    const marketCapValue = selectedCompany?.fundamentals?.market_cap ?? null;
+    const companyEmployees =
+        selectedCompany?.employees !== undefined && selectedCompany?.employees !== null
+            ? integerFormatter.format(selectedCompany.employees)
+            : "—";
+    const scheduleModeLabel = schedule
+        ? SCHEDULE_MODE_LABELS[schedule.mode]
+        : SCHEDULE_MODE_LABELS.idle;
+    const scheduleStatusLabel = schedule
+        ? SCHEDULE_STATUS_LABELS[schedule.last_run_status]
+        : SCHEDULE_STATUS_LABELS.idle;
+    const scheduleNextRunLabel = schedule?.next_run_at
+        ? formatDateTime(schedule.next_run_at)
+        : "—";
+    const scheduleLastStartLabel = schedule?.last_run_started_at
+        ? formatDateTime(schedule.last_run_started_at)
+        : "—";
+    const scheduleLastFinishLabel = schedule?.last_run_finished_at
+        ? formatDateTime(schedule.last_run_finished_at)
+        : "—";
+    const scheduleIntervalLabel = formatIntervalLabel(
+        schedule?.recurring_interval_minutes ?? null
+    );
+    const hasActiveSchedule = schedule?.mode === "once" || schedule?.mode === "recurring";
+
+    return (
+        <Section
+            id="companies-sync"
+            kicker="GPW"
+            title="Synchronizacja danych o spółkach"
+            description="Uruchom pobieranie profili spółek z GPW w tle, obserwuj postęp synchronizacji i przeglądaj szczegółowe dane fundamentalne."
+        >
+            <div className="grid gap-6 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1.9fr)]">
+                <div className="space-y-6">
+                    <Card
+                        title="Status synchronizacji"
+                        right={
+                            <>
+                                <button
+                                    type="button"
+                                    onClick={startSync}
+                                    disabled={isStarting || status?.status === "running"}
+                                    className="rounded-full bg-primary px-4 py-2 text-sm font-semibold text-white shadow hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    {isStarting ? "Uruchamianie..." : "Uruchom synchronizację"}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={fetchStatus}
+                                    className="rounded-full border border-soft px-4 py-2 text-sm font-semibold text-primary transition hover:border-primary/40 hover:text-primary"
+                                >
+                                    Odśwież status
+                                </button>
+                            </>
+                        }
+                    >
+                        <div className="space-y-4">
+                            <div className="space-y-1">
+                                <p className="text-sm text-muted">{statusLabel}</p>
+                                {stageLabel && (
+                                    <p className="text-xs text-subtle">
+                                        Etap: {stageLabel}
+                                        {status?.current_symbol ? ` • ${status.current_symbol}` : ""}
+                                    </p>
+                                )}
+                                {status?.message && (
+                                    <p className="text-xs text-subtle">{status.message}</p>
+                                )}
+                            </div>
+                            <div>
+                                <div className="mb-2 flex items-center justify-between text-xs text-subtle">
+                                    <span>Postęp</span>
+                                    <span>{progressPercent}%</span>
+                                </div>
+                                <div className="h-2 w-full overflow-hidden rounded-full bg-soft">
+                                    <div
+                                        className={`h-full transition-all duration-500 ${
+                                            status?.status === "failed" ? "bg-rose-500" : "bg-primary"
+                                        }`}
+                                        style={{ width: `${progressPercent}%` }}
+                                    />
+                                </div>
+                                <div className="mt-3 grid grid-cols-2 gap-3 text-xs text-subtle sm:grid-cols-4">
+                                    <div>
+                                        <span className="block text-[10px] uppercase tracking-wide text-subtle">
+                                            Przetworzono
+                                        </span>
+                                        <span className="text-sm font-semibold text-primary">
+                                            {integerFormatter.format(processed)}
+                                        </span>
+                                    </div>
+                                    <div>
+                                        <span className="block text-[10px] uppercase tracking-wide text-subtle">
+                                            Zapisano
+                                        </span>
+                                        <span className="text-sm font-semibold text-primary">
+                                            {integerFormatter.format(synced)}
+                                        </span>
+                                    </div>
+                                    <div>
+                                        <span className="block text-[10px] uppercase tracking-wide text-subtle">
+                                            Do pobrania
+                                        </span>
+                                        <span className="text-sm font-semibold text-primary">
+                                            {total > 0
+                                                ? integerFormatter.format(Math.max(total - processed, 0))
+                                                : "—"}
+                                        </span>
+                                    </div>
+                                    <div>
+                                        <span className="block text-[10px] uppercase tracking-wide text-subtle">
+                                            Błędy
+                                        </span>
+                                        <span className="text-sm font-semibold text-primary">
+                                            {integerFormatter.format(failed)}
+                                        </span>
+                                    </div>
+                                </div>
+                                <div className="mt-3 grid grid-cols-2 gap-3 text-xs text-subtle sm:grid-cols-4">
+                                    <div>
+                                        <span className="block text-[10px] uppercase tracking-wide text-subtle">
+                                            Start
+                                        </span>
+                                        <span className="text-sm font-semibold text-primary">
+                                            {formatDateTime(status?.started_at ?? status?.result?.started_at)}
+                                        </span>
+                                    </div>
+                                    <div>
+                                        <span className="block text-[10px] uppercase tracking-wide text-subtle">
+                                            Koniec
+                                        </span>
+                                        <span className="text-sm font-semibold text-primary">
+                                            {formatDateTime(status?.finished_at ?? status?.result?.finished_at)}
+                                        </span>
+                                    </div>
+                                    <div>
+                                        <span className="block text-[10px] uppercase tracking-wide text-subtle">
+                                            Pobrano
+                                        </span>
+                                        <span className="text-sm font-semibold text-primary">
+                                            {integerFormatter.format(status?.result?.fetched ?? total)}
+                                        </span>
+                                    </div>
+                                    <div>
+                                        <span className="block text-[10px] uppercase tracking-wide text-subtle">
+                                            Zapisano
+                                        </span>
+                                        <span className="text-sm font-semibold text-primary">
+                                            {integerFormatter.format(status?.result?.synced ?? synced)}
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                            {(statusError || visibleErrors.length > 0) && (
+                                <div className="space-y-2">
+                                    {statusError && (
+                                        <p className="text-xs text-amber-500">{statusError}</p>
+                                    )}
+                                    {visibleErrors.length > 0 && (
+                                        <ul className="space-y-1 rounded-xl border border-rose-200/60 bg-rose-50/70 px-3 py-2 text-xs text-rose-600">
+                                            {visibleErrors.map((errorMessage, index) => (
+                                                <li key={`${errorMessage}-${index}`}>• {errorMessage}</li>
+                                            ))}
+                                        </ul>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    </Card>
+                    <Card
+                        title="Harmonogram synchronizacji"
+                        right={
+                            <button
+                                type="button"
+                                onClick={refreshSchedule}
+                                className="rounded-full border border-soft px-4 py-2 text-sm font-semibold text-primary transition hover:border-primary/40 hover:text-primary"
+                            >
+                                Odśwież harmonogram
+                            </button>
+                        }
+                    >
+                        <div className="space-y-4">
+                            <div className="grid gap-3 text-xs text-subtle sm:grid-cols-2">
+                                <div>
+                                    <span className="block text-[10px] uppercase tracking-wide text-subtle">
+                                        Tryb harmonogramu
+                                    </span>
+                                    <span className="text-sm font-semibold text-primary">
+                                        {scheduleModeLabel}
+                                    </span>
+                                </div>
+                                <div>
+                                    <span className="block text-[10px] uppercase tracking-wide text-subtle">
+                                        Status ostatniego uruchomienia
+                                    </span>
+                                    <span className="text-sm font-semibold text-primary">
+                                        {scheduleStatusLabel}
+                                    </span>
+                                </div>
+                                <div>
+                                    <span className="block text-[10px] uppercase tracking-wide text-subtle">
+                                        Najbliższa synchronizacja
+                                    </span>
+                                    <span className="text-sm font-semibold text-primary">
+                                        {scheduleNextRunLabel}
+                                    </span>
+                                </div>
+                                <div>
+                                    <span className="block text-[10px] uppercase tracking-wide text-subtle">
+                                        Interwał
+                                    </span>
+                                    <span className="text-sm font-semibold text-primary">
+                                        {scheduleIntervalLabel}
+                                    </span>
+                                </div>
+                                <div>
+                                    <span className="block text-[10px] uppercase tracking-wide text-subtle">
+                                        Ostatnie rozpoczęcie
+                                    </span>
+                                    <span className="text-sm font-semibold text-primary">
+                                        {scheduleLastStartLabel}
+                                    </span>
+                                </div>
+                                <div>
+                                    <span className="block text-[10px] uppercase tracking-wide text-subtle">
+                                        Ostatnie zakończenie
+                                    </span>
+                                    <span className="text-sm font-semibold text-primary">
+                                        {scheduleLastFinishLabel}
+                                    </span>
+                                </div>
+                            </div>
+                            {scheduleSuccess && (
+                                <div className="rounded-xl border border-emerald-200/60 bg-emerald-50/70 px-3 py-2 text-xs text-emerald-700">
+                                    {scheduleSuccess}
+                                </div>
+                            )}
+                            {scheduleError && (
+                                <div className="rounded-xl border border-rose-200/60 bg-rose-50/70 px-3 py-2 text-xs text-rose-600">
+                                    {scheduleError}
+                                </div>
+                            )}
+                            <div className="grid gap-4 lg:grid-cols-2">
+                                <form onSubmit={handleScheduleOnce} className="space-y-3">
+                                    <div className="text-xs font-semibold uppercase tracking-wide text-subtle">
+                                        Jednorazowa synchronizacja
+                                    </div>
+                                    <input
+                                        type="datetime-local"
+                                        value={onceDateInput}
+                                        onChange={(event) => setOnceDateInput(event.target.value)}
+                                        className="w-full rounded-xl border border-soft bg-white/70 px-3 py-2 text-sm text-primary shadow-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/40"
+                                        required
+                                    />
+                                    <button
+                                        type="submit"
+                                        disabled={isScheduling}
+                                        className="w-full rounded-full bg-primary px-4 py-2 text-sm font-semibold text-white shadow hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                        Zaplanuj jednorazowo
+                                    </button>
+                                </form>
+                                <form onSubmit={handleScheduleRecurring} className="space-y-3">
+                                    <div className="text-xs font-semibold uppercase tracking-wide text-subtle">
+                                        Harmonogram cykliczny
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <input
+                                            type="number"
+                                            min={5}
+                                            value={recurringIntervalInput}
+                                            onChange={(event) => setRecurringIntervalInput(event.target.value)}
+                                            className="w-32 rounded-xl border border-soft bg-white/70 px-3 py-2 text-sm text-primary shadow-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/40"
+                                            required
+                                        />
+                                        <span className="text-xs text-subtle">minut</span>
+                                    </div>
+                                    <div className="space-y-1">
+                                        <label className="block text-[10px] uppercase tracking-wide text-subtle">
+                                            Start harmonogramu
+                                        </label>
+                                        <input
+                                            type="datetime-local"
+                                            value={recurringStartInput}
+                                            onChange={(event) => setRecurringStartInput(event.target.value)}
+                                            className="w-full rounded-xl border border-soft bg-white/70 px-3 py-2 text-sm text-primary shadow-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/40"
+                                            placeholder="Od razu"
+                                        />
+                                    </div>
+                                    <button
+                                        type="submit"
+                                        disabled={isScheduling}
+                                        className="w-full rounded-full bg-primary px-4 py-2 text-sm font-semibold text-white shadow hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                        Zapisz harmonogram
+                                    </button>
+                                </form>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                                <button
+                                    type="button"
+                                    onClick={handleCancelSchedule}
+                                    disabled={isScheduling || !hasActiveSchedule}
+                                    className="rounded-full border border-soft px-4 py-2 text-sm font-semibold text-muted transition hover:border-primary/40 hover:text-primary disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    Usuń harmonogram
+                                </button>
+                            </div>
+                        </div>
+                    </Card>
+                    <Card
+                        title="Administratorzy panelu"
+                        right={
+                            <button
+                                type="button"
+                                onClick={refreshAdmins}
+                                className="rounded-full border border-soft px-4 py-2 text-sm font-semibold text-primary transition hover:border-primary/40 hover:text-primary"
+                            >
+                                Odśwież listę
+                            </button>
+                        }
+                    >
+                        <div className="space-y-4">
+                            {adminsSuccess && (
+                                <div className="rounded-xl border border-emerald-200/60 bg-emerald-50/70 px-3 py-2 text-xs text-emerald-700">
+                                    {adminsSuccess}
+                                </div>
+                            )}
+                            {adminsError && (
+                                <div className="rounded-xl border border-rose-200/60 bg-rose-50/70 px-3 py-2 text-xs text-rose-600">
+                                    {adminsError}
+                                </div>
+                            )}
+                            <div className="space-y-2">
+                                {admins.length === 0 ? (
+                                    <p className="text-xs text-subtle">
+                                        Brak zdefiniowanych administratorów.
+                                    </p>
+                                ) : (
+                                    admins.map((admin) => (
+                                        <div
+                                            key={admin.email}
+                                            className="rounded-xl border border-soft bg-white/70 px-3 py-2 text-sm text-primary shadow-sm"
+                                        >
+                                            <div className="flex items-center justify-between gap-3">
+                                                <span className="font-semibold break-all">{admin.email}</span>
+                                                <span className="text-[11px] uppercase tracking-wide text-subtle">
+                                                    {formatDateTime(admin.createdAt)}
+                                                </span>
+                                            </div>
+                                            <p className="text-[11px] text-subtle">
+                                                Dodano przez {admin.addedBy ?? "system"}
+                                            </p>
+                                        </div>
+                                    ))
+                                )}
+                            </div>
+                            <form onSubmit={handleAddAdmin} className="space-y-3">
+                                <div className="text-xs font-semibold uppercase tracking-wide text-subtle">
+                                    Dodaj administratora
+                                </div>
+                                <input
+                                    type="email"
+                                    value={newAdminEmail}
+                                    onChange={(event) => setNewAdminEmail(event.target.value)}
+                                    placeholder="adres@example.com"
+                                    className="w-full rounded-xl border border-soft bg-white/70 px-3 py-2 text-sm text-primary shadow-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/40"
+                                    required
+                                />
+                                <button
+                                    type="submit"
+                                    disabled={isAddingAdmin}
+                                    className="w-full rounded-full bg-primary px-4 py-2 text-sm font-semibold text-white shadow hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    Dodaj administratora
+                                </button>
+                            </form>
+                        </div>
+                    </Card>
+                    <Card
+                        title="Lista spółek"
+                        right={
+                            <form
+                                onSubmit={handleSearchSubmit}
+                                className="flex w-full flex-col gap-2 sm:flex-row"
+                            >
+                                <input
+                                    type="text"
+                                    value={search}
+                                    onChange={(event) => setSearch(event.target.value)}
+                                    placeholder="Symbol, nazwa lub ISIN"
+                                    className="flex-1 rounded-full border border-soft bg-transparent px-3 py-2 text-sm text-primary placeholder:text-subtle focus:outline-none focus:ring-2 focus:ring-primary/40"
+                                />
+                                <div className="flex gap-2">
+                                    <button
+                                        type="submit"
+                                        className="rounded-full bg-primary px-4 py-2 text-sm font-semibold text-white shadow hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+                                        disabled={companiesLoading}
+                                    >
+                                        Szukaj
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={handleResetSearch}
+                                        className="rounded-full border border-soft px-4 py-2 text-sm font-semibold text-muted transition hover:border-primary/40 hover:text-primary"
+                                    >
+                                        Wyczyść
+                                    </button>
+                                </div>
+                            </form>
+                        }
+                    >
+                        <div className="space-y-3">
+                            {companiesLoading && (
+                                <p className="text-xs text-subtle">Ładowanie listy spółek…</p>
+                            )}
+                            {companiesError && (
+                                <p className="text-xs text-amber-500">{companiesError}</p>
+                            )}
+                            {!companiesLoading && !companiesError && companies.length === 0 && (
+                                <p className="text-xs text-subtle">
+                                    Brak spółek do wyświetlenia. Uruchom synchronizację, aby pobrać dane.
+                                </p>
+                            )}
+                            <div className="max-h-80 space-y-1 overflow-y-auto pr-1">
+                                {companies.map((company) => {
+                                    const isActive =
+                                        company.symbol === selectedSymbol ||
+                                        company.raw_symbol === selectedSymbol;
+                                    const marketCap = company.fundamentals?.market_cap ?? null;
+                                    return (
+                                        <button
+                                            type="button"
+                                            key={`${company.symbol}-${company.raw_symbol}`}
+                                            onClick={() => handleSelectCompany(company.symbol)}
+                                            className={`w-full rounded-xl border px-3 py-3 text-left transition ${
+                                                isActive
+                                                    ? "border-primary/60 bg-primary/10 shadow-inner"
+                                                    : "border-transparent bg-soft/40 hover:border-primary/40 hover:bg-soft/80"
+                                            }`}
+                                        >
+                                            <div className="flex items-start justify-between gap-3">
+                                                <div className="space-y-1">
+                                                    <div className="text-sm font-semibold text-primary">
+                                                        {company.name ?? company.short_name ?? company.symbol}
+                                                    </div>
+                                                    <div className="text-xs text-subtle">
+                                                        {company.symbol}
+                                                        {company.sector ? ` • ${company.sector}` : ""}
+                                                        {company.industry ? ` • ${company.industry}` : ""}
+                                                    </div>
+                                                </div>
+                                                <div className="text-right text-xs text-subtle">
+                                                    {marketCap !== null
+                                                        ? `${integerFormatter.format(marketCap)}`
+                                                        : "—"}
+                                                </div>
+                                            </div>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    </Card>
+                </div>
+                <Card
+                    title={
+                        selectedCompany
+                            ? `Szczegóły ${selectedCompany.symbol}`
+                            : "Wybierz spółkę z listy"
+                    }
+                >
+                    {detailsLoading && (
+                        <p className="text-xs text-subtle">Ładowanie szczegółów…</p>
+                    )}
+                    {detailsError && (
+                        <p className="text-xs text-amber-500">{detailsError}</p>
+                    )}
+                    {selectedCompany ? (
+                        <div className="space-y-6">
+                            <div className="space-y-2">
+                                <div className="space-y-1">
+                                    <p className="text-xs uppercase tracking-[0.3em] text-subtle">
+                                        {selectedCompany.raw_symbol}
+                                    </p>
+                                    <h3 className="text-xl font-semibold text-primary">
+                                        {selectedCompany.name ?? selectedCompany.short_name ?? selectedCompany.symbol}
+                                    </h3>
+                                    <p className="text-sm text-muted">
+                                        {selectedCompany.sector}
+                                        {selectedCompany.industry ? ` • ${selectedCompany.industry}` : ""}
+                                        {selectedCompany.country ? ` • ${selectedCompany.country}` : ""}
+                                    </p>
+                                </div>
+                                {descriptionSnippet && (
+                                    <p className="text-sm leading-relaxed text-subtle">
+                                        {descriptionSnippet}
+                                    </p>
+                                )}
+                            </div>
+                            <div className="grid gap-3 text-sm text-subtle sm:grid-cols-2">
+                                <div>
+                                    <span className="block text-[10px] uppercase tracking-wide text-subtle">
+                                        Symbol
+                                    </span>
+                                    <span className="text-base font-semibold text-primary">
+                                        {selectedCompany.symbol}
+                                    </span>
+                                </div>
+                                <div>
+                                    <span className="block text-[10px] uppercase tracking-wide text-subtle">
+                                        ISIN
+                                    </span>
+                                    <span className="text-base font-semibold text-primary">
+                                        {selectedCompany.isin ?? "—"}
+                                    </span>
+                                </div>
+                                <div>
+                                    <span className="block text-[10px] uppercase tracking-wide text-subtle">
+                                        Notowanie od
+                                    </span>
+                                    <span className="text-base font-semibold text-primary">
+                                        {formatDate(selectedCompany.listing_date)}
+                                    </span>
+                                </div>
+                                <div>
+                                    <span className="block text-[10px] uppercase tracking-wide text-subtle">
+                                        Liczba pracowników
+                                    </span>
+                                    <span className="text-base font-semibold text-primary">
+                                        {companyEmployees}
+                                    </span>
+                                </div>
+                                <div>
+                                    <span className="block text-[10px] uppercase tracking-wide text-subtle">
+                                        Siedziba
+                                    </span>
+                                    <span className="text-base font-semibold text-primary">
+                                        {selectedCompany.headquarters ?? "—"}
+                                    </span>
+                                </div>
+                                <div>
+                                    <span className="block text-[10px] uppercase tracking-wide text-subtle">
+                                        Strona WWW
+                                    </span>
+                                    {selectedCompany.website ? (
+                                        <a
+                                            href={selectedCompany.website}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            className="text-base font-semibold text-primary underline decoration-dotted underline-offset-4"
+                                        >
+                                            {selectedCompany.website}
+                                        </a>
+                                    ) : (
+                                        <span className="text-base font-semibold text-primary">—</span>
+                                    )}
+                                </div>
+                                <div>
+                                    <span className="block text-[10px] uppercase tracking-wide text-subtle">
+                                        Kapitalizacja
+                                    </span>
+                                    <span className="text-base font-semibold text-primary">
+                                        {marketCapValue !== null
+                                            ? integerFormatter.format(marketCapValue)
+                                            : "—"}
+                                    </span>
+                                </div>
+                            </div>
+                            {fundamentalEntries.length > 0 && (
+                                <div className="space-y-3">
+                                    <h4 className="text-sm font-semibold text-primary">
+                                        Wskaźniki fundamentalne
+                                    </h4>
+                                    <div className="grid gap-3 text-xs text-subtle sm:grid-cols-2">
+                                        {fundamentalEntries.map(([key, value]) => (
+                                            <div key={key}>
+                                                <span className="block text-[10px] uppercase tracking-wide text-subtle">
+                                                    {FUNDAMENTAL_LABELS[key] ?? key}
+                                                </span>
+                                                <span className="text-sm font-semibold text-primary">
+                                                    {formatFundamentalValue(key, value)}
+                                                </span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    ) : (
+                        <p className="text-sm text-subtle">
+                            Wybierz spółkę z listy, aby zobaczyć szczegółowe dane.
+                        </p>
+                    )}
+                </Card>
+            </div>
+        </Section>
+    );
+};
 
 type DashboardView = "analysis" | "score" | "portfolio";
 type NavItem = {
@@ -3676,6 +5017,34 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
             // Ignoruj błędy zapisu w sessionStorage
         }
     }, []);
+    const [isAdmin, setIsAdmin] = useState<boolean>(() => {
+        if (typeof window === "undefined") {
+            return false;
+        }
+        try {
+            return window.sessionStorage.getItem(AUTH_ADMIN_STORAGE_KEY) === "1";
+        } catch {
+            return false;
+        }
+    });
+    const setAdminFlag = useCallback(
+        (flag: boolean) => {
+            setIsAdmin(flag);
+            if (typeof window === "undefined") {
+                return;
+            }
+            try {
+                if (flag) {
+                    window.sessionStorage.setItem(AUTH_ADMIN_STORAGE_KEY, "1");
+                } else {
+                    window.sessionStorage.removeItem(AUTH_ADMIN_STORAGE_KEY);
+                }
+            } catch {
+                // ignoruj błędy zapisu flagi
+            }
+        },
+        [setIsAdmin]
+    );
     const [authLoading, setAuthLoading] = useState(true);
     const [authError, setAuthError] = useState<string | null>(null);
     const [profileError, setProfileError] = useState<string | null>(null);
@@ -4027,6 +5396,7 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
             if (!response.ok) {
                 if (response.status === 401) {
                     setAuthUser(null);
+                    setAdminFlag(false);
                     resetToDefaults();
                     lastSavedPreferencesRef.current = null;
                     return null;
@@ -4040,6 +5410,7 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
             }
             const data = (await response.json()) as PublicUserProfile;
             setAuthUser(data.user);
+            setAdminFlag(Boolean(data.isAdmin));
             setAuthError(null);
             setProfileError(null);
             hydrateFromPreferences(data.preferences);
@@ -4052,7 +5423,7 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
         } finally {
             setAuthLoading(false);
         }
-    }, [hydrateFromPreferences, resetToDefaults, setAuthUser]);
+    }, [hydrateFromPreferences, resetToDefaults, setAdminFlag, setAuthUser]);
 
     useEffect(() => {
         void fetchProfile();
@@ -4160,6 +5531,7 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
             // ignoruj błędy wylogowania
         }
         setAuthUser(null);
+        setAdminFlag(false);
         resetToDefaults();
         setAuthError(null);
         setProfileError(null);
@@ -4167,7 +5539,7 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
         if (typeof window !== "undefined") {
             window.location.replace("/");
         }
-    }, [resetToDefaults, setAuthUser]);
+    }, [resetToDefaults, setAdminFlag, setAuthUser]);
 
     useEffect(() => {
         if (typeof window === "undefined") return;
@@ -5552,6 +6924,31 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
 
             <main className="flex-1">
                 <div className="mx-auto w-full max-w-6xl px-4 py-8 md:px-8 md:py-12 space-y-16">
+                    {isAdmin ? (
+                        <CompanySyncPanel />
+                    ) : (
+                        <Section
+                            id="companies-sync"
+                            kicker="GPW"
+                            title="Synchronizacja danych o spółkach"
+                            description="Panel synchronizacji jest dostępny wyłącznie dla administratorów."
+                        >
+                            <div className="rounded-2xl border border-dashed border-soft bg-white/70 p-6 text-sm text-muted">
+                                {isAuthenticated ? (
+                                    <p>
+                                        Twoje konto nie ma uprawnień administratora. Skontaktuj się z osobą
+                                        zarządzającą uprawnieniami, aby uzyskać dostęp do harmonogramu
+                                        synchronizacji.
+                                    </p>
+                                ) : (
+                                    <p>
+                                        Zaloguj się na konto administratora, aby uruchamiać synchronizację danych o
+                                        spółkach GPW.
+                                    </p>
+                                )}
+                            </div>
+                        </Section>
+                    )}
                     {view === "analysis" && (
                         <Section
                             id="analysis"

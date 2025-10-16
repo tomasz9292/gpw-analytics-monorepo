@@ -5,9 +5,11 @@ import io
 import json
 import os
 import statistics
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from math import sqrt
 from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Literal
+from uuid import uuid4
 
 from urllib.parse import parse_qs, urlparse
 
@@ -18,7 +20,7 @@ from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
-from .company_ingestion import CompanyDataHarvester, CompanySyncResult
+from .company_ingestion import CompanyDataHarvester, CompanySyncProgress, CompanySyncResult
 
 # =========================
 # Konfiguracja / połączenie
@@ -67,6 +69,113 @@ else:
 _CH_CLIENT_KWARGS = None
 _CH_CLIENT_LOCK = threading.Lock()
 _THREAD_LOCAL = threading.local()
+_SYNC_LOCK = threading.Lock()
+_SYNC_THREAD: Optional[threading.Thread] = None
+
+
+class CompanySyncScheduleStatus(BaseModel):
+    mode: Literal["idle", "once", "recurring"] = Field(
+        default="idle", description="Tryb harmonogramu synchronizacji spółek"
+    )
+    next_run_at: Optional[datetime] = Field(
+        default=None, description="Najbliższy zaplanowany termin synchronizacji"
+    )
+    recurring_interval_minutes: Optional[int] = Field(
+        default=None, description="Interwał (w minutach) między kolejnymi synchronizacjami cyklicznymi"
+    )
+    recurring_start_at: Optional[datetime] = Field(
+        default=None, description="Moment uruchomienia harmonogramu cyklicznego"
+    )
+    last_run_started_at: Optional[datetime] = Field(
+        default=None, description="Czas uruchomienia ostatniej synchronizacji z harmonogramu"
+    )
+    last_run_finished_at: Optional[datetime] = Field(
+        default=None, description="Czas zakończenia ostatniej synchronizacji z harmonogramu"
+    )
+    last_run_status: Literal["idle", "running", "success", "failed"] = Field(
+        default="idle", description="Status ostatniej synchronizacji uruchomionej przez harmonogram"
+    )
+
+
+class CompanySyncScheduleRequest(BaseModel):
+    mode: Literal["once", "recurring", "cancel"]
+    scheduled_for: Optional[datetime] = Field(
+        default=None,
+        description="Data i czas jednorazowej synchronizacji (tryb once)",
+    )
+    interval_minutes: Optional[int] = Field(
+        default=None,
+        ge=5,
+        le=7 * 24 * 60,
+        description="Interwał w minutach między synchronizacjami cyklicznymi",
+    )
+    start_at: Optional[datetime] = Field(
+        default=None,
+        description="Początek harmonogramu cyklicznego (domyślnie natychmiast)",
+    )
+
+    @model_validator(mode="after")
+    def validate_payload(self):  # type: ignore[override]
+        if self.mode == "once":
+            if not self.scheduled_for:
+                raise ValueError("Należy podać datę jednorazowej synchronizacji")
+        if self.mode == "recurring":
+            if not self.interval_minutes:
+                raise ValueError("Należy określić interwał dla synchronizacji cyklicznej")
+        return self
+
+
+_SCHEDULE_LOCK = threading.Lock()
+_SCHEDULE_EVENT = threading.Event()
+_SCHEDULE_THREAD: Optional[threading.Thread] = None
+_SYNC_SCHEDULE_STATE = CompanySyncScheduleStatus()
+
+
+def _normalize_datetime(value: datetime) -> datetime:
+    if value.tzinfo is not None:
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
+
+
+def _snapshot_schedule_state() -> CompanySyncScheduleStatus:
+    with _SCHEDULE_LOCK:
+        return _SYNC_SCHEDULE_STATE.model_copy(deep=True)
+
+
+def _notify_schedule_loop() -> None:
+    _SCHEDULE_EVENT.set()
+
+
+def _ensure_schedule_thread_running() -> None:
+    global _SCHEDULE_THREAD
+    if _SCHEDULE_THREAD and _SCHEDULE_THREAD.is_alive():
+        return
+
+    def _loop_wrapper() -> None:
+        while True:
+            with _SCHEDULE_LOCK:
+                next_run = _SYNC_SCHEDULE_STATE.next_run_at
+
+            if next_run is None:
+                _SCHEDULE_EVENT.wait()
+                _SCHEDULE_EVENT.clear()
+                continue
+
+            now = datetime.utcnow()
+            wait_seconds = (next_run - now).total_seconds()
+            if wait_seconds > 0:
+                triggered = _SCHEDULE_EVENT.wait(timeout=min(wait_seconds, 60.0))
+                if triggered:
+                    _SCHEDULE_EVENT.clear()
+                    continue
+
+            started = _check_and_run_scheduled_job()
+            if not started:
+                _SCHEDULE_EVENT.wait(timeout=5.0)
+                _SCHEDULE_EVENT.clear()
+
+    _SCHEDULE_THREAD = threading.Thread(target=_loop_wrapper, daemon=True)
+    _SCHEDULE_THREAD.start()
 
 
 def _str_to_bool(value: str, default: bool) -> bool:
@@ -573,6 +682,100 @@ class DataCollectionItem(BaseModel):
     quotes: List[QuoteRow] = Field(default_factory=list)
 
 
+class CompanySyncJobStatus(BaseModel):
+    job_id: Optional[str] = Field(default=None, description="Identyfikator bieżącego zadania")
+    status: Literal["idle", "running", "completed", "failed"] = Field(
+        default="idle", description="Aktualny stan synchronizacji"
+    )
+    stage: Literal["idle", "fetching", "harvesting", "inserting", "finished", "failed"] = Field(
+        default="idle", description="Faza procesu synchronizacji"
+    )
+    total: Optional[int] = Field(
+        default=None, description="Całkowita liczba spółek oczekująca na przetworzenie"
+    )
+    processed: int = Field(0, description="Liczba rekordów z listy GPW, które zostały przetworzone")
+    synced: int = Field(0, description="Liczba spółek zapisanych lub przygotowanych do zapisu")
+    failed: int = Field(0, description="Liczba błędów napotkanych podczas synchronizacji")
+    started_at: Optional[datetime] = Field(
+        default=None, description="Moment rozpoczęcia synchronizacji"
+    )
+    finished_at: Optional[datetime] = Field(
+        default=None, description="Moment zakończenia synchronizacji"
+    )
+    current_symbol: Optional[str] = Field(
+        default=None, description="Symbol spółki przetwarzanej w ostatnim kroku"
+    )
+    message: Optional[str] = Field(default=None, description="Dodatkowy komunikat statusowy")
+    errors: List[str] = Field(default_factory=list, description="Lista napotkanych błędów")
+    result: Optional[CompanySyncResult] = Field(
+        default=None, description="Pełne podsumowanie ostatniej synchronizacji"
+    )
+
+
+_SYNC_STATE = CompanySyncJobStatus()
+
+
+def _start_sync_job(limit: Optional[int], *, message: str) -> str:
+    global _SYNC_STATE, _SYNC_THREAD
+    job_id = str(uuid4())
+    started_at = datetime.utcnow()
+    _SYNC_STATE = CompanySyncJobStatus(
+        job_id=job_id,
+        status="running",
+        stage="fetching",
+        total=None,
+        processed=0,
+        synced=0,
+        failed=0,
+        started_at=started_at,
+        finished_at=None,
+        current_symbol=None,
+        message=message,
+        errors=[],
+        result=None,
+    )
+    _SYNC_THREAD = threading.Thread(
+        target=_run_company_sync_job,
+        args=(job_id, limit),
+        daemon=True,
+    )
+    _SYNC_THREAD.start()
+    return job_id
+
+
+def _check_and_run_scheduled_job(now: Optional[datetime] = None) -> bool:
+    if now is None:
+        now = datetime.utcnow()
+
+    with _SCHEDULE_LOCK:
+        next_run = _SYNC_SCHEDULE_STATE.next_run_at
+        mode = _SYNC_SCHEDULE_STATE.mode
+        interval = _SYNC_SCHEDULE_STATE.recurring_interval_minutes
+
+    if next_run is None or next_run > now:
+        return False
+
+    with _SYNC_LOCK:
+        if _SYNC_STATE.status == "running":
+            return False
+        _start_sync_job(limit=None, message="Planowana synchronizacja spółek")
+        started_at = _SYNC_STATE.started_at or now
+
+    with _SCHEDULE_LOCK:
+        _SYNC_SCHEDULE_STATE.last_run_started_at = started_at
+        _SYNC_SCHEDULE_STATE.last_run_status = "running"
+        if mode == "once":
+            _SYNC_SCHEDULE_STATE.mode = "idle"
+            _SYNC_SCHEDULE_STATE.next_run_at = None
+            _SYNC_SCHEDULE_STATE.recurring_interval_minutes = None
+            _SYNC_SCHEDULE_STATE.recurring_start_at = None
+        elif mode == "recurring" and interval:
+            _SYNC_SCHEDULE_STATE.next_run_at = started_at + timedelta(minutes=interval)
+        _notify_schedule_loop()
+
+    return True
+
+
 class CompanyFundamentals(BaseModel):
     market_cap: Optional[float] = None
     revenue_ttm: Optional[float] = None
@@ -838,6 +1041,145 @@ class ScorePreviewResponse(BaseModel):
 # =========================
 
 
+def _snapshot_sync_state() -> CompanySyncJobStatus:
+    with _SYNC_LOCK:
+        return _SYNC_STATE.model_copy(deep=True)
+
+
+def _update_sync_state_from_progress(job_id: str, progress: CompanySyncProgress) -> None:
+    with _SYNC_LOCK:
+        if _SYNC_STATE.job_id != job_id:
+            return
+        _SYNC_STATE.stage = progress.stage
+        if progress.total is not None:
+            _SYNC_STATE.total = progress.total
+        _SYNC_STATE.processed = progress.processed
+        _SYNC_STATE.synced = progress.synced
+        _SYNC_STATE.failed = progress.failed
+        _SYNC_STATE.current_symbol = progress.current_symbol
+        if progress.message:
+            _SYNC_STATE.message = progress.message
+
+
+def _run_company_sync_job(job_id: str, limit: Optional[int]) -> None:
+    global _SYNC_THREAD
+    try:
+        ch = get_ch()
+        columns = _get_company_columns(ch)
+        harvester = CompanyDataHarvester()
+        result = harvester.sync(
+            ch_client=ch,
+            table_name=TABLE_COMPANIES,
+            columns=columns,
+            limit=limit,
+            progress_callback=lambda progress: _update_sync_state_from_progress(job_id, progress),
+        )
+        with _SYNC_LOCK:
+            if _SYNC_STATE.job_id == job_id:
+                _SYNC_STATE.status = "completed"
+                _SYNC_STATE.stage = "finished"
+                _SYNC_STATE.finished_at = result.finished_at
+                if _SYNC_STATE.total is None:
+                    _SYNC_STATE.total = result.fetched
+                _SYNC_STATE.processed = max(_SYNC_STATE.processed, result.fetched)
+                _SYNC_STATE.synced = result.synced
+                _SYNC_STATE.failed = result.failed
+                _SYNC_STATE.errors = list(result.errors)
+                _SYNC_STATE.result = result
+                if not _SYNC_STATE.message:
+                    _SYNC_STATE.message = "Synchronizacja zakończona"
+        with _SCHEDULE_LOCK:
+            if _SYNC_SCHEDULE_STATE.last_run_status == "running":
+                finished_at = result.finished_at or datetime.utcnow()
+                _SYNC_SCHEDULE_STATE.last_run_finished_at = finished_at
+                _SYNC_SCHEDULE_STATE.last_run_status = "success"
+        _notify_schedule_loop()
+    except Exception as exc:  # pragma: no cover - zależy od środowiska uruch.
+        with _SYNC_LOCK:
+            if _SYNC_STATE.job_id == job_id:
+                _SYNC_STATE.status = "failed"
+                _SYNC_STATE.stage = "failed"
+                _SYNC_STATE.finished_at = datetime.utcnow()
+                _SYNC_STATE.message = str(exc)
+                existing_errors = list(_SYNC_STATE.errors)
+                existing_errors.append(str(exc))
+                _SYNC_STATE.errors = existing_errors
+        with _SCHEDULE_LOCK:
+            if _SYNC_SCHEDULE_STATE.last_run_status == "running":
+                _SYNC_SCHEDULE_STATE.last_run_finished_at = datetime.utcnow()
+                _SYNC_SCHEDULE_STATE.last_run_status = "failed"
+        _notify_schedule_loop()
+    finally:
+        with _SYNC_LOCK:
+            _SYNC_THREAD = None
+
+
+@app.post("/companies/sync/background", response_model=CompanySyncJobStatus)
+def start_company_sync(
+    limit: Optional[int] = Query(default=None, ge=1, le=5000),
+) -> CompanySyncJobStatus:
+    with _SYNC_LOCK:
+        if _SYNC_STATE.status == "running":
+            raise HTTPException(409, "Synchronizacja spółek jest już w toku")
+        _start_sync_job(limit, message="Rozpoczęto synchronizację spółek")
+        return _SYNC_STATE.model_copy(deep=True)
+
+
+@app.get("/companies/sync/status", response_model=CompanySyncJobStatus)
+def company_sync_status() -> CompanySyncJobStatus:
+    return _snapshot_sync_state()
+
+
+@app.get("/companies/sync/schedule", response_model=CompanySyncScheduleStatus)
+def company_sync_schedule() -> CompanySyncScheduleStatus:
+    return _snapshot_schedule_state()
+
+
+@app.post("/companies/sync/schedule", response_model=CompanySyncScheduleStatus)
+def update_company_sync_schedule(payload: CompanySyncScheduleRequest) -> CompanySyncScheduleStatus:
+    now = datetime.utcnow()
+
+    if payload.mode == "cancel":
+        with _SCHEDULE_LOCK:
+            _SYNC_SCHEDULE_STATE.mode = "idle"
+            _SYNC_SCHEDULE_STATE.next_run_at = None
+            _SYNC_SCHEDULE_STATE.recurring_interval_minutes = None
+            _SYNC_SCHEDULE_STATE.recurring_start_at = None
+        _notify_schedule_loop()
+        return _snapshot_schedule_state()
+
+    if payload.mode == "once":
+        scheduled_for = _normalize_datetime(payload.scheduled_for)  # type: ignore[arg-type]
+        if scheduled_for <= now:
+            raise HTTPException(400, "Termin jednorazowej synchronizacji musi być w przyszłości")
+        with _SCHEDULE_LOCK:
+            _SYNC_SCHEDULE_STATE.mode = "once"
+            _SYNC_SCHEDULE_STATE.next_run_at = scheduled_for
+            _SYNC_SCHEDULE_STATE.recurring_interval_minutes = None
+            _SYNC_SCHEDULE_STATE.recurring_start_at = None
+        _ensure_schedule_thread_running()
+        _notify_schedule_loop()
+        return _snapshot_schedule_state()
+
+    interval = payload.interval_minutes or 0
+    if interval <= 0:
+        raise HTTPException(400, "Interwał synchronizacji musi być dodatni")
+
+    start_at_source = payload.start_at or (now + timedelta(minutes=interval))
+    start_at = _normalize_datetime(start_at_source)
+    if start_at <= now:
+        start_at = now + timedelta(seconds=5)
+
+    with _SCHEDULE_LOCK:
+        _SYNC_SCHEDULE_STATE.mode = "recurring"
+        _SYNC_SCHEDULE_STATE.recurring_interval_minutes = interval
+        _SYNC_SCHEDULE_STATE.recurring_start_at = start_at
+        _SYNC_SCHEDULE_STATE.next_run_at = start_at
+    _ensure_schedule_thread_running()
+    _notify_schedule_loop()
+    return _snapshot_schedule_state()
+
+
 @app.post("/companies/sync", response_model=CompanySyncResult)
 def sync_companies(limit: Optional[int] = Query(default=None, ge=1, le=5000)):
     ch = get_ch()
@@ -919,6 +1261,53 @@ def list_companies(
         output.append(profile)
 
     return output
+
+
+@app.get("/companies/{symbol}", response_model=CompanyProfile)
+def get_company_profile(symbol: str) -> CompanyProfile:
+    ch = get_ch()
+    columns = _get_company_columns(ch)
+    lowered_to_original = {col.lower(): col for col in columns}
+
+    symbol_column = None
+    for candidate in COMPANY_SYMBOL_CANDIDATES:
+        existing = lowered_to_original.get(candidate)
+        if existing:
+            symbol_column = existing
+            break
+
+    if not symbol_column:
+        raise HTTPException(
+            500,
+            f"Tabela {TABLE_COMPANIES} musi zawierać kolumnę z symbolem (np. symbol lub ticker)",
+        )
+
+    raw_symbol = normalize_input_symbol(symbol)
+    sql = (
+        f"SELECT * FROM {TABLE_COMPANIES} "
+        f"WHERE upper({_quote_identifier(symbol_column)}) = %(symbol)s "
+        f"LIMIT 1"
+    )
+    params = {"symbol": raw_symbol.upper()}
+
+    try:
+        result = ch.query(sql, parameters=params)
+    except Exception as exc:  # pragma: no cover - zależy od konfiguracji DB
+        raise HTTPException(500, f"Nie udało się pobrać danych spółki: {exc}") from exc
+
+    if not result.result_rows:
+        raise HTTPException(404, f"Nie znaleziono spółki o symbolu {symbol}")
+
+    column_names = list(result.column_names)
+    raw_row = {col: value for col, value in zip(column_names, result.result_rows[0])}
+    normalized = _normalize_company_row(raw_row, symbol_column)
+    if not normalized:
+        raise HTTPException(404, f"Nie znaleziono spółki o symbolu {symbol}")
+
+    fundamentals_payload = normalized.pop("fundamentals", {})
+    fundamentals_model = CompanyFundamentals(**fundamentals_payload)
+    profile = CompanyProfile(fundamentals=fundamentals_model, **normalized)
+    return profile
 
 
 # =========================

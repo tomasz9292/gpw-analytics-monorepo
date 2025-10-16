@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 from datetime import date, datetime
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Literal
 from urllib.error import URLError
 from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
@@ -202,6 +203,20 @@ def _value_from_path(data: Dict[str, Any], *path: str) -> Any:
     if isinstance(current, dict) and "raw" in current:
         return current.get("raw")
     return current
+
+
+class CompanySyncProgress(BaseModel):
+    stage: Literal["fetching", "harvesting", "inserting", "finished", "failed"]
+    total: Optional[int] = Field(None, description="Szacowana liczba spółek do przetworzenia")
+    processed: int = Field(0, description="Liczba rekordów przetworzonych z listy GPW")
+    synced: int = Field(0, description="Liczba spółek przygotowanych do synchronizacji")
+    failed: int = Field(0, description="Liczba błędów napotkanych podczas przetwarzania")
+    current_symbol: Optional[str] = Field(
+        None, description="Symbol spółki przetwarzanej w ostatnim kroku"
+    )
+    message: Optional[str] = Field(
+        None, description="Dodatkowy komunikat dla interfejsu użytkownika"
+    )
 
 
 class CompanySyncResult(BaseModel):
@@ -452,6 +467,7 @@ class CompanyDataHarvester:
         table_name: str,
         columns: Sequence[str],
         limit: Optional[int] = None,
+        progress_callback: Optional[Callable[[CompanySyncProgress], None]] = None,
     ) -> CompanySyncResult:
         supports_history = hasattr(self.session, "clear_history") and hasattr(
             self.session, "get_history"
@@ -459,18 +475,55 @@ class CompanyDataHarvester:
         if supports_history:
             self.session.clear_history()
         started_at = datetime.utcnow()
+        total_count: Optional[int] = None
+        processed_count = 0
+        deduplicated_count = 0
+        failed_count = 0
+
+        def emit(stage: Literal["fetching", "harvesting", "inserting", "finished", "failed"], *, message: Optional[str] = None, current_symbol: Optional[str] = None) -> None:
+            if not progress_callback:
+                return
+            progress_callback(
+                CompanySyncProgress(
+                    stage=stage,
+                    total=total_count,
+                    processed=processed_count,
+                    synced=deduplicated_count,
+                    failed=failed_count,
+                    current_symbol=current_symbol,
+                    message=message,
+                )
+            )
+
+        emit("fetching", message="Pobieranie listy spółek GPW")
         base_rows = self.fetch_gpw_profiles(limit=limit)
+        total_count = len(base_rows)
+        emit(
+            "harvesting",
+            message=f"Znaleziono {total_count} rekordów do pobrania" if total_count else "Brak spółek do pobrania",
+        )
         deduplicated: Dict[str, Dict[str, Any]] = {}
         errors: List[str] = []
 
         for base in base_rows:
+            processed_count += 1
             try:
                 symbol = self._extract_symbol(base)
             except Exception as exc:  # pragma: no cover - safeguard
                 errors.append(str(exc))
+                failed_count = len(errors)
+                emit(
+                    "harvesting",
+                    message=str(exc),
+                )
                 continue
 
             if symbol in deduplicated:
+                emit(
+                    "harvesting",
+                    message=f"Pomijanie duplikatu {symbol}",
+                    current_symbol=symbol,
+                )
                 continue
 
             fundamentals: Dict[str, Any] = {}
@@ -478,14 +531,25 @@ class CompanyDataHarvester:
                 fundamentals = self.fetch_yahoo_summary(symbol)
             except Exception as exc:  # pragma: no cover - network/API specific
                 errors.append(f"{symbol}: {exc}")
+                failed_count = len(errors)
             row = self.build_row(base, fundamentals)
             deduplicated[symbol] = row
+            deduplicated_count = len(deduplicated)
+            emit(
+                "harvesting",
+                message=f"Przetworzono {deduplicated_count} spółek",
+                current_symbol=symbol,
+            )
 
         normalized_rows = list(deduplicated.values())
         synced = 0
         usable_columns = [
             column for column in columns if any(row.get(column) is not None for row in normalized_rows)
         ]
+        emit(
+            "inserting",
+            message="Zapisywanie danych w bazie",
+        )
         if normalized_rows and usable_columns:
             data = [[row.get(column) for column in usable_columns] for row in normalized_rows]
             ch_client.insert(
@@ -494,11 +558,19 @@ class CompanyDataHarvester:
                 column_names=list(usable_columns),
             )
             synced = len(normalized_rows)
+            deduplicated_count = synced
 
         finished_at = datetime.utcnow()
         request_log: List[HttpRequestLog] = []
         if supports_history:
             request_log = self.session.get_history()
+
+        failed_count = len(errors)
+        processed_count = max(processed_count, total_count or 0)
+        emit(
+            "finished",
+            message="Synchronizacja zakończona",
+        )
 
         return CompanySyncResult(
             fetched=len(base_rows),

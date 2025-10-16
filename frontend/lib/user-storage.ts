@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
 
+import { isAdminEmail } from "@/lib/admin-storage";
+
 const resolveConfiguredDir = (): string | null => {
     const configured = process.env.APP_DATA_DIR ?? process.env.DATA_DIR;
     if (!configured) return null;
@@ -119,6 +121,7 @@ export type PublicUserProfile = {
         updatedAt: string;
     };
     preferences: StoredPreferences;
+    isAdmin: boolean;
 };
 
 const DEFAULT_SCORE_RULE: StoredScoreBuilderRule = {
@@ -475,6 +478,7 @@ export const getOrCreateUserProfile = async ({
             preferences: normalizedPreferences,
         };
         await writeStore(store);
+        const admin = await isAdminEmail(store[id].email);
         return {
             user: {
                 id,
@@ -486,6 +490,7 @@ export const getOrCreateUserProfile = async ({
                 updatedAt: store[id].updatedAt,
             },
             preferences: normalizedPreferences,
+            isAdmin: admin,
         };
     }
 
@@ -502,6 +507,7 @@ export const getOrCreateUserProfile = async ({
     };
     store[id] = newUser;
     await writeStore(store);
+    const admin = await isAdminEmail(newUser.email);
     return {
         user: {
             id,
@@ -513,6 +519,7 @@ export const getOrCreateUserProfile = async ({
             updatedAt: now,
         },
         preferences,
+        isAdmin: admin,
     };
 };
 
@@ -551,6 +558,7 @@ export const updateUserProfile = async (
         };
     }
     await writeStore(store);
+    const admin = await isAdminEmail(store[id].email);
     return {
         user: {
             id,
@@ -562,5 +570,6 @@ export const updateUserProfile = async (
             updatedAt: store[id].updatedAt,
         },
         preferences,
+        isAdmin: admin,
     };
 };
