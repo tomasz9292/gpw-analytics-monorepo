@@ -7,7 +7,7 @@ import os
 import statistics
 from datetime import date, datetime, timedelta
 from math import sqrt
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from urllib.parse import parse_qs, urlparse
 
@@ -659,22 +659,53 @@ def _fetch_close_history(ch_client, raw_symbol: str) -> List[Tuple[str, float]]:
     return [(str(d), float(c)) for (d, c) in rows]
 
 
+def _ensure_date(value: object) -> date:
+    """Przekształca różne reprezentacje daty na ``datetime.date``."""
+
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value)
+        except ValueError:
+            return datetime.fromisoformat(value).date()
+    raise ValueError(f"Unsupported date value: {value!r}")
+
+
+def _prepare_metric_series(
+    closes: List[Tuple[str, float]]
+) -> List[Tuple[date, float]]:
+    """Konwertuje listę (data, close) na format dogodny do obliczania metryk."""
+
+    prepared: List[Tuple[date, float]] = []
+    append = prepared.append
+    for raw_date, raw_close in closes:
+        try:
+            dt = _ensure_date(raw_date)
+        except ValueError:
+            continue
+        try:
+            close = float(raw_close)
+        except (TypeError, ValueError):
+            continue
+        append((dt, close))
+    return prepared
+
+
 def _slice_closes_window(
-    closes: List[Tuple[str, float]], lookback_days: int
-) -> List[Tuple[datetime, float]]:
+    closes: Sequence[Tuple[date, float]], lookback_days: int
+) -> List[Tuple[date, float]]:
     if not closes:
         return []
 
-    last_date_str, _ = closes[-1]
-    last_dt = datetime.fromisoformat(last_date_str).date()
+    last_dt, _ = closes[-1]
     min_dt = last_dt - timedelta(days=lookback_days)
 
-    window: List[Tuple[datetime, float]] = []
-    for date_str, close in closes:
-        dt = datetime.fromisoformat(date_str).date()
-        if dt < min_dt:
-            continue
-        if close <= 0:
+    window: List[Tuple[date, float]] = []
+    for dt, close in closes:
+        if dt < min_dt or close <= 0:
             continue
         window.append((dt, close))
 
@@ -682,20 +713,18 @@ def _slice_closes_window(
 
 
 def _compute_metric_value(
-    closes: List[Tuple[str, float]], metric: str, lookback_days: int
+    closes: Sequence[Tuple[date, float]], metric: str, lookback_days: int
 ) -> Optional[float]:
     if not closes:
         return None
 
     if metric == "total_return":
-        last_date_str, last_close = closes[-1]
+        last_dt, last_close = closes[-1]
         if last_close <= 0:
             return None
-        last_dt = datetime.fromisoformat(last_date_str).date()
         target_dt = last_dt - timedelta(days=lookback_days)
         base_close = None
-        for date_str, close in reversed(closes):
-            dt = datetime.fromisoformat(date_str).date()
+        for dt, close in reversed(closes):
             if dt <= target_dt:
                 if close > 0:
                     base_close = close
@@ -748,7 +777,8 @@ def _calculate_symbol_score(
     components: List[ScoreComponent],
     include_metrics: bool = False,
 ) -> Optional[Tuple[float, Dict[str, float]] | float]:
-    closes = _fetch_close_history(ch_client, raw_symbol)
+    closes_raw = _fetch_close_history(ch_client, raw_symbol)
+    closes = _prepare_metric_series(closes_raw)
     if not closes:
         return None
 
@@ -1176,7 +1206,7 @@ def _compute_backtest(
             max_drawdown=max_dd,
             volatility=vol_annual,
             sharpe=sharpe,
-            last_value=last_v,
+            last_value=ratio,
             initial_value=first_v,
             final_value=last_v,
             total_return=total_return,
@@ -1185,12 +1215,13 @@ def _compute_backtest(
         )
     else:
         last_v = equity[-1].value
+        ratio = 1.0
         stats = PortfolioStats(
             cagr=0.0,
             max_drawdown=0.0,
             volatility=0.0,
             sharpe=0.0,
-            last_value=last_v,
+            last_value=ratio,
             initial_value=last_v,
             final_value=last_v,
             total_return=0.0,
