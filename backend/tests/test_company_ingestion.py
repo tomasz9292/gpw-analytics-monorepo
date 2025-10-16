@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import sys
+import time
 
 import pytest
+from fastapi import HTTPException
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -15,6 +18,7 @@ if str(ROOT) not in sys.path:
 from api import main
 from api.company_ingestion import (
     CompanyDataHarvester,
+    CompanySyncProgress,
     CompanySyncResult,
     HttpRequestLog,
 )
@@ -65,6 +69,14 @@ class FakeClickHouseClient:
 
     def insert(self, *, table: str, data: List[List[Any]], column_names: List[str]) -> None:
         self.insert_calls.append({"table": table, "data": data, "columns": column_names})
+
+
+def reset_sync_globals() -> None:
+    main._SYNC_STATE = main.CompanySyncJobStatus()
+    main._SYNC_THREAD = None
+    main._SYNC_SCHEDULE_STATE = main.CompanySyncScheduleStatus()
+    main._SCHEDULE_THREAD = None
+    main._SCHEDULE_EVENT = threading.Event()
 
 
 GPW_FIXTURE = {
@@ -246,6 +258,41 @@ def test_harvester_sync_inserts_expected_rows():
     assert second["description"].startswith("PKN Orlen")
 
 
+def test_harvester_sync_reports_progress_events():
+    session = FakeSession(
+        [
+            FakeResponse(GPW_FIXTURE),
+            FakeResponse(YAHOO_CDR),
+            FakeResponse(YAHOO_PKN),
+        ]
+    )
+    harvester = CompanyDataHarvester(session=session)
+    fake_client = FakeClickHouseClient()
+
+    columns = [
+        "symbol",
+        "name",
+        "raw_payload",
+    ]
+
+    events: List[CompanySyncProgress] = []
+
+    result = harvester.sync(
+        ch_client=fake_client,
+        table_name="companies",
+        columns=columns,
+        progress_callback=lambda evt: events.append(evt),
+    )
+
+    assert events, "Powinny być emitowane zdarzenia postępu"
+    assert events[0].stage == "fetching"
+    assert events[-1].stage == "finished"
+    assert events[-1].synced == result.synced
+    harvesting_events = [evt for evt in events if evt.stage == "harvesting"]
+    assert harvesting_events, "Brak zdarzeń etapu harvestingu"
+    assert harvesting_events[-1].synced == result.synced
+
+
 def test_companies_sync_endpoint(monkeypatch):
     now = datetime.utcnow()
     fake_stats = CompanySyncResult(
@@ -294,4 +341,387 @@ def test_companies_sync_endpoint(monkeypatch):
     assert call["columns"] == ["symbol", "name"]
     assert call["limit"] == 50
 
+
+def test_companies_sync_background_endpoint(monkeypatch):
+    reset_sync_globals()
+    now = datetime.utcnow()
+    fake_stats = CompanySyncResult(
+        fetched=2,
+        synced=2,
+        failed=0,
+        errors=[],
+        started_at=now,
+        finished_at=now,
+        request_log=[],
+    )
+
+    class StubHarvester:
+        def sync(
+            self,
+            *,
+            ch_client: Any,
+            table_name: str,
+            columns: List[str],
+            limit: Optional[int] = None,
+            progress_callback=None,
+        ) -> CompanySyncResult:
+            if progress_callback:
+                progress_callback(
+                    CompanySyncProgress(
+                        stage="harvesting",
+                        total=2,
+                        processed=1,
+                        synced=1,
+                        failed=0,
+                        current_symbol="AAA",
+                        message="Przetwarzanie AAA",
+                    )
+                )
+            time.sleep(0.05)
+            return fake_stats
+
+    monkeypatch.setattr(main, "CompanyDataHarvester", lambda: StubHarvester())
+    monkeypatch.setattr(main, "get_ch", lambda: object())
+    monkeypatch.setattr(main, "_get_company_columns", lambda _client: ["symbol", "name"])
+    reset_sync_globals()
+
+    first_status = main.start_company_sync()
+    assert first_status.status == "running"
+    assert first_status.job_id
+
+    with pytest.raises(HTTPException) as conflict_exc:
+        main.start_company_sync()
+    assert conflict_exc.value.status_code == 409
+
+    final_status = None
+    for _ in range(20):
+        current = main.company_sync_status()
+        if current.status != "running":
+            final_status = current
+            break
+        time.sleep(0.05)
+
+    assert final_status is not None
+    assert final_status.status == "completed"
+    assert final_status.result is not None
+    assert final_status.result.synced == fake_stats.synced
+    assert final_status.total == fake_stats.fetched
+    assert final_status.processed >= fake_stats.fetched
+    assert final_status.errors == []
+
+    main._SYNC_STATE = main.CompanySyncJobStatus()
+    main._SYNC_THREAD = None
+
+
+def test_get_company_profile_endpoint(monkeypatch):
+    class FakeResult:
+        def __init__(self, columns: List[str], rows: List[tuple[Any, ...]]):
+            self.column_names = columns
+            self.result_rows = rows
+
+    class FakeClickHouse:
+        def query(self, sql: str, parameters: Optional[Dict[str, Any]] = None):
+            assert "LIMIT 1" in sql
+            assert parameters is not None
+            return FakeResult(
+                ["symbol", "name", "isin", "market_cap", "raw_payload"],
+                [
+                    (
+                        "CDR",
+                        "CD PROJEKT",
+                        "PLCDPRO00015",
+                        123.0,
+                        json.dumps({"gpw": {"stockTicker": "CDR"}}),
+                    )
+                ],
+            )
+
+    monkeypatch.setattr(main, "get_ch", lambda: FakeClickHouse())
+    monkeypatch.setattr(
+        main,
+        "_get_company_columns",
+        lambda _client: ["symbol", "name", "isin", "market_cap", "raw_payload"],
+    )
+
+    profile = main.get_company_profile("CDR")
+    assert profile.symbol.startswith("CDR")
+    assert profile.raw_symbol == "CDR"
+    assert profile.fundamentals.market_cap == 123.0
+
+
+def test_get_company_profile_not_found(monkeypatch):
+    class EmptyResult:
+        def __init__(self):
+            self.column_names = ["symbol"]
+            self.result_rows: List[tuple[Any, ...]] = []
+
+    class FakeClickHouse:
+        def query(self, sql: str, parameters: Optional[Dict[str, Any]] = None):
+            return EmptyResult()
+
+    monkeypatch.setattr(main, "get_ch", lambda: FakeClickHouse())
+    monkeypatch.setattr(main, "_get_company_columns", lambda _client: ["symbol"])
+
+    with pytest.raises(HTTPException) as exc:
+        main.get_company_profile("NONEXISTENT")
+    assert exc.value.status_code == 404
+
+
+def test_schedule_once_configuration(monkeypatch):
+    reset_sync_globals()
+    monkeypatch.setattr(main, "_ensure_schedule_thread_running", lambda: None)
+    target = datetime.utcnow() + timedelta(minutes=15)
+    request = main.CompanySyncScheduleRequest(mode="once", scheduled_for=target)
+    response = main.update_company_sync_schedule(request)
+    assert response.mode == "once"
+    assert response.next_run_at is not None
+    assert abs((response.next_run_at - target).total_seconds()) < 2
+    with main._SCHEDULE_LOCK:
+        assert main._SYNC_SCHEDULE_STATE.mode == "once"
+        assert main._SYNC_SCHEDULE_STATE.next_run_at == response.next_run_at
+
+
+def test_schedule_recurring_configuration(monkeypatch):
+    reset_sync_globals()
+    monkeypatch.setattr(main, "_ensure_schedule_thread_running", lambda: None)
+    start_at = datetime.utcnow() + timedelta(minutes=10)
+    request = main.CompanySyncScheduleRequest(
+        mode="recurring",
+        interval_minutes=90,
+        start_at=start_at,
+    )
+    response = main.update_company_sync_schedule(request)
+    assert response.mode == "recurring"
+    assert response.recurring_interval_minutes == 90
+    assert response.next_run_at is not None
+    assert abs((response.next_run_at - start_at).total_seconds()) < 2
+    with main._SCHEDULE_LOCK:
+        assert main._SYNC_SCHEDULE_STATE.mode == "recurring"
+        assert main._SYNC_SCHEDULE_STATE.recurring_interval_minutes == 90
+
+
+def test_schedule_cancel_clears_state(monkeypatch):
+    reset_sync_globals()
+    monkeypatch.setattr(main, "_ensure_schedule_thread_running", lambda: None)
+    future = datetime.utcnow() + timedelta(minutes=5)
+    main.update_company_sync_schedule(
+        main.CompanySyncScheduleRequest(mode="once", scheduled_for=future)
+    )
+    response = main.update_company_sync_schedule(
+        main.CompanySyncScheduleRequest(mode="cancel")
+    )
+    assert response.mode == "idle"
+    assert response.next_run_at is None
+    with main._SCHEDULE_LOCK:
+        assert main._SYNC_SCHEDULE_STATE.mode == "idle"
+        assert main._SYNC_SCHEDULE_STATE.next_run_at is None
+
+
+def test_check_and_run_scheduled_job_triggers_once(monkeypatch):
+    reset_sync_globals()
+    calls: List[Dict[str, Any]] = []
+
+    def fake_start_sync_job(limit: Optional[int], *, message: str) -> str:
+        calls.append({"limit": limit, "message": message})
+        main._SYNC_STATE = main.CompanySyncJobStatus(
+            job_id="scheduled-job",
+            status="running",
+            stage="fetching",
+            total=None,
+            processed=0,
+            synced=0,
+            failed=0,
+            started_at=datetime.utcnow(),
+            finished_at=None,
+            current_symbol=None,
+            message=message,
+            errors=[],
+            result=None,
+        )
+        main._SYNC_THREAD = None
+        return "scheduled-job"
+
+    monkeypatch.setattr(main, "_start_sync_job", fake_start_sync_job)
+    monkeypatch.setattr(main, "_notify_schedule_loop", lambda: None)
+    with main._SCHEDULE_LOCK:
+        main._SYNC_SCHEDULE_STATE.mode = "once"
+        main._SYNC_SCHEDULE_STATE.next_run_at = datetime.utcnow() - timedelta(seconds=1)
+
+    started = main._check_and_run_scheduled_job(datetime.utcnow())
+
+    assert started is True
+    assert calls and calls[0]["message"] == "Planowana synchronizacja spółek"
+    with main._SCHEDULE_LOCK:
+        assert main._SYNC_SCHEDULE_STATE.mode == "idle"
+        assert main._SYNC_SCHEDULE_STATE.next_run_at is None
+        assert main._SYNC_SCHEDULE_STATE.last_run_status == "running"
+        assert main._SYNC_SCHEDULE_STATE.last_run_started_at is not None
+
+
+def test_check_and_run_scheduled_job_triggers_recurring_sets_next(monkeypatch):
+    reset_sync_globals()
+    calls: List[Dict[str, Any]] = []
+
+    def fake_start_sync_job(limit: Optional[int], *, message: str) -> str:
+        calls.append({"limit": limit, "message": message})
+        main._SYNC_STATE = main.CompanySyncJobStatus(
+            job_id="recurring-job",
+            status="running",
+            stage="fetching",
+            total=None,
+            processed=0,
+            synced=0,
+            failed=0,
+            started_at=datetime.utcnow(),
+            finished_at=None,
+            current_symbol=None,
+            message=message,
+            errors=[],
+            result=None,
+        )
+        main._SYNC_THREAD = None
+        return "recurring-job"
+
+    monkeypatch.setattr(main, "_start_sync_job", fake_start_sync_job)
+    monkeypatch.setattr(main, "_notify_schedule_loop", lambda: None)
+    now = datetime.utcnow()
+    with main._SCHEDULE_LOCK:
+        main._SYNC_SCHEDULE_STATE.mode = "recurring"
+        main._SYNC_SCHEDULE_STATE.recurring_interval_minutes = 45
+        main._SYNC_SCHEDULE_STATE.next_run_at = now - timedelta(seconds=2)
+
+    started = main._check_and_run_scheduled_job(now)
+
+    assert started is True
+    assert calls and calls[-1]["message"] == "Planowana synchronizacja spółek"
+    with main._SCHEDULE_LOCK:
+        assert main._SYNC_SCHEDULE_STATE.mode == "recurring"
+        assert main._SYNC_SCHEDULE_STATE.next_run_at is not None
+        assert main._SYNC_SCHEDULE_STATE.next_run_at > now
+
+
+def test_schedule_completion_updates_success(monkeypatch):
+    reset_sync_globals()
+    monkeypatch.setattr(main, "_notify_schedule_loop", lambda: None)
+
+    class DummyHarvester:
+        def sync(
+            self,
+            *,
+            ch_client: Any,
+            table_name: str,
+            columns: List[str],
+            limit: Optional[int] = None,
+            progress_callback=None,
+        ) -> CompanySyncResult:
+            now = datetime.utcnow()
+            if progress_callback:
+                progress_callback(
+                    CompanySyncProgress(
+                        stage="fetching",
+                        total=2,
+                        processed=0,
+                        synced=0,
+                        failed=0,
+                        current_symbol=None,
+                        message="Start",
+                    )
+                )
+                progress_callback(
+                    CompanySyncProgress(
+                        stage="finished",
+                        total=2,
+                        processed=2,
+                        synced=2,
+                        failed=0,
+                        current_symbol=None,
+                        message="Koniec",
+                    )
+                )
+            return CompanySyncResult(
+                fetched=2,
+                synced=2,
+                failed=0,
+                errors=[],
+                started_at=now,
+                finished_at=now + timedelta(seconds=1),
+                request_log=[],
+            )
+
+    monkeypatch.setattr(main, "CompanyDataHarvester", DummyHarvester)
+    monkeypatch.setattr(main, "get_ch", lambda: object())
+    monkeypatch.setattr(main, "_get_company_columns", lambda _client: ["symbol"])
+
+    main._SYNC_STATE = main.CompanySyncJobStatus(
+        job_id="scheduled",
+        status="running",
+        stage="fetching",
+        total=None,
+        processed=0,
+        synced=0,
+        failed=0,
+        started_at=datetime.utcnow(),
+        finished_at=None,
+        current_symbol=None,
+        message="Planowana synchronizacja spółek",
+        errors=[],
+        result=None,
+    )
+    main._SYNC_THREAD = None
+    with main._SCHEDULE_LOCK:
+        main._SYNC_SCHEDULE_STATE.last_run_status = "running"
+        main._SYNC_SCHEDULE_STATE.last_run_started_at = datetime.utcnow()
+
+    main._run_company_sync_job("scheduled", None)
+
+    with main._SCHEDULE_LOCK:
+        assert main._SYNC_SCHEDULE_STATE.last_run_status == "success"
+        assert main._SYNC_SCHEDULE_STATE.last_run_finished_at is not None
+
+
+def test_schedule_completion_failure_updates_state(monkeypatch):
+    reset_sync_globals()
+    monkeypatch.setattr(main, "_notify_schedule_loop", lambda: None)
+
+    class FailingHarvester:
+        def sync(
+            self,
+            *,
+            ch_client: Any,
+            table_name: str,
+            columns: List[str],
+            limit: Optional[int] = None,
+            progress_callback=None,
+        ) -> CompanySyncResult:
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(main, "CompanyDataHarvester", FailingHarvester)
+    monkeypatch.setattr(main, "get_ch", lambda: object())
+    monkeypatch.setattr(main, "_get_company_columns", lambda _client: ["symbol"])
+
+    main._SYNC_STATE = main.CompanySyncJobStatus(
+        job_id="failing",
+        status="running",
+        stage="fetching",
+        total=None,
+        processed=0,
+        synced=0,
+        failed=0,
+        started_at=datetime.utcnow(),
+        finished_at=None,
+        current_symbol=None,
+        message="Planowana synchronizacja spółek",
+        errors=[],
+        result=None,
+    )
+    main._SYNC_THREAD = None
+    with main._SCHEDULE_LOCK:
+        main._SYNC_SCHEDULE_STATE.last_run_status = "running"
+        main._SYNC_SCHEDULE_STATE.last_run_started_at = datetime.utcnow()
+
+    main._run_company_sync_job("failing", None)
+
+    with main._SCHEDULE_LOCK:
+        assert main._SYNC_SCHEDULE_STATE.last_run_status == "failed"
+        assert main._SYNC_SCHEDULE_STATE.last_run_finished_at is not None
 
