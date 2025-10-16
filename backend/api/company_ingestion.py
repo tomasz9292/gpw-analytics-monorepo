@@ -134,8 +134,11 @@ def _extract_xml_error_detail(document: str) -> Optional[str]:
         return None
 
     def _collect_texts(tag: str) -> List[str]:
+        target = tag.lower()
         values: List[str] = []
-        for element in root.findall(f".//{tag}"):
+        for element in root.iter():
+            if element.tag.lower() != target:
+                continue
             text = " ".join(" ".join(element.itertext()).split())
             if text and text not in values:
                 values.append(text)
@@ -147,7 +150,17 @@ def _extract_xml_error_detail(document: str) -> Optional[str]:
     status_texts = _collect_texts("status")
     status_text = status_texts[0] if status_texts else None
 
-    detail_tags = ("message", "error", "title", "description", "details", "detail", "reason")
+    detail_tags = (
+        "message",
+        "error",
+        "title",
+        "description",
+        "details",
+        "detail",
+        "reason",
+        "statusdetails",
+        "statusdetail",
+    )
     detail_values: List[str] = []
     for tag in detail_tags:
         for value in _collect_texts(tag):
