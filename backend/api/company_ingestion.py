@@ -133,11 +133,19 @@ def _extract_xml_error_detail(document: str) -> Optional[str]:
     if root.tag.lower() == "html":
         return None
 
+    def _local_name(tag: str) -> str:
+        """Return the element tag name without any XML namespace."""
+
+        if "}" in tag:
+            return tag.rsplit("}", 1)[-1]
+        return tag
+
     def _collect_texts(tag: str) -> List[str]:
         target = tag.lower()
         values: List[str] = []
         for element in root.iter():
-            if element.tag.lower() != target:
+            element_tag = _local_name(element.tag).lower()
+            if element_tag != target:
                 continue
             text = " ".join(" ".join(element.itertext()).split())
             if text and text not in values:
