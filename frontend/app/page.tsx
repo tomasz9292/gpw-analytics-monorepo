@@ -229,7 +229,9 @@ const getDefaultScoreRules = (): ScoreBuilderRule[] => {
 };
 
 const GOOGLE_CLIENT_ID =
-    process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? process.env.GOOGLE_CLIENT_ID ?? "";
+    process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ??
+    process.env.GOOGLE_CLIENT_ID_FALLBACK ??
+    "";
 const GOOGLE_REDIRECT_PATH = "/api/auth/google/redirect";
 
 type GoogleCredentialResponse = {

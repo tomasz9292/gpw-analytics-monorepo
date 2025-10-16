@@ -1,5 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  env: {
+    GOOGLE_CLIENT_ID_FALLBACK: process.env.GOOGLE_CLIENT_ID,
+  },
   async rewrites() {
     const apiBase = process.env.NEXT_PUBLIC_API_BASE ||
       "https://gpw-analytics-starter-backend-1.onrender.com";
