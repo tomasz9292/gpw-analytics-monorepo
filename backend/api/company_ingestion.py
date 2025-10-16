@@ -10,7 +10,7 @@ from datetime import date, datetime
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
 from typing import Literal
 from urllib.error import URLError
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode, urlparse, parse_qs, urlsplit, urlunsplit
 from urllib.request import HTTPCookieProcessor, Request, build_opener
 from pydantic import BaseModel, Field
 
@@ -515,6 +515,38 @@ def _normalize_stooq_header(value: str) -> Optional[str]:
     return mapping.get(normalized)
 
 
+def _iter_stooq_catalog_urls(base_url: str) -> List[str]:
+    parsed = urlsplit(base_url)
+    base_query = parse_qs(parsed.query, keep_blank_values=True)
+
+    if "l" in base_query:
+        return [base_url]
+
+    normalized_query = {key: list(values) for key, values in base_query.items()}
+    normalized_query.setdefault("v", ["0"])
+
+    urls: List[str] = []
+    for suffix in [None, "2", "3", "4", "5"]:
+        query = {key: list(values) for key, values in normalized_query.items()}
+        if suffix is None:
+            query.pop("l", None)
+        else:
+            query["l"] = [suffix]
+        query_string = urlencode(query, doseq=True)
+        urls.append(
+            urlunsplit(
+                (
+                    parsed.scheme,
+                    parsed.netloc,
+                    parsed.path,
+                    query_string,
+                    parsed.fragment,
+                )
+            )
+        )
+    return urls
+
+
 def _extract_stooq_company_rows(document: str) -> List[Dict[str, Any]]:
     parser = _HtmlTableParser()
     parser.feed(document)
@@ -926,13 +958,24 @@ class CompanyDataHarvester:
         if not self.gpw_stooq_url:
             raise RuntimeError("Brak adresu katalogu spółek na Stooq")
 
-        document = self._get_text(self.gpw_stooq_url)
-        rows = _extract_stooq_company_rows(document)
-        if not rows:
+        collected: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+        for url in _iter_stooq_catalog_urls(self.gpw_stooq_url):
+            document = self._get_text(url)
+            rows = _extract_stooq_company_rows(document)
+            for row in rows:
+                ticker = row.get("stockTicker")
+                if not ticker or ticker in seen:
+                    continue
+                seen.add(ticker)
+                collected.append(row)
+                if limit is not None and len(collected) >= limit:
+                    return collected[:limit]
+
+        if not collected:
             raise RuntimeError("Nie udało się odczytać danych spółek ze Stooq")
-        if limit is not None:
-            return rows[:limit]
-        return rows
+
+        return collected
 
     def _should_try_gpw_fallback(self, exc: Exception) -> bool:
         message = str(exc)
