@@ -27,12 +27,22 @@ from api.company_ingestion import (
 
 
 class FakeResponse:
-    def __init__(self, payload: Dict[str, Any], status_code: int = 200) -> None:
+    def __init__(
+        self,
+        payload: Optional[Dict[str, Any]] = None,
+        status_code: int = 200,
+        error: Optional[str] = None,
+    ) -> None:
+        if payload is None and error is None:
+            raise ValueError("Należy dostarczyć payload lub komunikat błędu")
         self._payload = payload
+        self._error = error
         self.status_code = status_code
 
     def json(self) -> Dict[str, Any]:
-        return self._payload
+        if self._error is not None:
+            raise RuntimeError(self._error)
+        return self._payload or {}
 
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
@@ -164,6 +174,38 @@ GPW_FIXTURE = {
         },
     ],
 }
+
+
+def test_fetch_gpw_profiles_falls_back_to_rest_endpoint():
+    error_message = (
+        "Niepoprawna odpowiedź JSON (serwer zwrócił komunikat: "
+        "HandlerMappingException – Brak dopasowania akcji)"
+    )
+    session = FakeSession(
+        [
+            FakeResponse(error=error_message),
+            FakeResponse({"content": [GPW_FIXTURE["data"][0]]}),
+            FakeResponse({"content": [GPW_FIXTURE["data"][1]]}),
+        ]
+    )
+    harvester = CompanyDataHarvester(
+        session=session,
+        gpw_url="https://legacy.example",  # uproszczony adres do testów
+        gpw_fallback_url="https://fallback.example",
+    )
+
+    rows = harvester.fetch_gpw_profiles(limit=2, page_size=1)
+
+    assert rows == GPW_FIXTURE["data"]
+    assert session.calls[0]["url"].startswith("https://legacy.example")
+    assert session.calls[0]["params"] == {
+        "action": "GPWCompanyProfiles",
+        "start": 0,
+        "limit": 1,
+    }
+    assert session.calls[1]["url"].startswith("https://fallback.example")
+    assert session.calls[1]["params"] == {"page": 0, "size": 1}
+    assert session.calls[2]["params"] == {"page": 1, "size": 1}
 
 YAHOO_CDR = {
     "quoteSummary": {
