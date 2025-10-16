@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from http.cookiejar import CookieJar
+from html.parser import HTMLParser
 from xml.etree import ElementTree
 from datetime import date, datetime
 from typing import Any, Callable, Dict, List, Optional, Sequence
@@ -13,6 +14,7 @@ from pydantic import BaseModel, Field
 
 GPW_COMPANY_PROFILES_URL = "https://www.gpw.pl/ajaxindex.php"
 GPW_COMPANY_PROFILES_FALLBACK_URL = "https://www.gpw.pl/restapi/GPWCompanyProfiles"
+STOOQ_COMPANY_CATALOG_URL = "https://stooq.pl/t/?i=512"
 YAHOO_QUOTE_SUMMARY_URL = "https://query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol}"
 YAHOO_MODULES = (
     "price,assetProfile,summaryDetail,defaultKeyStatistics,financialData"
@@ -49,6 +51,13 @@ class SimpleHttpResponse:
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
             raise RuntimeError(f"HTTP {self.status_code}")
+
+    @property
+    def content(self) -> bytes:
+        return self._body
+
+    def text(self, encoding: str = "utf-8", errors: str = "replace") -> str:
+        return self._body.decode(encoding, errors=errors)
 
 
 class HttpRequestLog(BaseModel):
@@ -353,6 +362,201 @@ def _extract_company_rows(payload: Any) -> List[Dict[str, Any]]:
     return []
 
 
+class _HtmlTableState:
+    def __init__(self) -> None:
+        self.rows: List[List[str]] = []
+        self.current_row: Optional[List[str]] = None
+        self.current_cell: Optional[List[str]] = None
+        self.cell_depth: int = 0
+
+    def start_row(self) -> None:
+        self.current_row = []
+
+    def end_row(self) -> None:
+        if self.current_row is None:
+            return
+        cleaned = [" ".join(cell.split()) for cell in self.current_row]
+        if any(cleaned):
+            self.rows.append(cleaned)
+        self.current_row = None
+
+    def start_cell(self) -> None:
+        if self.current_row is None:
+            self.current_row = []
+        self.current_cell = []
+        self.cell_depth = 1
+
+    def append_data(self, data: str) -> None:
+        if self.current_cell is None:
+            return
+        self.current_cell.append(data)
+
+    def end_cell(self) -> None:
+        if self.current_cell is None or self.current_row is None:
+            self.current_cell = None
+            self.cell_depth = 0
+            return
+        text = "".join(self.current_cell)
+        text = " ".join(text.split())
+        self.current_row.append(text)
+        self.current_cell = None
+        self.cell_depth = 0
+
+
+class _HtmlTableParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self._stack: List[_HtmlTableState] = []
+        self.tables: List[List[List[str]]] = []
+
+    def handle_starttag(self, tag: str, attrs: Any) -> None:  # type: ignore[override]
+        if tag == "table":
+            self._stack.append(_HtmlTableState())
+            return
+
+        if not self._stack:
+            return
+
+        current = self._stack[-1]
+        if tag == "tr":
+            current.start_row()
+            return
+        if tag in {"td", "th"}:
+            current.start_cell()
+            return
+        if tag == "br":
+            current.append_data("\n")
+            return
+        if current.cell_depth > 0:
+            current.cell_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:  # type: ignore[override]
+        if not self._stack:
+            return
+
+        current = self._stack[-1]
+        if tag in {"td", "th"}:
+            current.end_cell()
+            return
+        if tag == "tr":
+            current.end_row()
+            return
+        if tag == "table":
+            finished = self._stack.pop()
+            if finished.rows:
+                self.tables.append(finished.rows)
+            return
+        if current.cell_depth > 0:
+            current.cell_depth -= 1
+
+    def handle_data(self, data: str) -> None:  # type: ignore[override]
+        if not self._stack:
+            return
+        current = self._stack[-1]
+        if current.cell_depth > 0 or current.current_cell is not None:
+            current.append_data(data)
+
+    def handle_entityref(self, name: str) -> None:  # type: ignore[override]
+        from html import unescape
+
+        self.handle_data(unescape(f"&{name};"))
+
+    def handle_charref(self, name: str) -> None:  # type: ignore[override]
+        from html import unescape
+
+        self.handle_data(unescape(f"&#{name};"))
+
+
+def _normalize_stooq_header(value: str) -> Optional[str]:
+    normalized = " ".join(value.strip().casefold().split())
+    if not normalized:
+        return None
+    mapping = {
+        "symbol": "symbol",
+        "ticker": "symbol",
+        "kod": "symbol",
+        "kod gpw": "symbol",
+        "nazwa": "name",
+        "nazwa spółki": "name",
+        "nazwa spolki": "name",
+        "spółka": "name",
+        "spolka": "name",
+        "nazwa skrócona": "short_name",
+        "nazwa skrocona": "short_name",
+        "isin": "isin",
+        "sektor": "sector",
+        "branża": "industry",
+        "branza": "industry",
+        "segment": "segment",
+        "rynek": "market",
+        "indeks": "index",
+        "kraj": "country",
+    }
+    return mapping.get(normalized)
+
+
+def _extract_stooq_company_rows(document: str) -> List[Dict[str, Any]]:
+    parser = _HtmlTableParser()
+    parser.feed(document)
+    parser.close()
+
+    for table in parser.tables:
+        if not table or len(table) < 2:
+            continue
+        header = table[0]
+        normalized = [_normalize_stooq_header(cell) for cell in header]
+        if normalized.count("symbol") != 1 or "name" not in normalized:
+            continue
+        index_map = {key: idx for idx, key in enumerate(normalized) if key}
+        symbol_index = index_map.get("symbol")
+        name_index = index_map.get("name")
+        if symbol_index is None or name_index is None:
+            continue
+
+        results: Dict[str, Dict[str, Any]] = {}
+        for raw_row in table[1:]:
+            if len(raw_row) < len(header):
+                raw_row = raw_row + [""] * (len(header) - len(raw_row))
+            symbol = _clean_string(raw_row[symbol_index]) if symbol_index < len(raw_row) else None
+            name = _clean_string(raw_row[name_index]) if name_index < len(raw_row) else None
+            if not symbol or not name:
+                continue
+
+            short_name_value = None
+            short_index = index_map.get("short_name")
+            if short_index is not None and short_index < len(raw_row):
+                short_name_value = _clean_string(raw_row[short_index])
+
+            row: Dict[str, Any] = {
+                "stockTicker": symbol.upper(),
+                "companyName": name,
+                "shortName": short_name_value or name,
+            }
+
+            def _assign(key: str, field: str) -> None:
+                idx = index_map.get(key)
+                if idx is None or idx >= len(raw_row):
+                    return
+                value = _clean_string(raw_row[idx])
+                if value:
+                    row[field] = value
+
+            _assign("isin", "isin")
+            _assign("sector", "sectorName")
+            _assign("industry", "subsectorName")
+            _assign("market", "market")
+            _assign("segment", "segment")
+            _assign("index", "index")
+            _assign("country", "country")
+
+            results[row["stockTicker"]] = row
+
+        if results:
+            return list(results.values())
+
+    return []
+
+
 class CompanyDataHarvester:
     """Pobiera dane o spółkach z darmowych źródeł i zapisuje do ClickHouse."""
 
@@ -362,11 +566,13 @@ class CompanyDataHarvester:
         gpw_url: str = GPW_COMPANY_PROFILES_URL,
         *,
         gpw_fallback_url: Optional[str] = GPW_COMPANY_PROFILES_FALLBACK_URL,
+        gpw_stooq_url: Optional[str] = STOOQ_COMPANY_CATALOG_URL,
         yahoo_url_template: str = YAHOO_QUOTE_SUMMARY_URL,
     ) -> None:
         self.session = session or SimpleHttpSession()
         self.gpw_url = gpw_url
         self.gpw_fallback_url = gpw_fallback_url
+        self.gpw_stooq_url = gpw_stooq_url
         self.yahoo_url_template = yahoo_url_template
 
     # ---------------------------
@@ -383,6 +589,22 @@ class CompanyDataHarvester:
         response.raise_for_status()
         return response.json()
 
+    def _get_text(self, url: str, *, params: Optional[Dict[str, Any]] = None) -> str:
+        try:
+            response = self.session.get(url, params=params, timeout=15)
+        except URLError as exc:  # pragma: no cover - zależy od środowiska uruch.
+            raise RuntimeError(f"Błąd połączenia z {url}: {exc}") from exc
+        except Exception as exc:  # pragma: no cover - obrona
+            raise RuntimeError(f"Nie udało się pobrać {url}: {exc}") from exc
+        response.raise_for_status()
+        text_getter = getattr(response, "text", None)
+        if callable(text_getter):
+            return text_getter()  # type: ignore[call-arg]
+        content = getattr(response, "content", None)
+        if isinstance(content, bytes):
+            return content.decode("utf-8", errors="replace")
+        raise RuntimeError(f"Brak treści w odpowiedzi z {url}")
+
     # ---------------------------
     # Fetchers
     # ---------------------------
@@ -396,11 +618,22 @@ class CompanyDataHarvester:
         try:
             return self._fetch_gpw_profiles_legacy(limit=limit, page_size=page_size)
         except RuntimeError as exc:
-            if not self._should_try_gpw_fallback(exc):
-                raise
-            if not self.gpw_fallback_url:
-                raise
-            return self._fetch_gpw_profiles_fallback(limit=limit, page_size=page_size)
+            last_error: Exception = exc
+            fallback_tried = False
+            if self.gpw_fallback_url and self._should_try_gpw_fallback(exc):
+                fallback_tried = True
+                try:
+                    return self._fetch_gpw_profiles_fallback(limit=limit, page_size=page_size)
+                except RuntimeError as fallback_exc:
+                    last_error = fallback_exc
+            if self.gpw_stooq_url:
+                try:
+                    return self._fetch_gpw_profiles_stooq(limit=limit)
+                except RuntimeError as stooq_exc:
+                    last_error = stooq_exc
+            if not fallback_tried and self.gpw_fallback_url and self._should_try_gpw_fallback(last_error):
+                return self._fetch_gpw_profiles_fallback(limit=limit, page_size=page_size)
+            raise last_error
 
     def _fetch_gpw_profiles_legacy(
         self,
@@ -450,6 +683,22 @@ class CompanyDataHarvester:
                 break
             page += 1
         return collected
+
+    def _fetch_gpw_profiles_stooq(
+        self,
+        *,
+        limit: Optional[int],
+    ) -> List[Dict[str, Any]]:
+        if not self.gpw_stooq_url:
+            raise RuntimeError("Brak adresu katalogu spółek na Stooq")
+
+        document = self._get_text(self.gpw_stooq_url)
+        rows = _extract_stooq_company_rows(document)
+        if not rows:
+            raise RuntimeError("Nie udało się odczytać danych spółek ze Stooq")
+        if limit is not None:
+            return rows[:limit]
+        return rows
 
     def _should_try_gpw_fallback(self, exc: Exception) -> bool:
         message = str(exc)
