@@ -310,7 +310,69 @@ def test_fetch_gpw_profiles_uses_stooq_when_rest_fallback_fails():
     ]
     assert session.calls[0]["url"].startswith("https://legacy.example")
     assert session.calls[1]["url"].startswith("https://fallback.example")
-    assert session.calls[2]["url"].startswith("https://stooq.example")
+    assert session.calls[2]["url"] == "https://stooq.example?v=0"
+
+
+def test_fetch_gpw_profiles_stooq_combines_multiple_pages():
+    error_message = (
+        "Niepoprawna odpowiedź JSON (serwer zwrócił komunikat: "
+        "HandlerMappingException – Brak dopasowania akcji)"
+    )
+    page_main = """
+    <html>
+      <body>
+        <table>
+          <tr><th>Symbol</th><th>Nazwa</th></tr>
+          <tr><td>AAA</td><td>AAA Corp</td></tr>
+        </table>
+      </body>
+    </html>
+    """
+    page_extra = """
+    <html>
+      <body>
+        <table>
+          <tr><th>Symbol</th><th>Nazwa</th></tr>
+          <tr><td>BBB</td><td>BBB Spółka</td></tr>
+          <tr><td>AAA</td><td>AAA Corp</td></tr>
+        </table>
+      </body>
+    </html>
+    """
+    empty_page = "<html><body><table><tr><th>Symbol</th><th>Nazwa</th></tr></table></body></html>"
+
+    session = FakeSession(
+        [
+            FakeResponse(error=error_message),
+            FakeResponse(status_code=500),
+            FakeResponse(text=page_main),
+            FakeResponse(text=page_extra),
+            FakeResponse(text=empty_page),
+            FakeResponse(text=empty_page),
+            FakeResponse(text=empty_page),
+        ]
+    )
+    harvester = CompanyDataHarvester(
+        session=session,
+        gpw_url="https://legacy.example",
+        gpw_fallback_url="https://fallback.example",
+        gpw_stooq_url="https://stooq.example",
+    )
+
+    rows = harvester.fetch_gpw_profiles(limit=None, page_size=1)
+
+    assert rows == [
+        {"stockTicker": "AAA", "companyName": "AAA Corp", "shortName": "AAA Corp"},
+        {"stockTicker": "BBB", "companyName": "BBB Spółka", "shortName": "BBB Spółka"},
+    ]
+    stooq_calls = session.calls[2:]
+    assert [call["url"] for call in stooq_calls] == [
+        "https://stooq.example?v=0",
+        "https://stooq.example?v=0&l=2",
+        "https://stooq.example?v=0&l=3",
+        "https://stooq.example?v=0&l=4",
+        "https://stooq.example?v=0&l=5",
+    ]
 
 
 def test_fetch_yahoo_summary_normalizes_gpw_suffix():
