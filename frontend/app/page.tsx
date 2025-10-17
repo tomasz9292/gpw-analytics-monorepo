@@ -706,6 +706,11 @@ const FUNDAMENTAL_ORDER = [
     "profit_margin",
 ];
 
+const HIGHLIGHT_FUNDAMENTALS = [
+    { key: "pe_ratio", label: "P/E" },
+    { key: "pb_ratio", label: "P/BV" },
+] as const;
+
 const FUNDAMENTAL_PERCENT_KEYS = new Set<string>([
     "dividend_yield",
     "roe",
@@ -2144,6 +2149,62 @@ const CompanySyncPanel = () => {
         selectedCompany?.employees !== undefined && selectedCompany?.employees !== null
             ? integerFormatter.format(selectedCompany.employees)
             : "—";
+    const indexMembership = useMemo(() => {
+        if (!selectedCompany) {
+            return [] as string[];
+        }
+
+        const candidateKeys = [
+            "index",
+            "indexes",
+            "indices",
+            "index_membership",
+            "indexMembership",
+            "indeks",
+        ];
+
+        const collected: string[] = [];
+        const addFromSource = (source?: Record<string, unknown>) => {
+            if (!source) return;
+            for (const key of candidateKeys) {
+                const rawValue = source[key];
+                if (!rawValue) continue;
+                if (typeof rawValue === "string") {
+                    collected.push(rawValue);
+                    continue;
+                }
+                if (Array.isArray(rawValue)) {
+                    for (const item of rawValue) {
+                        if (typeof item === "string") {
+                            collected.push(item);
+                        }
+                    }
+                }
+            }
+        };
+
+        addFromSource(selectedCompany.extra);
+        addFromSource(selectedCompany.raw);
+
+        const normalized = new Set<string>();
+        for (const rawEntry of collected) {
+            const sanitized = rawEntry.replace(/<[^>]+>/g, " ");
+            const parts = sanitized
+                .split(/[\n;,]+/)
+                .map((part) =>
+                    part
+                        .replace(/^[\s•·\-–—\u2022\u2023\u2043\u2219]+/, "")
+                        .replace(/\s+/g, " ")
+                        .trim()
+                )
+                .filter((part) => part.length > 0);
+            for (const part of parts) {
+                normalized.add(part);
+            }
+        }
+
+        return Array.from(normalized);
+    }, [selectedCompany]);
     const scheduleModeLabel = schedule
         ? SCHEDULE_MODE_LABELS[schedule.mode]
         : SCHEDULE_MODE_LABELS.idle;
@@ -2707,6 +2768,45 @@ const CompanySyncPanel = () => {
                                             : "—"}
                                     </span>
                                 </div>
+                            </div>
+                            <div className="grid gap-3 sm:grid-cols-2">
+                                {HIGHLIGHT_FUNDAMENTALS.map(({ key, label }) => {
+                                    const rawValue = selectedCompany.fundamentals?.[key] ?? null;
+                                    return (
+                                        <div
+                                            key={key}
+                                            className="rounded-xl border border-soft bg-soft-surface px-4 py-3"
+                                        >
+                                            <span className="block text-[10px] uppercase tracking-wide text-subtle">
+                                                {label}
+                                            </span>
+                                            <span className="text-lg font-semibold text-primary">
+                                                {formatFundamentalValue(key, rawValue)}
+                                            </span>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                            <div className="space-y-2">
+                                <h4 className="text-sm font-semibold text-primary">
+                                    Udział w indeksach
+                                </h4>
+                                {indexMembership.length > 0 ? (
+                                    <div className="flex flex-wrap gap-2">
+                                        {indexMembership.map((indexName) => (
+                                            <span
+                                                key={indexName}
+                                                className="rounded-full border border-soft bg-soft-surface px-3 py-1 text-xs font-medium text-primary"
+                                            >
+                                                {indexName}
+                                            </span>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <p className="text-xs text-subtle">
+                                        Brak informacji o udziałach w indeksach.
+                                    </p>
+                                )}
                             </div>
                             {fundamentalEntries.length > 0 && (
                                 <div className="space-y-3">
