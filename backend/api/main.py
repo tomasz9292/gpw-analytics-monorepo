@@ -992,6 +992,15 @@ def _get_company_columns(ch_client) -> List[str]:
         return _COMPANY_COLUMNS_CACHE
 
 
+def _find_company_symbol_column(columns: Sequence[str]) -> Optional[str]:
+    lowered_to_original = {col.lower(): col for col in columns}
+    for candidate in COMPANY_SYMBOL_CANDIDATES:
+        existing = lowered_to_original.get(candidate)
+        if existing:
+            return existing
+    return None
+
+
 def _normalize_company_row(row: Dict[str, Any], symbol_column: str) -> Optional[Dict[str, Any]]:
     canonical: Dict[str, Any] = {
         "raw_symbol": None,
@@ -2129,15 +2138,57 @@ def _calculate_symbol_score(
     return score
 
 
+def _collect_all_company_symbols(ch_client) -> Optional[List[str]]:
+    try:
+        columns = _get_company_columns(ch_client)
+    except HTTPException:
+        return None
+
+    symbol_column = _find_company_symbol_column(columns)
+    if not symbol_column:
+        return None
+
+    sql = (
+        f"SELECT DISTINCT {_quote_identifier(symbol_column)} "
+        f"FROM {TABLE_COMPANIES} "
+        f"ORDER BY {_quote_identifier(symbol_column)}"
+    )
+
+    try:
+        result = ch_client.query(sql)
+    except Exception:  # pragma: no cover - zależy od konfiguracji DB
+        return None
+
+    seen: set[str] = set()
+    symbols: List[str] = []
+    for row in result.result_rows:
+        if not row:
+            continue
+        raw_value = row[0]
+        if raw_value is None:
+            continue
+        normalized = normalize_input_symbol(str(raw_value))
+        if not normalized:
+            continue
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        symbols.append(normalized)
+
+    return symbols or None
+
+
 def _list_candidate_symbols(ch_client, filters: Optional[UniverseFilters]) -> List[str]:
-    rows = ch_client.query(
-        f"""
-        SELECT DISTINCT symbol
-        FROM {TABLE_OHLC}
-        ORDER BY symbol
-        """
-    ).result_rows
-    symbols = [str(r[0]) for r in rows]
+    symbols = _collect_all_company_symbols(ch_client)
+    if symbols is None:
+        rows = ch_client.query(
+            f"""
+            SELECT DISTINCT symbol
+            FROM {TABLE_OHLC}
+            ORDER BY symbol
+            """
+        ).result_rows
+        symbols = [str(r[0]) for r in rows]
 
     if not filters:
         return symbols
