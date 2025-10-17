@@ -405,6 +405,46 @@ def test_fetch_gpw_profiles_stooq_combines_multiple_pages():
     ]
 
 
+def test_fetch_stooq_profile_parses_company_details():
+    profile_html = """
+    <html>
+      <body>
+        <table>
+          <tr><td>Nazwa</td><td>AAA Spółka</td></tr>
+          <tr><td>Symbol</td><td>AAA</td></tr>
+          <tr><td>Skrót</td><td>AAA</td></tr>
+          <tr><td>ISIN</td><td>PLAAA0000001</td></tr>
+          <tr><td>WWW</td><td>https://aaa.example</td></tr>
+          <tr><td>Data debiutu</td><td>2010-01-02</td></tr>
+          <tr><td>Data założenia</td><td>1999</td></tr>
+          <tr><td>Zatrudnienie</td><td>123</td></tr>
+          <tr><td>Profil</td><td>Opis spółki AAA</td></tr>
+        </table>
+      </body>
+    </html>
+    """
+
+    session = FakeSession([FakeResponse(text=profile_html)])
+    harvester = CompanyDataHarvester(
+        session=session,
+        stooq_profile_url_template="https://stooq.example/q/p/?s={symbol}",
+    )
+
+    result = harvester.fetch_stooq_profile("AAA")
+
+    assert result["companyName"] == "AAA Spółka"
+    assert result["shortName"] == "AAA"
+    assert result["isin"] == "PLAAA0000001"
+    assert result["website"] == "https://aaa.example"
+    assert result["listing_date"] == "2010-01-02"
+    assert result["founded"] == 1999
+    assert result["employees"] == 123
+    assert result["profile"] == "Opis spółki AAA"
+    assert result["stockTicker"] == "AAA"
+    assert result["url"].endswith("aaa")
+    assert result["raw_fields"]
+
+
 def test_yahoo_fetch_is_disabled_by_default():
     harvester = CompanyDataHarvester(session=FakeSession([]))
 
@@ -434,7 +474,7 @@ def test_extract_symbol_trims_wa_suffix():
 
 def test_harvester_sync_inserts_expected_rows():
     session = FakeSession([FakeResponse(GPW_FIXTURE)])
-    harvester = CompanyDataHarvester(session=session)
+    harvester = CompanyDataHarvester(session=session, stooq_profile_url_template=None)
     fake_client = FakeClickHouseClient()
 
     columns = [
@@ -498,6 +538,7 @@ def test_harvester_sync_inserts_expected_rows():
     assert payload["gpw"]["stockTicker"] == "CDR"
     assert payload["yahoo"] is None
     assert payload["google"] is None
+    assert payload["stooq"] is None
 
     second = rows[1]
     assert second["symbol"] == "PKN"
@@ -506,11 +547,12 @@ def test_harvester_sync_inserts_expected_rows():
     assert second.get("dividend_yield") is None
     second_payload = json.loads(second["raw_payload"])
     assert second_payload["google"] is None
+    assert second_payload["stooq"] is None
 
 
 def test_harvester_sync_merges_existing_records_and_removes_duplicates():
     session = FakeSession([FakeResponse(GPW_FIXTURE)])
-    harvester = CompanyDataHarvester(session=session)
+    harvester = CompanyDataHarvester(session=session, stooq_profile_url_template=None)
     fake_client = FakeClickHouseClient()
 
     lookup_sql = "SELECT * FROM companies WHERE symbol IN ('CDR', 'PKN')"
@@ -560,9 +602,73 @@ def test_harvester_sync_merges_existing_records_and_removes_duplicates():
     assert "old" not in payload
 
 
+def test_harvester_sync_uses_stooq_profile_data():
+    gpw_payload = {
+        "success": True,
+        "data": [
+            {
+                "stockTicker": "AAA",
+                "companyName": "AAA Spółka",
+            }
+        ],
+    }
+    stooq_html = """
+    <html>
+      <body>
+        <table>
+          <tr><td>Symbol</td><td>AAA</td></tr>
+          <tr><td>WWW</td><td>https://aaa.example</td></tr>
+          <tr><td>Profil</td><td>Opis AAA</td></tr>
+          <tr><td>Zatrudnienie</td><td>45</td></tr>
+          <tr><td>Data debiutu</td><td>2015-03-01</td></tr>
+          <tr><td>Kraj</td><td>Polska</td></tr>
+          <tr><td>Miasto</td><td>Warszawa</td></tr>
+        </table>
+      </body>
+    </html>
+    """
+
+    session = FakeSession([FakeResponse(gpw_payload), FakeResponse(text=stooq_html)])
+    harvester = CompanyDataHarvester(session=session)
+    fake_client = FakeClickHouseClient()
+
+    columns = [
+        "symbol",
+        "name",
+        "website",
+        "description",
+        "employees",
+        "country",
+        "city",
+        "listing_date",
+        "raw_payload",
+    ]
+
+    result = harvester.sync(
+        ch_client=fake_client,
+        table_name="companies",
+        columns=columns,
+    )
+
+    assert result.synced == 1
+    insert_call = fake_client.insert_calls[0]
+    used_columns = insert_call["columns"]
+    rows = [dict(zip(used_columns, row)) for row in insert_call["data"]]
+    row = rows[0]
+    assert row["website"] == "https://aaa.example"
+    assert row["description"] == "Opis AAA"
+    assert row["employees"] == 45
+    assert row["country"] == "Polska"
+    assert row["city"] == "Warszawa"
+    assert row["listing_date"] == "2015-03-01"
+    payload = json.loads(row["raw_payload"])
+    assert payload["stooq"]["website"] == "https://aaa.example"
+    assert payload["stooq"]["employees"] == 45
+
+
 def test_harvester_sync_reports_progress_events():
     session = FakeSession([FakeResponse(GPW_FIXTURE)])
-    harvester = CompanyDataHarvester(session=session)
+    harvester = CompanyDataHarvester(session=session, stooq_profile_url_template=None)
     fake_client = FakeClickHouseClient()
 
     columns = [

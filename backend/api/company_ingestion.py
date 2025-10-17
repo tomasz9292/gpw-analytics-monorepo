@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 GPW_COMPANY_PROFILES_URL = "https://www.gpw.pl/ajaxindex.php"
 GPW_COMPANY_PROFILES_FALLBACK_URL = "https://www.gpw.pl/restapi/GPWCompanyProfiles"
 STOOQ_COMPANY_CATALOG_URL = "https://stooq.pl/t/?i=513"
+STOOQ_COMPANY_PROFILE_URL = "https://stooq.pl/q/p/?s={symbol}"
 YAHOO_QUOTE_SUMMARY_URL = "https://query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol}"
 YAHOO_MODULES = (
     "price,assetProfile,summaryDetail,defaultKeyStatistics,financialData"
@@ -643,6 +644,147 @@ def _extract_stooq_company_rows(document: str) -> List[Dict[str, Any]]:
     return []
 
 
+def _normalize_stooq_profile_label(value: str) -> Optional[str]:
+    cleaned = " ".join(value.strip().casefold().rstrip(":").split())
+    if not cleaned:
+        return None
+    mapping = {
+        "nazwa": "company_name",
+        "nazwa spółki": "company_name",
+        "nazwa spolki": "company_name",
+        "spółka": "company_name",
+        "spolka": "company_name",
+        "symbol": "symbol",
+        "ticker": "symbol",
+        "skrót": "short_name",
+        "skrot": "short_name",
+        "isin": "isin",
+        "sektor": "sector",
+        "branża": "industry",
+        "branza": "industry",
+        "segment": "segment",
+        "rynek": "market",
+        "indeks": "index",
+        "kraj": "country",
+        "miasto": "city",
+        "miejscowość": "city",
+        "adres": "address",
+        "siedziba": "address",
+        "strona www": "website",
+        "strona internetowa": "website",
+        "www": "website",
+        "profil": "profile",
+        "opis": "profile",
+        "opis działalności": "profile",
+        "opis dzialalnosci": "profile",
+        "zatrudnienie": "employees",
+        "liczba pracowników": "employees",
+        "liczba pracownikow": "employees",
+        "pracownicy": "employees",
+        "data debiutu": "ipo_date",
+        "debiut": "ipo_date",
+        "data pierwszych notowań": "ipo_date",
+        "data pierwszych notowan": "ipo_date",
+        "data pierwszego notowania": "ipo_date",
+        "data założenia": "founded",
+        "data zalozenia": "founded",
+        "rok założenia": "founded",
+        "rok zalozenia": "founded",
+        "powstanie": "founded",
+    }
+    return mapping.get(cleaned)
+
+
+def _parse_stooq_profile_document(document: str) -> Dict[str, Any]:
+    parser = _HtmlTableParser()
+    parser.feed(document)
+    parser.close()
+
+    raw_fields: Dict[str, str] = {}
+    normalized_fields: Dict[str, Any] = {}
+
+    for table in parser.tables:
+        if not table:
+            continue
+        for row in table:
+            if len(row) < 2:
+                continue
+            label = _clean_string(row[0])
+            if not label:
+                continue
+            values = [
+                part for part in (_clean_string(cell) for cell in row[1:]) if part is not None
+            ]
+            if not values:
+                continue
+            value = "\n".join(values)
+            raw_fields[label] = value
+            normalized = _normalize_stooq_profile_label(label)
+            if not normalized:
+                continue
+            if normalized == "website":
+                parsed_value = _clean_website(value)
+            elif normalized == "employees":
+                parsed_value = _clean_int(value)
+            elif normalized == "ipo_date":
+                parsed_value = _clean_date(value)
+            elif normalized == "founded":
+                parsed_value = _clean_int(value)
+            else:
+                parsed_value = _clean_string(value)
+            if parsed_value is None:
+                continue
+            existing = normalized_fields.get(normalized)
+            if existing is None or existing == "":
+                normalized_fields[normalized] = parsed_value
+
+    result: Dict[str, Any] = {"raw_fields": raw_fields}
+
+    if "company_name" in normalized_fields:
+        result["companyName"] = normalized_fields["company_name"]
+    if "symbol" in normalized_fields:
+        result["stockTicker"] = normalized_fields["symbol"]
+    if "short_name" in normalized_fields:
+        result["shortName"] = normalized_fields["short_name"]
+    if "isin" in normalized_fields:
+        result["isin"] = normalized_fields["isin"]
+    if "sector" in normalized_fields:
+        result["sectorName"] = normalized_fields["sector"]
+    if "industry" in normalized_fields:
+        result["subsectorName"] = normalized_fields["industry"]
+    if "segment" in normalized_fields:
+        result["segment"] = normalized_fields["segment"]
+    if "market" in normalized_fields:
+        result["market"] = normalized_fields["market"]
+    if "index" in normalized_fields:
+        result["index"] = normalized_fields["index"]
+    if "country" in normalized_fields:
+        result["country"] = normalized_fields["country"]
+    if "city" in normalized_fields:
+        result["city"] = normalized_fields["city"]
+    if "address" in normalized_fields:
+        result["address"] = normalized_fields["address"]
+    if "website" in normalized_fields:
+        result["website"] = normalized_fields["website"]
+    if "profile" in normalized_fields:
+        result["profile"] = normalized_fields["profile"]
+    if "employees" in normalized_fields:
+        result["employees"] = normalized_fields["employees"]
+    if "ipo_date" in normalized_fields:
+        date_value = normalized_fields["ipo_date"]
+        if date_value:
+            result["listing_date"] = date_value
+            result["ipo_date"] = date_value
+    if "founded" in normalized_fields:
+        founded_value = normalized_fields["founded"]
+        if founded_value:
+            result["founded"] = founded_value
+            result["founded_year"] = founded_value
+            result["established"] = founded_value
+
+    return result
+
+
 _JSON_SCRIPT_RE = re.compile(
     r"<script[^>]+type=\"application/(?:json|ld\+json)\"[^>]*>(.*?)</script>",
     re.IGNORECASE | re.DOTALL,
@@ -856,6 +998,7 @@ class CompanyDataHarvester:
         *,
         gpw_fallback_url: Optional[str] = GPW_COMPANY_PROFILES_FALLBACK_URL,
         gpw_stooq_url: Optional[str] = STOOQ_COMPANY_CATALOG_URL,
+        stooq_profile_url_template: Optional[str] = STOOQ_COMPANY_PROFILE_URL,
         yahoo_url_template: Optional[str] = None,
         google_url_template: Optional[str] = None,
     ) -> None:
@@ -863,6 +1006,7 @@ class CompanyDataHarvester:
         self.gpw_url = gpw_url
         self.gpw_fallback_url = gpw_fallback_url
         self.gpw_stooq_url = gpw_stooq_url
+        self.stooq_profile_url_template = stooq_profile_url_template
         self.yahoo_url_template = yahoo_url_template
         self.google_url_template = google_url_template
         self._yahoo_crumb: Optional[str] = None
@@ -1086,6 +1230,23 @@ class CompanyDataHarvester:
         )
         return parsed
 
+    def fetch_stooq_profile(self, raw_symbol: str) -> Dict[str, Any]:
+        if not self.stooq_profile_url_template:
+            raise RuntimeError("Pobieranie profili ze Stooq jest wyłączone")
+        normalized = _normalize_gpw_symbol(raw_symbol)
+        symbol_param = normalized.lower()
+        url = self.stooq_profile_url_template.format(symbol=symbol_param)
+        document = self._get_text(url)
+        parsed = _parse_stooq_profile_document(document)
+        raw_fields = parsed.get("raw_fields") if isinstance(parsed, dict) else None
+        if not raw_fields:
+            raise RuntimeError(f"Brak danych profilu Stooq dla {normalized}")
+        parsed.setdefault("url", url)
+        parsed.setdefault("symbol", normalized)
+        parsed.setdefault("stockTicker", normalized)
+        parsed.setdefault("retrieved_at", datetime.utcnow().isoformat())
+        return parsed
+
     # ---------------------------
     # Normalizacja
     # ---------------------------
@@ -1102,6 +1263,7 @@ class CompanyDataHarvester:
         base: Dict[str, Any],
         fundamentals: Optional[Dict[str, Any]],
         google: Optional[Dict[str, Any]] = None,
+        stooq: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         raw_symbol = self._extract_symbol(base)
         asset_profile = fundamentals.get("assetProfile") if fundamentals else None
@@ -1109,15 +1271,18 @@ class CompanyDataHarvester:
         summary_detail = fundamentals.get("summaryDetail") if fundamentals else None
         default_stats = fundamentals.get("defaultKeyStatistics") if fundamentals else None
         financial_data = fundamentals.get("financialData") if fundamentals else None
+        stooq_data = stooq or {}
 
         company_name = (
             _clean_string(base.get("companyName"))
             or _clean_string(price_info.get("longName") if price_info else None)
+            or _clean_string(stooq_data.get("companyName"))
             or _clean_string(base.get("shortName"))
         )
         short_name = (
             _clean_string(base.get("shortName"))
             or _clean_string(price_info.get("shortName") if price_info else None)
+            or _clean_string(stooq_data.get("shortName"))
             or company_name
         )
 
@@ -1127,6 +1292,7 @@ class CompanyDataHarvester:
                 or base.get("website")
                 or base.get("www")
                 or base.get("url")
+                or stooq_data.get("website")
             )
         )
 
@@ -1134,24 +1300,34 @@ class CompanyDataHarvester:
             _clean_string((asset_profile or {}).get("longBusinessSummary"))
             or _clean_string(base.get("profile"))
             or _clean_string(base.get("description"))
+            or _clean_string(stooq_data.get("profile"))
         )
 
         industry = (
             _clean_string((asset_profile or {}).get("industry"))
             or _clean_string(base.get("subsectorName"))
             or _clean_string(base.get("industry"))
+            or _clean_string(stooq_data.get("subsectorName"))
+            or _clean_string(stooq_data.get("industry"))
         )
         sector = (
             _clean_string((asset_profile or {}).get("sector"))
             or _clean_string(base.get("sectorName"))
             or _clean_string(base.get("sector"))
+            or _clean_string(stooq_data.get("sectorName"))
+            or _clean_string(stooq_data.get("sector"))
         )
         country = (
             _clean_string((asset_profile or {}).get("country"))
             or _clean_string(base.get("country"))
             or _clean_string(base.get("countryName"))
+            or _clean_string(stooq_data.get("country"))
         )
-        city = _clean_string((asset_profile or {}).get("city") or base.get("city"))
+        city = _clean_string(
+            (asset_profile or {}).get("city")
+            or base.get("city")
+            or stooq_data.get("city")
+        )
         state = _clean_string((asset_profile or {}).get("state") or base.get("state"))
 
         if city and country:
@@ -1159,13 +1335,15 @@ class CompanyDataHarvester:
         elif country:
             headquarters = country
         else:
-            headquarters = city
+            headquarters = _clean_string(stooq_data.get("address")) or city
 
         listing_date = _clean_date(
             base.get("firstQuotation")
             or base.get("firstQuotationDate")
             or base.get("firstListingDate")
             or base.get("ipoDate")
+            or stooq_data.get("listing_date")
+            or stooq_data.get("ipo_date")
         )
 
         founded_year = _clean_int(
@@ -1173,6 +1351,9 @@ class CompanyDataHarvester:
             or base.get("foundedYear")
             or base.get("established")
             or base.get("startYear")
+            or stooq_data.get("founded")
+            or stooq_data.get("founded_year")
+            or stooq_data.get("established")
         )
 
         logo_url = _logo_url_from_website(website)
@@ -1181,7 +1362,8 @@ class CompanyDataHarvester:
             "symbol": raw_symbol,
             "ticker": raw_symbol,
             "code": raw_symbol,
-            "isin": _clean_string(base.get("isin")),
+            "isin": _clean_string(base.get("isin"))
+            or _clean_string(stooq_data.get("isin")),
             "name": company_name,
             "company_name": company_name,
             "full_name": company_name,
@@ -1275,7 +1457,14 @@ class CompanyDataHarvester:
                 if row.get("established") is None:
                     row["established"] = founded_int
 
-        payload = {"gpw": base, "yahoo": fundamentals, "google": google}
+        stooq_employees = _clean_int(stooq_data.get("employees")) if stooq_data else None
+        if stooq_employees is not None:
+            if row.get("employees") is None:
+                row["employees"] = stooq_employees
+            if row.get("employee_count") is None:
+                row["employee_count"] = stooq_employees
+
+        payload = {"gpw": base, "yahoo": fundamentals, "google": google, "stooq": stooq}
         row["raw_payload"] = json.dumps(payload, ensure_ascii=False)
         return row
 
@@ -1405,6 +1594,7 @@ class CompanyDataHarvester:
 
             fundamentals: Optional[Dict[str, Any]] = None
             google_data: Optional[Dict[str, Any]] = None
+            stooq_data: Optional[Dict[str, Any]] = None
             if self.yahoo_url_template:
                 try:
                     fundamentals = self.fetch_yahoo_summary(symbol)
@@ -1417,7 +1607,13 @@ class CompanyDataHarvester:
                 except Exception as exc:  # pragma: no cover - network/API specific
                     errors.append(f"{symbol} [Google]: {exc}")
                     failed_count = len(errors)
-            row = self.build_row(base, fundamentals, google_data)
+            if self.stooq_profile_url_template:
+                try:
+                    stooq_data = self.fetch_stooq_profile(symbol)
+                except Exception as exc:  # pragma: no cover - network/API specific
+                    errors.append(f"{symbol} [Stooq]: {exc}")
+                    failed_count = len(errors)
+            row = self.build_row(base, fundamentals, google_data, stooq_data)
             deduplicated[symbol] = row
             deduplicated_count = len(deduplicated)
             emit(
