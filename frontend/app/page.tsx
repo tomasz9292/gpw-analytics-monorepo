@@ -216,7 +216,7 @@ const COMPANY_SIZE_KEYWORDS = [
 
 const RAW_FACT_CANDIDATES: { label: string; keywords: string[] }[] = [
     { label: "Segment", keywords: ["segment"] },
-    { label: "Rynek", keywords: ["market"] },
+    { label: "Rynek", keywords: ["market", "rynek"] },
     { label: "Free float", keywords: ["freefloat", "free float"] },
     { label: "Kapitał zakładowy", keywords: ["kapital", "capital", "sharecapital"] },
     { label: "Liczba akcji", keywords: ["liczbaakcji", "numberofshares", "sharesnumber", "sharescount"] },
@@ -307,7 +307,7 @@ const splitShareholdingString = (value: string): string[] => {
         .replace(/<br\s*\/?/gi, "\n")
         .replace(/<[^>]+>/g, " ");
     return withoutHtml
-        .split(/[\n\r;,•●▪·\u2022\u2023\u25CF\u25A0]+/)
+        .split(/[\n\r;•●▪·\u2022\u2023\u25CF\u25A0]+/)
         .map((part) =>
             part
                 .replace(/^[\s•·\-–—\u2022\u2023\u25CF\u25A0]+/, "")
@@ -2461,10 +2461,70 @@ const CompanySyncPanel = () => {
             return { shareholding: [], companySize: null, facts: [] };
         }
 
-        const rawPayloadCandidate =
-            selectedCompany.extra?.raw_payload ?? selectedCompany.raw?.raw_payload;
+        const extra = (selectedCompany.extra ?? {}) as Record<string, unknown>;
+        const shareholdingExtraRaw = extra["stooq_shareholding"];
+        const shareholdingFromExtra = Array.isArray(shareholdingExtraRaw)
+            ? Array.from(
+                  new Set(
+                      shareholdingExtraRaw
+                          .map((entry) =>
+                              typeof entry === "string"
+                                  ? entry.replace(/\s+/g, " ").trim()
+                                  : ""
+                          )
+                          .filter((entry) => Boolean(entry))
+                  )
+              ).slice(0, 20)
+            : [];
 
-        if (typeof rawPayloadCandidate !== "string" || !rawPayloadCandidate.trim()) {
+        const companySizeExtraRaw = extra["stooq_company_size"];
+        const companySizeFromExtra =
+            typeof companySizeExtraRaw === "string"
+                ? companySizeExtraRaw.replace(/\s+/g, " ").trim() || null
+                : null;
+
+        const factsExtraRaw = extra["stooq_facts"];
+        const factsFromExtra = Array.isArray(factsExtraRaw)
+            ? factsExtraRaw
+                  .map((fact) => {
+                      if (!fact || typeof fact !== "object") {
+                          return null;
+                      }
+                      const labelRaw = (fact as { label?: unknown }).label;
+                      const valueRaw = (fact as { value?: unknown }).value;
+                      if (typeof labelRaw !== "string" || typeof valueRaw !== "string") {
+                          return null;
+                      }
+                      const label = labelRaw.replace(/\s+/g, " ").trim();
+                      const value = valueRaw.replace(/\s+/g, " ").trim();
+                      if (!label || !value) {
+                          return null;
+                      }
+                      return { label, value };
+                  })
+                  .filter((fact): fact is { label: string; value: string } => Boolean(fact))
+            : [];
+
+        if (
+            shareholdingFromExtra.length > 0 ||
+            companySizeFromExtra ||
+            factsFromExtra.length > 0
+        ) {
+            return {
+                shareholding: shareholdingFromExtra,
+                companySize: companySizeFromExtra,
+                facts: factsFromExtra,
+            };
+        }
+
+        const rawPayloadCandidate =
+            typeof extra["raw_payload"] === "string"
+                ? (extra["raw_payload"] as string)
+                : typeof selectedCompany.raw?.raw_payload === "string"
+                ? (selectedCompany.raw?.raw_payload as string)
+                : null;
+
+        if (!rawPayloadCandidate || !rawPayloadCandidate.trim()) {
             return { shareholding: [], companySize: null, facts: [] };
         }
 
@@ -2481,6 +2541,19 @@ const CompanySyncPanel = () => {
     const indexMembership = useMemo(() => {
         if (!selectedCompany) {
             return [] as string[];
+        }
+
+        const extra = (selectedCompany.extra ?? {}) as Record<string, unknown>;
+        const stooqIndicesCandidate = extra["stooq_indices"];
+        if (Array.isArray(stooqIndicesCandidate)) {
+            const normalized = stooqIndicesCandidate
+                .map((entry) =>
+                    typeof entry === "string" ? entry.replace(/\s+/g, " ").trim() : ""
+                )
+                .filter((entry) => Boolean(entry));
+            if (normalized.length > 0) {
+                return Array.from(new Set(normalized));
+            }
         }
 
         const candidateKeys = [
@@ -2512,7 +2585,7 @@ const CompanySyncPanel = () => {
             }
         };
 
-        addFromSource(selectedCompany.extra);
+        addFromSource(extra);
         addFromSource(selectedCompany.raw);
 
         const normalized = new Set<string>();
