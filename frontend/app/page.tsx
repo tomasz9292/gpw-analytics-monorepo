@@ -171,6 +171,299 @@ const SCORE_TEMPLATE_STORAGE_KEY = "gpw_score_templates_v1";
 const AUTH_USER_STORAGE_KEY = "gpw_auth_user_v1";
 const AUTH_ADMIN_STORAGE_KEY = "gpw_auth_admin_v1";
 
+const SHAREHOLDER_KEYWORDS = [
+    "akcjonariat",
+    "akcjonariusz",
+    "akcjonariusze",
+    "akcjon",
+    "shareholder",
+    "shareholders",
+    "shareholderstructure",
+    "ownership",
+    "owner",
+];
+
+const SHAREHOLDER_NAME_KEYWORDS = [
+    "name",
+    "akcjon",
+    "shareholder",
+    "holder",
+    "entity",
+    "podmiot",
+];
+
+const SHAREHOLDER_STAKE_KEYWORDS = [
+    "udz",
+    "udzial",
+    "udział",
+    "stake",
+    "share",
+    "percent",
+    "procent",
+    "percentage",
+    "pakiet",
+];
+
+const COMPANY_SIZE_KEYWORDS = [
+    "wielkosc",
+    "wielkość",
+    "companysize",
+    "size",
+    "capitalisation",
+    "capitalization",
+    "classification",
+];
+
+const RAW_FACT_CANDIDATES: { label: string; keywords: string[] }[] = [
+    { label: "Segment", keywords: ["segment"] },
+    { label: "Rynek", keywords: ["market", "rynek"] },
+    { label: "Free float", keywords: ["freefloat", "free float"] },
+    { label: "Kapitał zakładowy", keywords: ["kapital", "capital", "sharecapital"] },
+    { label: "Liczba akcji", keywords: ["liczbaakcji", "numberofshares", "sharesnumber", "sharescount"] },
+];
+
+const normalizeKey = (key: string): string =>
+    key
+        .normalize("NFD")
+        .replace(/[^\p{L}\p{N}]+/gu, " ")
+        .replace(/[\u0300-\u036f]/g, "")
+        .trim()
+        .toLowerCase();
+
+const prettifyKey = (rawKey: string): string => {
+    const cleaned = rawKey
+        .replace(/[_\s]+/g, " ")
+        .replace(/[\u0300-\u036f]/g, "")
+        .trim();
+    if (!cleaned) {
+        return "";
+    }
+    return cleaned
+        .split(" ")
+        .filter(Boolean)
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(" ");
+};
+
+const deduplicateStrings = (values: string[], limit = Infinity): string[] => {
+    const seen = new Set<string>();
+    const output: string[] = [];
+    for (const value of values) {
+        const cleaned = value.replace(/\s+/g, " ").trim();
+        if (!cleaned) continue;
+        const normalized = cleaned.toLowerCase();
+        if (seen.has(normalized)) continue;
+        seen.add(normalized);
+        output.push(cleaned);
+        if (output.length >= limit) {
+            break;
+        }
+    }
+    return output;
+};
+
+const collectValuesByKeyKeywords = (
+    value: JsonValue,
+    keywords: string[],
+    limit?: number
+): JsonValue[] => {
+    if (!value || typeof value !== "object") {
+        return [];
+    }
+
+    const normalizedKeywords = keywords.map((keyword) => normalizeKey(keyword));
+    const results: JsonValue[] = [];
+    const stack: Array<{ key: string | null; value: JsonValue }> = [{ key: null, value }];
+
+    while (stack.length) {
+        const current = stack.pop();
+        if (!current) continue;
+        const currentValue = current.value;
+        if (Array.isArray(currentValue)) {
+            for (const item of currentValue) {
+                stack.push({ key: current.key, value: item });
+            }
+            continue;
+        }
+        if (currentValue && typeof currentValue === "object") {
+            for (const [childKey, childValue] of Object.entries(currentValue)) {
+                const normalizedKey = normalizeKey(childKey);
+                if (normalizedKeywords.some((keyword) => normalizedKey.includes(keyword))) {
+                    results.push(childValue as JsonValue);
+                    if (limit && results.length >= limit) {
+                        return results;
+                    }
+                }
+                stack.push({ key: childKey, value: childValue as JsonValue });
+            }
+        }
+    }
+
+    return results;
+};
+
+const splitShareholdingString = (value: string): string[] => {
+    const withoutHtml = value
+        .replace(/<br\s*\/?/gi, "\n")
+        .replace(/<[^>]+>/g, " ");
+    return withoutHtml
+        .split(/[\n\r;•●▪·\u2022\u2023\u25CF\u25A0]+/)
+        .map((part) =>
+            part
+                .replace(/^[\s•·\-–—\u2022\u2023\u25CF\u25A0]+/, "")
+                .replace(/\s+/g, " ")
+                .trim()
+        )
+        .filter(Boolean);
+};
+
+const flattenShareholdingValue = (value: JsonValue): string[] => {
+    if (value === null || value === undefined) {
+        return [];
+    }
+    if (typeof value === "string") {
+        return splitShareholdingString(value);
+    }
+    if (typeof value === "number") {
+        return [String(value)];
+    }
+    if (typeof value === "boolean") {
+        return [value ? "Tak" : "Nie"];
+    }
+    if (Array.isArray(value)) {
+        return value.flatMap((item) => flattenShareholdingValue(item));
+    }
+
+    const objectValue = value as { [key: string]: JsonValue };
+    const nameParts: string[] = [];
+    const stakeParts: string[] = [];
+    const otherParts: string[] = [];
+
+    for (const [rawKey, child] of Object.entries(objectValue)) {
+        const key = normalizeKey(rawKey);
+        const childValues = flattenShareholdingValue(child);
+        if (!childValues.length) {
+            continue;
+        }
+        if (SHAREHOLDER_NAME_KEYWORDS.some((keyword) => key.includes(keyword))) {
+            nameParts.push(...childValues);
+            continue;
+        }
+        if (SHAREHOLDER_STAKE_KEYWORDS.some((keyword) => key.includes(keyword))) {
+            stakeParts.push(...childValues);
+            continue;
+        }
+        otherParts.push(`${prettifyKey(rawKey)}: ${childValues.join(", ")}`.trim());
+    }
+
+    const combined: string[] = [];
+    if (nameParts.length || stakeParts.length) {
+        const main = [nameParts.join(" "), stakeParts.join(" ")]
+            .map((part) => part.replace(/\s+/g, " ").trim())
+            .filter(Boolean)
+            .join(" – ");
+        if (main) {
+            combined.push(main);
+        }
+    }
+    combined.push(...otherParts.filter(Boolean));
+
+    if (!combined.length) {
+        const fallback = Object.values(objectValue)
+            .flatMap((child) => flattenShareholdingValue(child))
+            .map((part) => part.replace(/\s+/g, " ").trim())
+            .filter(Boolean);
+        if (fallback.length) {
+            combined.push(fallback.join(", "));
+        }
+    }
+
+    return combined;
+};
+
+const flattenGenericValue = (value: JsonValue): string[] => {
+    if (value === null || value === undefined) {
+        return [];
+    }
+    if (typeof value === "string") {
+        const cleaned = value
+            .replace(/<br\s*\/?/gi, " ")
+            .replace(/<[^>]+>/g, " ")
+            .replace(/\s+/g, " ")
+            .trim();
+        return cleaned ? [cleaned] : [];
+    }
+    if (typeof value === "number") {
+        return [String(value)];
+    }
+    if (typeof value === "boolean") {
+        return [value ? "Tak" : "Nie"];
+    }
+    if (Array.isArray(value)) {
+        return deduplicateStrings(value.flatMap((item) => flattenGenericValue(item)));
+    }
+
+    const objectValue = value as { [key: string]: JsonValue };
+    const entries: string[] = [];
+    for (const [rawKey, child] of Object.entries(objectValue)) {
+        const childValues = flattenGenericValue(child);
+        if (!childValues.length) {
+            continue;
+        }
+        const label = prettifyKey(rawKey);
+        if (!label) {
+            entries.push(...childValues);
+        } else if (childValues.length === 1) {
+            entries.push(`${label}: ${childValues[0]}`);
+        } else {
+            entries.push(`${label}: ${childValues.join(", ")}`);
+        }
+    }
+    return entries;
+};
+
+const extractRawInsights = (payload: JsonValue): CompanyRawInsights => {
+    const shareholdingValues = collectValuesByKeyKeywords(payload, SHAREHOLDER_KEYWORDS);
+    const shareholding = deduplicateStrings(
+        shareholdingValues.flatMap((entry) => flattenShareholdingValue(entry)),
+        20
+    );
+
+    const companySizeMatch = collectValuesByKeyKeywords(payload, COMPANY_SIZE_KEYWORDS, 1)[0];
+    const companySizeCandidates = companySizeMatch ? flattenGenericValue(companySizeMatch) : [];
+    const companySize = companySizeCandidates.length ? companySizeCandidates[0] : null;
+
+    const facts: { label: string; value: string }[] = [];
+    for (const candidate of RAW_FACT_CANDIDATES) {
+        const matches = collectValuesByKeyKeywords(payload, candidate.keywords, 1);
+        if (!matches.length) {
+            continue;
+        }
+        const formatted = flattenGenericValue(matches[0]).find(Boolean);
+        if (!formatted) {
+            continue;
+        }
+        facts.push({ label: candidate.label, value: formatted });
+    }
+
+    const dedupedFacts: { label: string; value: string }[] = [];
+    const seenFacts = new Set<string>();
+    for (const fact of facts) {
+        const key = `${fact.label}|${fact.value}`.toLowerCase();
+        if (seenFacts.has(key)) {
+            continue;
+        }
+        seenFacts.add(key);
+        dedupedFacts.push(fact);
+    }
+
+    return {
+        shareholding,
+        companySize,
+        facts: dedupedFacts,
+    };
+};
+
 const resolveUniverseWithFallback = (
     universe: ScorePreviewRequest["universe"],
     fallback?: string[]
@@ -606,6 +899,20 @@ type CompanyProfileResponse = {
     raw: Record<string, unknown>;
 };
 
+type JsonValue =
+    | string
+    | number
+    | boolean
+    | null
+    | JsonValue[]
+    | { [key: string]: JsonValue };
+
+type CompanyRawInsights = {
+    shareholding: string[];
+    companySize: string | null;
+    facts: { label: string; value: string }[];
+};
+
 type CompanySyncResultPayload = {
     fetched: number;
     synced: number;
@@ -739,8 +1046,19 @@ const parseApiError = async (response: Response): Promise<string> => {
     }
     try {
         const parsed = JSON.parse(text);
-        if (parsed && typeof parsed.detail === "string") {
-            return parsed.detail;
+        if (parsed && typeof parsed === "object") {
+            const record = parsed as Record<string, unknown>;
+            const messageKeys: Array<"detail" | "error" | "message"> = [
+                "detail",
+                "error",
+                "message",
+            ];
+            for (const key of messageKeys) {
+                const value = record[key];
+                if (typeof value === "string" && value.trim()) {
+                    return value;
+                }
+            }
         }
     } catch {
         // ignorujemy – odpowiedź nie musi być JSON-em
@@ -2149,9 +2467,104 @@ const CompanySyncPanel = () => {
         selectedCompany?.employees !== undefined && selectedCompany?.employees !== null
             ? integerFormatter.format(selectedCompany.employees)
             : "—";
+    const rawInsights = useMemo<CompanyRawInsights>(() => {
+        if (!selectedCompany) {
+            return { shareholding: [], companySize: null, facts: [] };
+        }
+
+        const extra = (selectedCompany.extra ?? {}) as Record<string, unknown>;
+        const shareholdingExtraRaw = extra["stooq_shareholding"];
+        const shareholdingFromExtra = Array.isArray(shareholdingExtraRaw)
+            ? Array.from(
+                  new Set(
+                      shareholdingExtraRaw
+                          .map((entry) =>
+                              typeof entry === "string"
+                                  ? entry.replace(/\s+/g, " ").trim()
+                                  : ""
+                          )
+                          .filter((entry) => Boolean(entry))
+                  )
+              ).slice(0, 20)
+            : [];
+
+        const companySizeExtraRaw = extra["stooq_company_size"];
+        const companySizeFromExtra =
+            typeof companySizeExtraRaw === "string"
+                ? companySizeExtraRaw.replace(/\s+/g, " ").trim() || null
+                : null;
+
+        const factsExtraRaw = extra["stooq_facts"];
+        const factsFromExtra = Array.isArray(factsExtraRaw)
+            ? factsExtraRaw
+                  .map((fact) => {
+                      if (!fact || typeof fact !== "object") {
+                          return null;
+                      }
+                      const labelRaw = (fact as { label?: unknown }).label;
+                      const valueRaw = (fact as { value?: unknown }).value;
+                      if (typeof labelRaw !== "string" || typeof valueRaw !== "string") {
+                          return null;
+                      }
+                      const label = labelRaw.replace(/\s+/g, " ").trim();
+                      const value = valueRaw.replace(/\s+/g, " ").trim();
+                      if (!label || !value) {
+                          return null;
+                      }
+                      return { label, value };
+                  })
+                  .filter((fact): fact is { label: string; value: string } => Boolean(fact))
+            : [];
+
+        if (
+            shareholdingFromExtra.length > 0 ||
+            companySizeFromExtra ||
+            factsFromExtra.length > 0
+        ) {
+            return {
+                shareholding: shareholdingFromExtra,
+                companySize: companySizeFromExtra,
+                facts: factsFromExtra,
+            };
+        }
+
+        const rawPayloadCandidate =
+            typeof extra["raw_payload"] === "string"
+                ? (extra["raw_payload"] as string)
+                : typeof selectedCompany.raw?.raw_payload === "string"
+                ? (selectedCompany.raw?.raw_payload as string)
+                : null;
+
+        if (!rawPayloadCandidate || !rawPayloadCandidate.trim()) {
+            return { shareholding: [], companySize: null, facts: [] };
+        }
+
+        try {
+            const parsed = JSON.parse(rawPayloadCandidate) as JsonValue;
+            if (!parsed || typeof parsed !== "object") {
+                return { shareholding: [], companySize: null, facts: [] };
+            }
+            return extractRawInsights(parsed);
+        } catch {
+            return { shareholding: [], companySize: null, facts: [] };
+        }
+    }, [selectedCompany]);
     const indexMembership = useMemo(() => {
         if (!selectedCompany) {
             return [] as string[];
+        }
+
+        const extra = (selectedCompany.extra ?? {}) as Record<string, unknown>;
+        const stooqIndicesCandidate = extra["stooq_indices"];
+        if (Array.isArray(stooqIndicesCandidate)) {
+            const normalized = stooqIndicesCandidate
+                .map((entry) =>
+                    typeof entry === "string" ? entry.replace(/\s+/g, " ").trim() : ""
+                )
+                .filter((entry) => Boolean(entry));
+            if (normalized.length > 0) {
+                return Array.from(new Set(normalized));
+            }
         }
 
         const candidateKeys = [
@@ -2183,7 +2596,7 @@ const CompanySyncPanel = () => {
             }
         };
 
-        addFromSource(selectedCompany.extra);
+        addFromSource(extra);
         addFromSource(selectedCompany.raw);
 
         const normalized = new Set<string>();
@@ -2808,6 +3221,61 @@ const CompanySyncPanel = () => {
                                     </p>
                                 )}
                             </div>
+                            {(rawInsights.companySize || rawInsights.shareholding.length > 0 ||
+                                rawInsights.facts.length > 0) && (
+                                <div className="space-y-3">
+                                    <h4 className="text-sm font-semibold text-primary">
+                                        Dodatkowe dane z GPW
+                                    </h4>
+                                    {rawInsights.companySize && (
+                                        <div className="rounded-xl border border-soft bg-soft-surface px-4 py-3">
+                                            <span className="block text-[10px] uppercase tracking-wide text-subtle">
+                                                Wielkość spółki
+                                            </span>
+                                            <span className="text-sm font-semibold text-primary">
+                                                {rawInsights.companySize}
+                                            </span>
+                                        </div>
+                                    )}
+                                    {rawInsights.shareholding.length > 0 && (
+                                        <div className="rounded-xl border border-soft bg-soft-surface px-4 py-3">
+                                            <span className="block text-[10px] uppercase tracking-wide text-subtle">
+                                                Akcjonariat
+                                            </span>
+                                            <ul className="mt-2 space-y-1 text-xs text-subtle">
+                                                {rawInsights.shareholding.map((entry, index) => (
+                                                    <li
+                                                        key={`${entry}-${index}`}
+                                                        className="flex items-start gap-2"
+                                                    >
+                                                        <span className="mt-1 block h-1.5 w-1.5 flex-none rounded-full bg-primary/70" />
+                                                        <span className="leading-snug text-primary/80">
+                                                            {entry}
+                                                        </span>
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                        </div>
+                                    )}
+                                    {rawInsights.facts.length > 0 && (
+                                        <div className="grid gap-3 text-xs text-subtle sm:grid-cols-2">
+                                            {rawInsights.facts.map((fact) => (
+                                                <div
+                                                    key={`${fact.label}-${fact.value}`}
+                                                    className="rounded-xl border border-soft bg-soft-surface px-4 py-3"
+                                                >
+                                                    <span className="block text-[10px] uppercase tracking-wide text-subtle">
+                                                        {fact.label}
+                                                    </span>
+                                                    <span className="text-sm font-medium text-primary">
+                                                        {fact.value}
+                                                    </span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
                             {fundamentalEntries.length > 0 && (
                                 <div className="space-y-3">
                                     <h4 className="text-sm font-semibold text-primary">
