@@ -1,8 +1,9 @@
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 import sys
 
 import pytest
+from typing import List
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -28,13 +29,34 @@ class FakeResult:
 class FakeClickHouse:
     def __init__(self, data):
         self.data = {symbol: list(rows) for symbol, rows in data.items()}
+        self.queries: List[str] = []
 
     def query(self, sql, parameters=None):
         parameters = parameters or {}
         normalized_sql = " ".join(sql.split())
+        self.queries.append(normalized_sql)
 
         if "SELECT DISTINCT symbol" in normalized_sql:
             rows = [(sym,) for sym in sorted(self.data.keys())]
+            return FakeResult(rows)
+
+        if (
+            "WITH latest AS" in normalized_sql
+            and "symbol IN %(symbols)s" in normalized_sql
+            and "addDays" in normalized_sql
+        ):
+            symbols = parameters.get("symbols") or ()
+            window = int(parameters.get("window", 0))
+            rows = []
+            for sym in symbols:
+                history = self.data.get(sym, [])
+                if not history:
+                    continue
+                last_date = max(date.fromisoformat(ds) for ds, _ in history)
+                cutoff = (last_date - timedelta(days=window)).isoformat()
+                for ds, close in history:
+                    if ds >= cutoff:
+                        rows.append((sym, ds, close))
             return FakeResult(rows)
 
         if "SELECT toString(date) as date, open, high, low, close, volume" in normalized_sql:
@@ -117,6 +139,10 @@ def test_rank_symbols_with_multiple_components():
     ranked = main._rank_symbols_by_score(fake, list(data.keys()), components)
     ordered = [sym for sym, _ in ranked]
     assert ordered[:3] == ["CCC", "AAA", "BBB"]
+
+    history_queries = [q for q in fake.queries if "symbol IN %(symbols)s" in q]
+    assert history_queries, "expected bulk history query to be used"
+    assert all("WHERE symbol = %(sym)s" not in q for q in fake.queries)
 
 
 def test_backtest_portfolio_auto_handles_missing_history(monkeypatch):
