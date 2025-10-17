@@ -8052,6 +8052,8 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                                             rule.label ??
                                             metricOption?.label ??
                                             rule.metric;
+                                        const isCustomTotalReturn =
+                                            metricOption?.value === "total_return_custom";
 
                                         return (
                                             <div
@@ -8286,44 +8288,109 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                                                                 </Chip>
                                                             </div>
                                                         </div>
-                                                        <label className="flex flex-col gap-2">
-                                                            <span className="text-xs uppercase tracking-wide text-muted">
-                                                                Minimalna wartość
-                                                            </span>
-                                                            <input
-                                                                type="number"
-                                                                value={rule.min ?? ""}
-                                                                onChange={(e) =>
-                                                                    setScoreRules((prev) =>
-                                                                        prev.map((r) =>
-                                                                            r.id === rule.id
-                                                                                ? { ...r, min: e.target.value }
-                                                                                : r
-                                                                        )
-                                                                    )
-                                                                }
-                                                                className={inputBaseClasses}
-                                                            />
-                                                        </label>
-                                                        <label className="flex flex-col gap-2">
-                                                            <span className="text-xs uppercase tracking-wide text-muted">
-                                                                Maksymalna wartość
-                                                            </span>
-                                                            <input
-                                                                type="number"
-                                                                value={rule.max ?? ""}
-                                                                onChange={(e) =>
-                                                                    setScoreRules((prev) =>
-                                                                        prev.map((r) =>
-                                                                            r.id === rule.id
-                                                                                ? { ...r, max: e.target.value }
-                                                                                : r
-                                                                        )
-                                                                    )
-                                                                }
-                                                                className={inputBaseClasses}
-                                                            />
-                                                        </label>
+                                                        {isCustomTotalReturn ? (
+                                                            <div className="md:col-span-2 rounded-2xl border border-soft bg-surface p-4">
+                                                                <div className="text-sm font-medium text-primary">
+                                                                    Skala punktacji
+                                                                </div>
+                                                                <div className="text-xs text-subtle">
+                                                                    0 punktów, jeśli metryka jest mniejsza lub równa wartości
+                                                                    „Najgorszy wynik”. Maksimum punktów otrzymasz powyżej
+                                                                    wartości „Najlepszy wynik”.
+                                                                </div>
+                                                                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                                                                    <label className="flex flex-col gap-2">
+                                                                        <span className="text-xs uppercase tracking-wide text-muted">
+                                                                            Najgorszy wynik
+                                                                        </span>
+                                                                        <div className="relative">
+                                                                            <input
+                                                                                type="number"
+                                                                                value={rule.min ?? ""}
+                                                                                onChange={(e) =>
+                                                                                    setScoreRules((prev) =>
+                                                                                        prev.map((r) =>
+                                                                                            r.id === rule.id
+                                                                                                ? { ...r, min: e.target.value }
+                                                                                                : r
+                                                                                        )
+                                                                                    )
+                                                                                }
+                                                                                className={`${inputBaseClasses} pr-10`}
+                                                                            />
+                                                                            <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-muted">
+                                                                                %
+                                                                            </span>
+                                                                        </div>
+                                                                    </label>
+                                                                    <label className="flex flex-col gap-2">
+                                                                        <span className="text-xs uppercase tracking-wide text-muted">
+                                                                            Najlepszy wynik
+                                                                        </span>
+                                                                        <div className="relative">
+                                                                            <input
+                                                                                type="number"
+                                                                                value={rule.max ?? ""}
+                                                                                onChange={(e) =>
+                                                                                    setScoreRules((prev) =>
+                                                                                        prev.map((r) =>
+                                                                                            r.id === rule.id
+                                                                                                ? { ...r, max: e.target.value }
+                                                                                                : r
+                                                                                        )
+                                                                                    )
+                                                                                }
+                                                                                className={`${inputBaseClasses} pr-10`}
+                                                                            />
+                                                                            <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-muted">
+                                                                                %
+                                                                            </span>
+                                                                        </div>
+                                                                    </label>
+                                                                </div>
+                                                            </div>
+                                                        ) : (
+                                                            <>
+                                                                <label className="flex flex-col gap-2">
+                                                                    <span className="text-xs uppercase tracking-wide text-muted">
+                                                                        Minimalna wartość
+                                                                    </span>
+                                                                    <input
+                                                                        type="number"
+                                                                        value={rule.min ?? ""}
+                                                                        onChange={(e) =>
+                                                                            setScoreRules((prev) =>
+                                                                                prev.map((r) =>
+                                                                                    r.id === rule.id
+                                                                                        ? { ...r, min: e.target.value }
+                                                                                        : r
+                                                                                )
+                                                                            )
+                                                                        }
+                                                                        className={inputBaseClasses}
+                                                                    />
+                                                                </label>
+                                                                <label className="flex flex-col gap-2">
+                                                                    <span className="text-xs uppercase tracking-wide text-muted">
+                                                                        Maksymalna wartość
+                                                                    </span>
+                                                                    <input
+                                                                        type="number"
+                                                                        value={rule.max ?? ""}
+                                                                        onChange={(e) =>
+                                                                            setScoreRules((prev) =>
+                                                                                prev.map((r) =>
+                                                                                    r.id === rule.id
+                                                                                        ? { ...r, max: e.target.value }
+                                                                                        : r
+                                                                                )
+                                                                            )
+                                                                        }
+                                                                        className={inputBaseClasses}
+                                                                    />
+                                                                </label>
+                                                            </>
+                                                        )}
                                                     </div>
                                                     <div className="grid gap-3 md:grid-cols-2">
                                                         <label className="flex flex-col gap-2">
