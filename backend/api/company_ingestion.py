@@ -822,8 +822,8 @@ class CompanyDataHarvester:
         *,
         gpw_fallback_url: Optional[str] = GPW_COMPANY_PROFILES_FALLBACK_URL,
         gpw_stooq_url: Optional[str] = STOOQ_COMPANY_CATALOG_URL,
-        yahoo_url_template: str = YAHOO_QUOTE_SUMMARY_URL,
-        google_url_template: str = GOOGLE_FINANCE_QUOTE_URL,
+        yahoo_url_template: Optional[str] = None,
+        google_url_template: Optional[str] = None,
     ) -> None:
         self.session = session or SimpleHttpSession()
         self.gpw_url = gpw_url
@@ -832,9 +832,9 @@ class CompanyDataHarvester:
         self.yahoo_url_template = yahoo_url_template
         self.google_url_template = google_url_template
         self._yahoo_crumb: Optional[str] = None
-        parsed_yahoo_url = urlparse(self.yahoo_url_template)
+        parsed_yahoo_url = urlparse(self.yahoo_url_template) if self.yahoo_url_template else None
         self._yahoo_crumb_url: Optional[str]
-        if parsed_yahoo_url.scheme and parsed_yahoo_url.netloc:
+        if parsed_yahoo_url and parsed_yahoo_url.scheme and parsed_yahoo_url.netloc:
             self._yahoo_crumb_url = (
                 f"{parsed_yahoo_url.scheme}://{parsed_yahoo_url.netloc}/v1/test/getcrumb"
             )
@@ -986,6 +986,8 @@ class CompanyDataHarvester:
         return any(indicator in message for indicator in indicators)
 
     def fetch_yahoo_summary(self, raw_symbol: str) -> Dict[str, Any]:
+        if not self.yahoo_url_template:
+            raise RuntimeError("Pobieranie danych z Yahoo Finance jest wyłączone")
         normalized = _normalize_gpw_symbol(raw_symbol)
         symbol = f"{normalized}.WA"
         payload = self._fetch_yahoo_payload(symbol)
@@ -995,6 +997,8 @@ class CompanyDataHarvester:
         return result[0]
 
     def _fetch_yahoo_payload(self, symbol: str) -> Dict[str, Any]:
+        if not self.yahoo_url_template:
+            raise RuntimeError("Pobieranie danych z Yahoo Finance jest wyłączone")
         url = self.yahoo_url_template.format(symbol=symbol)
         base_params: Dict[str, Any] = {"modules": YAHOO_MODULES}
         params = dict(base_params)
@@ -1032,6 +1036,8 @@ class CompanyDataHarvester:
         return True
 
     def fetch_google_overview(self, raw_symbol: str) -> Dict[str, Any]:
+        if not self.google_url_template:
+            raise RuntimeError("Pobieranie danych z Google Finance jest wyłączone")
         normalized = _normalize_gpw_symbol(raw_symbol)
         symbol = f"{normalized}:WSE"
         url = self.google_url_template.format(symbol=symbol)
@@ -1309,18 +1315,20 @@ class CompanyDataHarvester:
                 )
                 continue
 
-            fundamentals: Dict[str, Any] = {}
-            google_data: Dict[str, Any] = {}
-            try:
-                fundamentals = self.fetch_yahoo_summary(symbol)
-            except Exception as exc:  # pragma: no cover - network/API specific
-                errors.append(f"{symbol} [Yahoo]: {exc}")
-                failed_count = len(errors)
-            try:
-                google_data = self.fetch_google_overview(symbol)
-            except Exception as exc:  # pragma: no cover - network/API specific
-                errors.append(f"{symbol} [Google]: {exc}")
-                failed_count = len(errors)
+            fundamentals: Optional[Dict[str, Any]] = None
+            google_data: Optional[Dict[str, Any]] = None
+            if self.yahoo_url_template:
+                try:
+                    fundamentals = self.fetch_yahoo_summary(symbol)
+                except Exception as exc:  # pragma: no cover - network/API specific
+                    errors.append(f"{symbol} [Yahoo]: {exc}")
+                    failed_count = len(errors)
+            if self.google_url_template:
+                try:
+                    google_data = self.fetch_google_overview(symbol)
+                except Exception as exc:  # pragma: no cover - network/API specific
+                    errors.append(f"{symbol} [Google]: {exc}")
+                    failed_count = len(errors)
             row = self.build_row(base, fundamentals, google_data)
             deduplicated[symbol] = row
             deduplicated_count = len(deduplicated)
