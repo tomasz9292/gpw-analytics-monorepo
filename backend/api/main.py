@@ -1924,6 +1924,58 @@ def _fetch_close_history(ch_client, raw_symbol: str) -> List[Tuple[str, float]]:
     return [(str(d), float(c)) for (d, c) in rows]
 
 
+def _collect_close_history_bulk(
+    ch_client,
+    symbols: Sequence[str],
+    components: Sequence[ScoreComponent],
+) -> Dict[str, List[Tuple[str, float]]]:
+    """Fetches close history for a batch of symbols using a single ClickHouse query."""
+
+    unique_symbols = []
+    seen = set()
+    for sym in symbols:
+        if sym and sym not in seen:
+            seen.add(sym)
+            unique_symbols.append(sym)
+
+    if not unique_symbols or not components:
+        return {sym: [] for sym in unique_symbols}
+
+    max_lookback = max(component.lookback_days for component in components)
+    # Add a small buffer to account for non-trading days and ensure we have
+    # sufficient history for metrics relying on older prices.
+    window = int(max_lookback + 30)
+
+    rows = ch_client.query(
+        f"""
+        WITH latest AS (
+            SELECT symbol, max(date) AS last_date
+            FROM {TABLE_OHLC}
+            WHERE symbol IN %(symbols)s
+            GROUP BY symbol
+        )
+        SELECT o.symbol, toString(o.date) AS date, o.close
+        FROM {TABLE_OHLC} AS o
+        INNER JOIN latest AS l ON o.symbol = l.symbol
+        WHERE o.symbol IN %(symbols)s
+          AND o.date >= addDays(l.last_date, -%(window)s)
+        ORDER BY o.symbol, o.date
+        """,
+        parameters={"symbols": tuple(unique_symbols), "window": window},
+    ).result_rows
+
+    history: Dict[str, List[Tuple[str, float]]] = {sym: [] for sym in unique_symbols}
+    for raw_symbol, raw_date, close in rows:
+        history.setdefault(str(raw_symbol), []).append((str(raw_date), float(close)))
+
+    # Ensure all requested symbols are present in the mapping, even if no rows
+    # were returned for them.
+    for sym in unique_symbols:
+        history.setdefault(sym, [])
+
+    return history
+
+
 def _ensure_date(value: object) -> date:
     """Przekształca różne reprezentacje daty na ``datetime.date``."""
 
@@ -2041,8 +2093,13 @@ def _calculate_symbol_score(
     raw_symbol: str,
     components: List[ScoreComponent],
     include_metrics: bool = False,
+    *,
+    preloaded_closes: Optional[List[Tuple[str, float]]] = None,
 ) -> Optional[Tuple[float, Dict[str, float]] | float]:
-    closes_raw = _fetch_close_history(ch_client, raw_symbol)
+    if preloaded_closes is not None:
+        closes_raw = preloaded_closes
+    else:
+        closes_raw = _fetch_close_history(ch_client, raw_symbol)
     closes = _prepare_metric_series(closes_raw)
     if not closes:
         return None
@@ -2120,10 +2177,15 @@ def _rank_symbols_by_score(
     components: List[ScoreComponent],
     include_metrics: bool = False,
 ) -> List[Tuple[str, float] | Tuple[str, float, Dict[str, float]]]:
+    history_map = _collect_close_history_bulk(ch_client, candidates, components)
     ranked: List[Tuple[str, float] | Tuple[str, float, Dict[str, float]]] = []
     for sym in candidates:
         result = _calculate_symbol_score(
-            ch_client, sym, components, include_metrics=include_metrics
+            ch_client,
+            sym,
+            components,
+            include_metrics=include_metrics,
+            preloaded_closes=history_map.get(sym),
         )
         if result is None:
             continue
