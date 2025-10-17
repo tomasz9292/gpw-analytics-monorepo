@@ -78,12 +78,15 @@ const buildScoreComponents = (rules: ScoreBuilderRule[]): ScoreComponentRequest[
             ? rule.direction
             : option.defaultDirection;
 
+        const lookbackDays = resolveLookbackDays(option, rule.lookbackDays);
+        const label = computeMetricLabel(option, lookbackDays, rule.label);
+
         acc.push({
             metric: option.backendMetric,
-            lookback_days: option.lookback,
+            lookback_days: lookbackDays,
             weight: Number(weightNumeric),
             direction,
-            label: option.label,
+            label,
         });
         return acc;
     }, []);
@@ -94,6 +97,15 @@ const createRuleId = () =>
 const createTemplateId = () =>
     `tpl-${Math.random().toString(36).slice(2, 8)}-${Date.now().toString(36)}`;
 
+type ScoreMetricLookbackConfig = {
+    min: number;
+    max: number;
+    step?: number;
+    default: number;
+    presets?: { label: string; value: number }[];
+    formatLabel?: (lookbackDays: number) => string;
+};
+
 type ScoreMetricOption = {
     value: string;
     label: string;
@@ -101,6 +113,7 @@ type ScoreMetricOption = {
     lookback: number;
     defaultDirection: "asc" | "desc";
     description?: string;
+    customLookback?: ScoreMetricLookbackConfig;
 };
 
 const SCORE_METRIC_OPTIONS: ScoreMetricOption[] = [
@@ -152,6 +165,30 @@ const SCORE_METRIC_OPTIONS: ScoreMetricOption[] = [
         defaultDirection: "desc",
         description: "Współczynnik Sharpe'a liczony na danych dziennych (ostatni rok).",
     },
+    {
+        value: "total_return_custom",
+        label: "Zmiana ceny (dowolny okres)",
+        backendMetric: "total_return",
+        lookback: 252,
+        defaultDirection: "desc",
+        description: "Wybierz liczbę dni wstecz, aby policzyć zmianę ceny.",
+        customLookback: {
+            min: 5,
+            max: 3650,
+            step: 1,
+            default: 252,
+            presets: [
+                { label: "1M", value: 21 },
+                { label: "3M", value: 63 },
+                { label: "6M", value: 126 },
+                { label: "1R", value: 252 },
+                { label: "3L", value: 756 },
+                { label: "5L", value: 1260 },
+            ],
+            formatLabel: (lookbackDays) =>
+                `Zmiana ceny (${lookbackDays} dni)`,
+        },
+    },
 ];
 
 const SCORE_UNIVERSE_FALLBACK: string[] = [
@@ -170,6 +207,45 @@ const SCORE_UNIVERSE_FALLBACK: string[] = [
 const SCORE_TEMPLATE_STORAGE_KEY = "gpw_score_templates_v1";
 const AUTH_USER_STORAGE_KEY = "gpw_auth_user_v1";
 const AUTH_ADMIN_STORAGE_KEY = "gpw_auth_admin_v1";
+
+const clampNumber = (value: number, min: number, max: number): number => {
+    if (Number.isNaN(value)) return min;
+    if (value < min) return min;
+    if (value > max) return max;
+    return value;
+};
+
+const resolveLookbackDays = (
+    option: ScoreMetricOption | undefined,
+    lookbackDays?: number | null
+): number => {
+    const custom = option?.customLookback;
+    const fallback = custom?.default ?? option?.lookback ?? 252;
+    const candidate = typeof lookbackDays === "number" ? lookbackDays : Number(lookbackDays);
+    const numeric = Number.isFinite(candidate) ? candidate : fallback;
+    if (custom) {
+        const { min, max, step = 1 } = custom;
+        const clamped = clampNumber(Math.round(numeric), min, max);
+        const snapped = Math.round(clamped / step) * step;
+        return clampNumber(snapped, min, max);
+    }
+    return Math.round(numeric);
+};
+
+const computeMetricLabel = (
+    option: ScoreMetricOption | undefined,
+    lookbackDays: number,
+    fallbackLabel?: string | null
+): string | undefined => {
+    const trimmedFallback = fallbackLabel?.trim();
+    if (trimmedFallback) {
+        return trimmedFallback;
+    }
+    if (option?.customLookback?.formatLabel) {
+        return option.customLookback.formatLabel(lookbackDays);
+    }
+    return option?.label;
+};
 
 const SHAREHOLDER_KEYWORDS = [
     "akcjonariat",
@@ -486,23 +562,43 @@ const resolveUniverseWithFallback = (
     return undefined;
 };
 
-const toTemplateRule = (rule: ScoreBuilderRule): ScoreTemplateRule => ({
-    metric: rule.metric,
-    weight: Number(rule.weight) || 0,
-    direction: rule.direction === "asc" ? "asc" : "desc",
-    label: rule.label ?? null,
-    transform: rule.transform ?? "raw",
-});
-
-const fromTemplateRules = (rules: ScoreTemplateRule[]): ScoreBuilderRule[] =>
-    rules.map((rule) => ({
-        id: createRuleId(),
+const toTemplateRule = (rule: ScoreBuilderRule): ScoreTemplateRule => {
+    const option = findScoreMetric(rule.metric);
+    const lookbackDays = resolveLookbackDays(option, rule.lookbackDays);
+    const label =
+        computeMetricLabel(option, lookbackDays, rule.label) ??
+        rule.label ??
+        option?.label ??
+        rule.metric;
+    return {
         metric: rule.metric,
         weight: Number(rule.weight) || 0,
         direction: rule.direction === "asc" ? "asc" : "desc",
-        label: rule.label ?? findScoreMetric(rule.metric)?.label ?? undefined,
+        label: label ?? null,
         transform: rule.transform ?? "raw",
-    }));
+        lookbackDays,
+    };
+};
+
+const fromTemplateRules = (rules: ScoreTemplateRule[]): ScoreBuilderRule[] =>
+    rules.map((rule) => {
+        const option = findScoreMetric(rule.metric);
+        const lookbackDays = resolveLookbackDays(option, rule.lookbackDays);
+        const label =
+            computeMetricLabel(option, lookbackDays, rule.label) ??
+            rule.label ??
+            option?.label ??
+            rule.metric;
+        return {
+            id: createRuleId(),
+            metric: rule.metric,
+            weight: Number(rule.weight) || 0,
+            direction: rule.direction === "asc" ? "asc" : "desc",
+            label,
+            transform: rule.transform ?? "raw",
+            lookbackDays,
+        };
+    });
 
 const getDefaultScoreRules = (): ScoreBuilderRule[] => {
     const picks: { option: ScoreMetricOption; weight: number }[] = [
@@ -512,14 +608,20 @@ const getDefaultScoreRules = (): ScoreBuilderRule[] => {
         { option: SCORE_METRIC_OPTIONS[4], weight: 15 },
     ].filter((item) => item.option);
 
-    return picks.map(({ option, weight }) => ({
-        id: createRuleId(),
-        metric: option.value,
-        label: option.label,
-        weight,
-        direction: option.defaultDirection,
-        transform: "raw",
-    }));
+    return picks.map(({ option, weight }) => {
+        const lookbackDays = resolveLookbackDays(option, option.lookback);
+        const label =
+            computeMetricLabel(option, lookbackDays) ?? option.label ?? option.value;
+        return {
+            id: createRuleId(),
+            metric: option.value,
+            label,
+            weight,
+            direction: option.defaultDirection,
+            transform: "raw",
+            lookbackDays,
+        };
+    });
 };
 
 const GOOGLE_CLIENT_ID =
@@ -763,6 +865,7 @@ type ScoreBuilderRule = {
     min?: string;
     max?: string;
     transform?: "raw" | "zscore" | "percentile" | "";
+    lookbackDays?: number | null;
 };
 
 type ScorePreviewRulePayload = {
@@ -770,6 +873,7 @@ type ScorePreviewRulePayload = {
     weight: number;
     direction: "asc" | "desc";
     label?: string;
+    lookbackDays?: number | null;
 };
 
 type ScorePreviewRequest = {
@@ -787,6 +891,7 @@ type ScoreTemplateRule = {
     direction: "asc" | "desc";
     label?: string | null;
     transform?: "raw" | "zscore" | "percentile" | "";
+    lookbackDays?: number | null;
 };
 
 type ScoreTemplate = {
@@ -1197,6 +1302,7 @@ async function backtestPortfolioByScore(
         weight: component.weight,
         direction: component.direction,
         label: component.label,
+        lookbackDays: component.lookback_days,
     }));
 
     const resolvedUniverse = resolveUniverseWithFallback(universe, fallbackUniverse);
@@ -6983,6 +7089,12 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
 
     const addScoreRule = () => {
         const defaultOption = SCORE_METRIC_OPTIONS[0];
+        const lookbackDays = resolveLookbackDays(defaultOption, defaultOption?.lookback);
+        const label =
+            computeMetricLabel(defaultOption, lookbackDays) ??
+            defaultOption?.label ??
+            defaultOption?.value ??
+            "";
         setScoreRules((prev) => [
             ...prev,
             {
@@ -6991,7 +7103,8 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                 weight: 10,
                 direction: defaultOption?.defaultDirection ?? "desc",
                 transform: "raw",
-                label: defaultOption?.label,
+                label,
+                lookbackDays,
             },
         ]);
     };
@@ -7127,6 +7240,7 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                 weight: component.weight,
                 direction: component.direction,
                 label: component.label,
+                lookbackDays: component.lookback_days,
             }));
 
             const limitValue = !scoreLimitInvalid && Number.isFinite(scoreLimit)
@@ -7918,16 +8032,37 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                                     </button>
                                 </div>
                                 <div className="space-y-4">
-                                    {scoreRules.map((rule, idx) => (
-                                        <div
-                                            key={rule.id}
-                                            className="relative rounded-2xl border border-soft bg-soft-surface p-4"
-                                        >
-                                            <button
-                                                type="button"
-                                                onClick={() => removeScoreRule(rule.id)}
-                                                className="absolute right-4 top-4 inline-flex items-center justify-center rounded-lg border border-soft px-2 py-1 text-xs text-muted transition hover:border-[var(--color-primary)] hover:text-primary"
+                                    {scoreRules.map((rule, idx) => {
+                                        const metricOption = SCORE_METRIC_OPTIONS.find(
+                                            (option) => option.value === rule.metric
+                                        );
+                                        const lookbackConfig = metricOption?.customLookback;
+                                        const lookbackValue = resolveLookbackDays(
+                                            metricOption,
+                                            rule.lookbackDays
+                                        );
+                                        const lookbackPresets = lookbackConfig?.presets ?? [];
+                                        const presetValue = lookbackPresets.some(
+                                            (preset) => preset.value === lookbackValue
+                                        )
+                                            ? String(lookbackValue)
+                                            : "custom";
+                                        const displayLabel =
+                                            computeMetricLabel(metricOption, lookbackValue) ??
+                                            rule.label ??
+                                            metricOption?.label ??
+                                            rule.metric;
+
+                                        return (
+                                            <div
+                                                key={rule.id}
+                                                className="relative rounded-2xl border border-soft bg-soft-surface p-4"
                                             >
+                                                <button
+                                                    type="button"
+                                                    onClick={() => removeScoreRule(rule.id)}
+                                                    className="absolute right-4 top-4 inline-flex items-center justify-center rounded-lg border border-soft px-2 py-1 text-xs text-muted transition hover:border-[var(--color-primary)] hover:text-primary"
+                                                >
                                                 Usuń
                                             </button>
                                             <div className="space-y-3 pt-8 md:pt-3">
@@ -7938,31 +8073,35 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                                                             </span>
                                                             <select
                                                                 value={rule.metric}
-                                                                onChange={(e) =>
+                                                                onChange={(e) => {
+                                                                    const { value } = e.target;
                                                                     setScoreRules((prev) =>
-                                                                        prev.map((r) =>
-                                                                            r.id === rule.id
-                                                                                ? {
-                                                                                      ...r,
-                                                                                      metric: e.target.value,
-                                                                                      label:
-                                                                                          SCORE_METRIC_OPTIONS.find(
-                                                                                              (option) =>
-                                                                                                  option.value ===
-                                                                                                  e.target.value
-                                                                                          )?.label ?? r.label,
-                                                                                      direction:
-                                                                                          SCORE_METRIC_OPTIONS.find(
-                                                                                              (option) =>
-                                                                                                  option.value ===
-                                                                                                  e.target.value
-                                                                                          )?.defaultDirection ??
-                                                                                          r.direction,
-                                                                                  }
-                                                                                : r
-                                                                        )
-                                                                    )
-                                                                }
+                                                                        prev.map((r) => {
+                                                                            if (r.id !== rule.id) return r;
+                                                                            const selectedOption = SCORE_METRIC_OPTIONS.find(
+                                                                                (option) => option.value === value
+                                                                            );
+                                                                            const lookbackDays = resolveLookbackDays(
+                                                                                selectedOption,
+                                                                                selectedOption?.lookback
+                                                                            );
+                                                                            const label =
+                                                                                computeMetricLabel(
+                                                                                    selectedOption,
+                                                                                    lookbackDays
+                                                                                ) ?? value;
+                                                                            return {
+                                                                                ...r,
+                                                                                metric: value,
+                                                                                label,
+                                                                                direction:
+                                                                                    selectedOption?.defaultDirection ??
+                                                                                    r.direction,
+                                                                                lookbackDays,
+                                                                            };
+                                                                        })
+                                                                    );
+                                                                }}
                                                                 className={inputBaseClasses}
                                                             >
                                                                 <option value="">Wybierz…</option>
@@ -7993,6 +8132,122 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                                                             />
                                                         </label>
                                                     </div>
+                                                    {lookbackConfig && (
+                                                        <div className="grid gap-3 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+                                                            <label className="flex flex-col gap-2">
+                                                                <span className="text-xs uppercase tracking-wide text-muted">
+                                                                    Okres (dni)
+                                                                </span>
+                                                                <div className="flex flex-col gap-2 sm:flex-row">
+                                                                    {lookbackPresets.length > 0 && (
+                                                                        <select
+                                                                            value={presetValue}
+                                                                            onChange={(e) => {
+                                                                                const value = e.target.value;
+                                                                                setScoreRules((prev) =>
+                                                                                    prev.map((r) => {
+                                                                                        if (r.id !== rule.id) return r;
+                                                                                        if (value === "custom") {
+                                                                                            const optionForRule = SCORE_METRIC_OPTIONS.find(
+                                                                                                (option) => option.value === r.metric
+                                                                                            );
+                                                                                            const nextLookback = resolveLookbackDays(
+                                                                                                optionForRule,
+                                                                                                r.lookbackDays
+                                                                                            );
+                                                                                            const nextLabel =
+                                                                                                computeMetricLabel(
+                                                                                                    optionForRule,
+                                                                                                    nextLookback
+                                                                                                ) ?? r.metric;
+                                                                                            return {
+                                                                                                ...r,
+                                                                                                lookbackDays: nextLookback,
+                                                                                                label: nextLabel,
+                                                                                            };
+                                                                                        }
+                                                                                        const numeric = Number(value);
+                                                                                        const optionForRule = SCORE_METRIC_OPTIONS.find(
+                                                                                            (option) => option.value === r.metric
+                                                                                        );
+                                                                                        const nextLookback = resolveLookbackDays(
+                                                                                            optionForRule,
+                                                                                            numeric
+                                                                                        );
+                                                                                        const nextLabel =
+                                                                                            computeMetricLabel(
+                                                                                                optionForRule,
+                                                                                                nextLookback
+                                                                                            ) ?? r.metric;
+                                                                                        return {
+                                                                                            ...r,
+                                                                                            lookbackDays: nextLookback,
+                                                                                            label: nextLabel,
+                                                                                        };
+                                                                                    })
+                                                                                );
+                                                                            }}
+                                                                            className={inputBaseClasses}
+                                                                        >
+                                                                            {lookbackPresets.map((preset) => (
+                                                                                <option key={preset.value} value={preset.value}>
+                                                                                    {preset.label}
+                                                                                </option>
+                                                                            ))}
+                                                                            <option value="custom">Inny zakres</option>
+                                                                        </select>
+                                                                    )}
+                                                                    <input
+                                                                        type="number"
+                                                                        min={lookbackConfig.min}
+                                                                        max={lookbackConfig.max}
+                                                                        step={lookbackConfig.step ?? 1}
+                                                                        value={lookbackValue}
+                                                                        onChange={(e) => {
+                                                                            const numeric = Number(e.target.value);
+                                                                            setScoreRules((prev) =>
+                                                                                prev.map((r) => {
+                                                                                    if (r.id !== rule.id) return r;
+                                                                                    const optionForRule = SCORE_METRIC_OPTIONS.find(
+                                                                                        (option) => option.value === r.metric
+                                                                                    );
+                                                                                    const nextLookback = resolveLookbackDays(
+                                                                                        optionForRule,
+                                                                                        numeric
+                                                                                    );
+                                                                                    const nextLabel =
+                                                                                        computeMetricLabel(
+                                                                                            optionForRule,
+                                                                                            nextLookback
+                                                                                        ) ?? r.metric;
+                                                                                    return {
+                                                                                        ...r,
+                                                                                        lookbackDays: nextLookback,
+                                                                                        label: nextLabel,
+                                                                                    };
+                                                                                })
+                                                                            );
+                                                                        }}
+                                                                        className={inputBaseClasses}
+                                                                    />
+                                                                </div>
+                                                                <span className="text-[11px] text-subtle">
+                                                                    Zakres {lookbackConfig.min}–{lookbackConfig.max} dni.
+                                                                </span>
+                                                            </label>
+                                                            <div className="text-xs text-subtle">
+                                                                Aktualna etykieta: {" "}
+                                                                <b>
+                                                                    {displayLabel}
+                                                                </b>
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                    {metricOption?.description && (
+                                                        <div className="text-xs text-subtle">
+                                                            {metricOption.description}
+                                                        </div>
+                                                    )}
                                                     <div className="grid gap-3 md:grid-cols-3">
                                                         <div>
                                                             <span className="text-xs uppercase tracking-wide text-muted">
@@ -8108,8 +8363,9 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                                                     Zmieniaj wagi i parametry, aby zobaczyć wpływ na ranking.
                                                 </div>
                                             )}
-                                        </div>
-                                    ))}
+                                            </div>
+                                        );
+                                    })}
                                 </div>
                                 <div className="text-xs text-subtle">
                                     Suma wag: <b>{scoreTotalWeight.toFixed(1)}</b>. Wartość względna — backend normalizuje
