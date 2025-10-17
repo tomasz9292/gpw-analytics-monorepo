@@ -672,6 +672,8 @@ const SCHEDULE_STATUS_LABELS: Record<CompanySyncScheduleStatusPayload["last_run_
 
 const FUNDAMENTAL_LABELS: Record<string, string> = {
     market_cap: "Kapitalizacja rynkowa",
+    shares_outstanding: "Liczba akcji",
+    book_value: "Wartość księgowa",
     revenue_ttm: "Przychody (TTM)",
     net_income_ttm: "Zysk netto (TTM)",
     ebitda_ttm: "EBITDA (TTM)",
@@ -688,6 +690,8 @@ const FUNDAMENTAL_LABELS: Record<string, string> = {
 
 const FUNDAMENTAL_ORDER = [
     "market_cap",
+    "shares_outstanding",
+    "book_value",
     "revenue_ttm",
     "net_income_ttm",
     "ebitda_ttm",
@@ -713,6 +717,8 @@ const FUNDAMENTAL_PERCENT_KEYS = new Set<string>([
 
 const FUNDAMENTAL_CURRENCY_KEYS = new Set<string>([
     "market_cap",
+    "shares_outstanding",
+    "book_value",
     "revenue_ttm",
     "net_income_ttm",
     "ebitda_ttm",

@@ -492,6 +492,8 @@ def test_harvester_sync_inserts_expected_rows():
         "employees",
         "listing_date",
         "market_cap",
+        "shares_outstanding",
+        "book_value",
         "revenue_ttm",
         "net_income_ttm",
         "ebitda_ttm",
@@ -548,6 +550,50 @@ def test_harvester_sync_inserts_expected_rows():
     second_payload = json.loads(second["raw_payload"])
     assert second_payload["google"] is None
     assert second_payload["stooq"] is None
+
+
+def test_build_row_computes_market_cap_and_ratios_from_share_data():
+    harvester = CompanyDataHarvester(session=FakeSession([]), stooq_profile_url_template=None)
+    base = {
+        "stockTicker": "AAA",
+        "companyName": "AAA Corp",
+        "www": "https://aaa.example",
+    }
+    fundamentals = {
+        "price": {
+            "regularMarketPrice": {"raw": 10.0},
+        },
+        "defaultKeyStatistics": {
+            "sharesOutstanding": {"raw": 1_000_000},
+            "bookValue": {"raw": 5.0},
+            "marketCap": {"raw": 9_000_000},
+            "trailingEps": {"raw": 2.5},
+        },
+        "summaryDetail": {
+            "priceToBook": {"raw": 1.8},
+            "dividendYield": {"raw": 0.02},
+        },
+        "financialData": {
+            "totalRevenue": {"raw": 8_000_000},
+            "netIncomeToCommon": {"raw": 2_500_000},
+            "ebitda": {"raw": 3_000_000},
+            "debtToEquity": {"raw": 0.5},
+            "returnOnEquity": {"raw": 0.2},
+            "returnOnAssets": {"raw": 0.1},
+            "grossMargins": {"raw": 0.4},
+            "operatingMargins": {"raw": 0.3},
+            "profitMargins": {"raw": 0.2},
+            "totalStockholderEquity": {"raw": 4_500_000},
+        },
+    }
+
+    row = harvester.build_row(base, fundamentals, google=None, stooq=None)
+
+    assert row["shares_outstanding"] == pytest.approx(1_000_000)
+    assert row["market_cap"] == pytest.approx(10_000_000)
+    assert row["book_value"] == pytest.approx(4_500_000)
+    assert row["pb_ratio"] == pytest.approx(10_000_000 / 4_500_000)
+    assert row["pe_ratio"] == pytest.approx(10.0 / 2.5)
 
 
 def test_harvester_sync_merges_existing_records_and_removes_duplicates():

@@ -22,6 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from .company_ingestion import CompanyDataHarvester, CompanySyncProgress, CompanySyncResult
+from .sector_classification_data import GPW_SECTOR_CLASSIFICATION
 
 # =========================
 # Konfiguracja / połączenie
@@ -61,6 +62,8 @@ DEFAULT_COMPANIES_TABLE_DDL = textwrap.dedent(
         listing_date Nullable(String),
         ipo_date Nullable(String),
         market_cap Nullable(Float64),
+        shares_outstanding Nullable(Float64),
+        book_value Nullable(Float64),
         revenue_ttm Nullable(Float64),
         net_income_ttm Nullable(Float64),
         ebitda_ttm Nullable(Float64),
@@ -514,6 +517,11 @@ COMPANY_COLUMN_MAP: Dict[str, CompanyFieldTarget] = {
     "market_cap": ("fundamentals", "market_cap", "float"),
     "marketcapitalization": ("fundamentals", "market_cap", "float"),
     "market_capitalization": ("fundamentals", "market_cap", "float"),
+    "shares_outstanding": ("fundamentals", "shares_outstanding", "float"),
+    "sharesoutstanding": ("fundamentals", "shares_outstanding", "float"),
+    "shares": ("fundamentals", "shares_outstanding", "float"),
+    "book_value": ("fundamentals", "book_value", "float"),
+    "bookvalue": ("fundamentals", "book_value", "float"),
     "revenue": ("fundamentals", "revenue_ttm", "float"),
     "revenue_ttm": ("fundamentals", "revenue_ttm", "float"),
     "total_revenue": ("fundamentals", "revenue_ttm", "float"),
@@ -770,6 +778,12 @@ class DataCollectionItem(BaseModel):
     quotes: List[QuoteRow] = Field(default_factory=list)
 
 
+class SectorClassificationEntry(BaseModel):
+    code: str
+    name: str
+    parent_code: Optional[str] = Field(default=None, description="Kod nadrzędnej kategorii")
+
+
 class CompanySyncJobStatus(BaseModel):
     job_id: Optional[str] = Field(default=None, description="Identyfikator bieżącego zadania")
     status: Literal["idle", "running", "completed", "failed"] = Field(
@@ -866,6 +880,8 @@ def _check_and_run_scheduled_job(now: Optional[datetime] = None) -> bool:
 
 class CompanyFundamentals(BaseModel):
     market_cap: Optional[float] = None
+    shares_outstanding: Optional[float] = None
+    book_value: Optional[float] = None
     revenue_ttm: Optional[float] = None
     net_income_ttm: Optional[float] = None
     ebitda_ttm: Optional[float] = None
@@ -1539,6 +1555,13 @@ def collect_data(
         )
 
     return items
+
+
+@app.get("/sectors/classification", response_model=List[SectorClassificationEntry])
+def list_sector_classification() -> List[SectorClassificationEntry]:
+    """Zwraca hierarchiczną klasyfikację sektorową GPW."""
+
+    return [SectorClassificationEntry(**item) for item in GPW_SECTOR_CLASSIFICATION]
 
 
 # =========================

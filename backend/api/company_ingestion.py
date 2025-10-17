@@ -1389,15 +1389,66 @@ class CompanyDataHarvester:
             "ipo_date": listing_date,
         }
 
+        shares_outstanding = _clean_float(
+            _value_from_path(default_stats or {}, "sharesOutstanding")
+            or _value_from_path(price_info or {}, "sharesOutstanding")
+            or _value_from_path(summary_detail or {}, "sharesOutstanding")
+        )
+
+        share_price = _clean_float(
+            _value_from_path(price_info or {}, "regularMarketPrice")
+            or _value_from_path(financial_data or {}, "currentPrice")
+            or _value_from_path(price_info or {}, "regularMarketPreviousClose")
+            or _value_from_path(summary_detail or {}, "regularMarketPreviousClose")
+            or _value_from_path(summary_detail or {}, "previousClose")
+        )
+
         market_cap = _clean_float(
             _value_from_path(default_stats or {}, "marketCap")
             or _value_from_path(price_info or {}, "marketCap")
+            or _value_from_path(summary_detail or {}, "marketCap")
         )
+
+        if (
+            share_price is None
+            and market_cap is not None
+            and shares_outstanding not in (None, 0)
+        ):
+            share_price = market_cap / shares_outstanding
+
+        if (
+            share_price not in (None, 0)
+            and shares_outstanding not in (None, 0)
+        ):
+            market_cap = share_price * shares_outstanding
+
+        book_value_per_share = _clean_float(
+            _value_from_path(default_stats or {}, "bookValue")
+            or _value_from_path(summary_detail or {}, "bookValue")
+            or _value_from_path(financial_data or {}, "bookValue")
+        )
+
+        total_equity = _clean_float(
+            _value_from_path(financial_data or {}, "totalStockholderEquity")
+            or _value_from_path(financial_data or {}, "totalShareholderEquity")
+            or _value_from_path(financial_data or {}, "totalEquity")
+        )
+
+        book_value_total = total_equity
+        if (
+            book_value_total is None
+            and book_value_per_share is not None
+            and shares_outstanding is not None
+        ):
+            book_value_total = book_value_per_share * shares_outstanding
+
         eps = _clean_float(_value_from_path(default_stats or {}, "trailingEps"))
 
         row.update(
             {
                 "market_cap": market_cap,
+                "shares_outstanding": shares_outstanding,
+                "book_value": book_value_total,
                 "revenue_ttm": _clean_float(_value_from_path(financial_data or {}, "totalRevenue")),
                 "net_income_ttm": _clean_float(
                     _value_from_path(financial_data or {}, "netIncomeToCommon")
@@ -1423,6 +1474,37 @@ class CompanyDataHarvester:
                 ),
             }
         )
+
+        net_income_ttm = row.get("net_income_ttm")
+        pb_ratio_computed: Optional[float] = None
+        if (
+            market_cap not in (None, 0)
+            and book_value_total not in (None, 0)
+        ):
+            pb_ratio_computed = market_cap / book_value_total
+        elif (
+            share_price not in (None, 0)
+            and book_value_per_share not in (None, 0)
+        ):
+            pb_ratio_computed = share_price / book_value_per_share
+
+        if pb_ratio_computed is not None:
+            row["pb_ratio"] = pb_ratio_computed
+
+        pe_ratio_computed: Optional[float] = None
+        if (
+            share_price not in (None, 0)
+            and eps not in (None, 0)
+        ):
+            pe_ratio_computed = share_price / eps
+        elif (
+            market_cap not in (None, 0)
+            and net_income_ttm not in (None, 0)
+        ):
+            pe_ratio_computed = market_cap / net_income_ttm
+
+        if pe_ratio_computed is not None:
+            row["pe_ratio"] = pe_ratio_computed
 
         google_metrics = ((google or {}).get("metrics") or {}) if google else {}
 
