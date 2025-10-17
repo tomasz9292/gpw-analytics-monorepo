@@ -2140,43 +2140,62 @@ def _calculate_symbol_score(
 
 
 def _collect_all_company_symbols(ch_client) -> Optional[List[str]]:
+    company_symbols: set[str] = set()
     try:
         columns = _get_company_columns(ch_client)
     except HTTPException:
-        return None
+        columns = None
 
-    symbol_column = _find_company_symbol_column(columns)
-    if not symbol_column:
-        return None
+    if columns:
+        symbol_column = _find_company_symbol_column(columns)
+        if symbol_column:
+            sql = (
+                f"SELECT DISTINCT {_quote_identifier(symbol_column)} "
+                f"FROM {TABLE_COMPANIES} "
+                f"ORDER BY {_quote_identifier(symbol_column)}"
+            )
 
-    sql = (
-        f"SELECT DISTINCT {_quote_identifier(symbol_column)} "
-        f"FROM {TABLE_COMPANIES} "
-        f"ORDER BY {_quote_identifier(symbol_column)}"
-    )
+            try:
+                result = ch_client.query(sql)
+            except Exception:  # pragma: no cover - zależy od konfiguracji DB
+                result = None
+            else:
+                for row in result.result_rows:
+                    if not row:
+                        continue
+                    raw_value = row[0]
+                    if raw_value is None:
+                        continue
+                    normalized = normalize_input_symbol(str(raw_value))
+                    if normalized:
+                        company_symbols.add(normalized)
 
+    ohlc_symbols: set[str] = set()
     try:
-        result = ch_client.query(sql)
+        ohlc_result = ch_client.query(
+            f"SELECT DISTINCT symbol FROM {TABLE_OHLC} ORDER BY symbol"
+        )
     except Exception:  # pragma: no cover - zależy od konfiguracji DB
-        return None
+        ohlc_result = None
+    else:
+        for row in ohlc_result.result_rows:
+            if not row:
+                continue
+            raw_value = row[0]
+            if raw_value is None:
+                continue
+            normalized = normalize_input_symbol(str(raw_value))
+            if normalized:
+                ohlc_symbols.add(normalized)
 
-    seen: set[str] = set()
-    symbols: List[str] = []
-    for row in result.result_rows:
-        if not row:
-            continue
-        raw_value = row[0]
-        if raw_value is None:
-            continue
-        normalized = normalize_input_symbol(str(raw_value))
-        if not normalized:
-            continue
-        if normalized in seen:
-            continue
-        seen.add(normalized)
-        symbols.append(normalized)
-
-    return symbols or None
+    combined = sorted(company_symbols | ohlc_symbols)
+    if combined:
+        return combined
+    if company_symbols:
+        return sorted(company_symbols)
+    if ohlc_symbols:
+        return sorted(ohlc_symbols)
+    return None
 
 
 def _list_candidate_symbols(ch_client, filters: Optional[UniverseFilters]) -> List[str]:
