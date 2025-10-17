@@ -1258,6 +1258,7 @@ class PortfolioStats(BaseModel):
     trades: Optional[float] = None
     initial_value: Optional[float] = None
     final_value: Optional[float] = None
+    fees: Optional[float] = None
 
 
 class PortfolioTrade(BaseModel):
@@ -2401,8 +2402,10 @@ def _compute_backtest(
     portfolio_initial = initial_capital if initial_capital > 0 else 1.0
     portfolio_value = portfolio_initial
     threshold_ratio = max(_to_ratio(threshold_pct), 0.0)
+    fee_ratio = max(_to_ratio(fee_pct), 0.0)
     total_turnover_ratio = 0.0
     total_trades = 0
+    total_fees_paid = 0.0
 
     for ds in all_dates:
         prices_today: Dict[str, float] = {}
@@ -2436,12 +2439,18 @@ def _compute_backtest(
             if portfolio_value <= 0:
                 portfolio_value = portfolio_initial
 
+        portfolio_value_before = portfolio_value
+        prev_shares = dict(shares)
+
         is_first_point = not equity
         scheduled_rebalance = ds in rebal_dates
         should_rebalance = is_first_point or scheduled_rebalance or bool(newly_available)
 
         trades: List[PortfolioTrade] = []
         turnover_abs = 0.0
+        portfolio_value_after_fees: Optional[float] = None
+        scale_factor = 1.0
+        trade_records: List[Tuple[str, PortfolioTrade]] = []
 
         if should_rebalance:
             # symbole, które mogą uczestniczyć w rebalansingu
@@ -2467,9 +2476,11 @@ def _compute_backtest(
                 price = prices_today[sym]
                 current_qty = shares.get(sym, 0.0)
                 current_value = current_qty * price
-                current_weight = current_value / portfolio_value if portfolio_value > 0 else 0.0
+                current_weight = (
+                    current_value / portfolio_value_before if portfolio_value_before > 0 else 0.0
+                )
                 target_weight = targets.get(sym, 0.0)
-                target_value = portfolio_value * target_weight
+                target_value = portfolio_value_before * target_weight
                 delta_value = target_value - current_value
 
                 if threshold_ratio > 0 and abs(target_weight - current_weight) < threshold_ratio:
@@ -2485,19 +2496,19 @@ def _compute_backtest(
                     note = None
                     if sym in newly_available:
                         note = "Dołączono do portfela (debiut notowań)"
-                    trades.append(
-                        PortfolioTrade(
-                            symbol=pretty_symbol(sym),
-                            action=action,
-                            weight_change=target_weight - current_weight,
-                            value_change=delta_value,
-                            target_weight=target_weight,
-                            shares_change=shares_delta,
-                            price=price,
-                            shares_after=target_qty,
-                            note=note,
-                        )
+                    trade = PortfolioTrade(
+                        symbol=pretty_symbol(sym),
+                        action=action,
+                        weight_change=target_weight - current_weight,
+                        value_change=delta_value,
+                        target_weight=target_weight,
+                        shares_change=shares_delta,
+                        price=price,
+                        shares_after=target_qty,
+                        note=note,
                     )
+                    trades.append(trade)
+                    trade_records.append((sym, trade))
                 else:
                     if price > 0:
                         shares[sym] = current_value / price
@@ -2512,9 +2523,30 @@ def _compute_backtest(
                 if scheduled_rebalance and not is_first_point:
                     reasons.append("Planowy rebalansing")
 
-                turnover = turnover_abs / portfolio_value if portfolio_value > 0 else 0.0
+                turnover = (
+                    turnover_abs / portfolio_value_before if portfolio_value_before > 0 else 0.0
+                )
                 total_turnover_ratio += turnover
                 total_trades += len(trades)
+                if fee_ratio > 0 and portfolio_value_before > 0 and turnover_abs > 0:
+                    fees_cost = min(portfolio_value_before, turnover_abs * fee_ratio)
+                    if fees_cost > 0:
+                        scale_factor = max(0.0, 1.0 - fees_cost / portfolio_value_before)
+                        if scale_factor < 1.0:
+                            for sym_key in list(shares.keys()):
+                                shares[sym_key] *= scale_factor
+                            for raw_sym, trade in trade_records:
+                                prev_qty = prev_shares.get(raw_sym, 0.0)
+                                actual_after = shares.get(raw_sym, 0.0)
+                                trade.shares_after = actual_after
+                                trade.shares_change = actual_after - prev_qty
+                                price_for_value = prices_today.get(raw_sym)
+                                if price_for_value is None:
+                                    price_for_value = last_prices.get(raw_sym)
+                                if price_for_value is not None:
+                                    trade.value_change = trade.shares_change * price_for_value
+                        total_fees_paid += fees_cost
+                        portfolio_value_after_fees = portfolio_value_before * scale_factor
                 rebalances.append(
                     PortfolioRebalanceEvent(
                         date=ds,
@@ -2537,7 +2569,10 @@ def _compute_backtest(
             portfolio_value += qty * price
 
         if portfolio_value <= 0:
-            portfolio_value = portfolio_initial
+            if portfolio_value_after_fees is not None:
+                portfolio_value = portfolio_value_after_fees
+            else:
+                portfolio_value = portfolio_initial
 
         equity.append(PortfolioPoint(date=ds, value=portfolio_value))
 
@@ -2590,6 +2625,7 @@ def _compute_backtest(
             total_return=total_return,
             turnover=total_turnover_ratio,
             trades=float(total_trades),
+            fees=total_fees_paid,
         )
     else:
         last_v = equity[-1].value
@@ -2605,6 +2641,7 @@ def _compute_backtest(
             total_return=0.0,
             turnover=total_turnover_ratio,
             trades=float(total_trades),
+            fees=total_fees_paid,
         )
 
     return equity, stats, rebalances
