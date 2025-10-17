@@ -4,11 +4,13 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import statistics
 import textwrap
+import unicodedata
 from datetime import date, datetime, timedelta, timezone
 from math import sqrt
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from typing import Literal
 from uuid import uuid4
 
@@ -85,6 +87,303 @@ DEFAULT_COMPANIES_TABLE_DDL = textwrap.dedent(
 )
 
 ALLOWED_SCORE_METRICS = {"total_return", "volatility", "max_drawdown", "sharpe"}
+
+
+SHAREHOLDER_KEYWORDS = [
+    "akcjonariat",
+    "akcjonariusz",
+    "akcjonariusze",
+    "akcjon",
+    "shareholder",
+    "shareholders",
+    "shareholderstructure",
+    "ownership",
+    "owner",
+]
+
+SHAREHOLDER_NAME_KEYWORDS = [
+    "name",
+    "akcjon",
+    "shareholder",
+    "holder",
+    "entity",
+    "podmiot",
+]
+
+SHAREHOLDER_STAKE_KEYWORDS = [
+    "udz",
+    "udzial",
+    "udział",
+    "stake",
+    "share",
+    "percent",
+    "procent",
+    "percentage",
+    "pakiet",
+]
+
+COMPANY_SIZE_KEYWORDS = [
+    "wielkosc",
+    "wielkość",
+    "companysize",
+    "size",
+    "capitalisation",
+    "capitalization",
+    "classification",
+]
+
+RAW_FACT_CANDIDATES: List[Dict[str, Iterable[str]]] = [
+    {"label": "Segment", "keywords": ["segment"]},
+    {"label": "Rynek", "keywords": ["market", "rynek"]},
+    {"label": "Free float", "keywords": ["freefloat", "free float"]},
+    {"label": "Kapitał zakładowy", "keywords": ["kapital", "capital", "sharecapital"]},
+    {
+        "label": "Liczba akcji",
+        "keywords": ["liczbaakcji", "numberofshares", "sharesnumber", "sharescount"],
+    },
+]
+
+INDEX_MEMBERSHIP_KEYWORDS = [
+    "index",
+    "indeks",
+    "indexes",
+    "indices",
+    "indexmembership",
+]
+
+
+def _normalize_key(value: str) -> str:
+    normalized = unicodedata.normalize("NFD", value or "")
+    cleaned = []
+    for ch in normalized:
+        if ch.isalnum():
+            cleaned.append(ch.lower())
+        elif ch.isspace():
+            cleaned.append(" ")
+        else:
+            cleaned.append(" ")
+    normalized_str = "".join(cleaned)
+    return " ".join(normalized_str.split())
+
+
+def _prettify_key(raw_key: str) -> str:
+    normalized = unicodedata.normalize("NFD", raw_key or "")
+    cleaned = re.sub(r"[_\s]+", " ", normalized)
+    cleaned = re.sub(r"[\u0300-\u036f]", "", cleaned)
+    cleaned = cleaned.strip()
+    if not cleaned:
+        return ""
+    parts = [part.capitalize() for part in cleaned.split(" ") if part]
+    return " ".join(parts)
+
+
+def _deduplicate_strings(values: Iterable[str], limit: Optional[int] = None) -> List[str]:
+    seen: set[str] = set()
+    output: List[str] = []
+    for value in values:
+        cleaned = re.sub(r"\s+", " ", value).strip()
+        if not cleaned:
+            continue
+        normalized = cleaned.casefold()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        output.append(cleaned)
+        if limit is not None and len(output) >= limit:
+            break
+    return output
+
+
+def _collect_values_by_key_keywords(
+    value: Any, keywords: Sequence[str], limit: Optional[int] = None
+) -> List[Any]:
+    if not isinstance(value, (dict, list)):
+        return []
+
+    normalized_keywords = [_normalize_key(keyword) for keyword in keywords]
+    results: List[Any] = []
+    stack: List[Tuple[Optional[str], Any]] = [(None, value)]
+
+    while stack:
+        current_key, current_value = stack.pop()
+        if isinstance(current_value, dict):
+            for child_key, child_value in current_value.items():
+                normalized_key = _normalize_key(str(child_key))
+                if any(keyword in normalized_key for keyword in normalized_keywords):
+                    results.append(child_value)
+                    if limit is not None and len(results) >= limit:
+                        return results
+                stack.append((child_key, child_value))
+        elif isinstance(current_value, list):
+            for item in current_value:
+                stack.append((current_key, item))
+
+    return results
+
+
+def _split_shareholding_string(value: str) -> List[str]:
+    without_html = re.sub(r"<br\s*/?>", "\n", value, flags=re.IGNORECASE)
+    without_html = re.sub(r"<[^>]+>", " ", without_html)
+    parts = re.split(r"[\n\r;•●▪·\u2022\u2023\u25CF\u25A0]+", without_html)
+    cleaned: List[str] = []
+    for part in parts:
+        stripped = re.sub(r"^[\s•·\-–—\u2022\u2023\u25CF\u25A0]+", "", part)
+        stripped = re.sub(r"\s+", " ", stripped).strip()
+        if stripped:
+            cleaned.append(stripped)
+    return cleaned
+
+
+def _flatten_shareholding_value(value: Any) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return _split_shareholding_string(value)
+    if isinstance(value, (int, float)):
+        return [str(value)]
+    if isinstance(value, bool):
+        return ["Tak" if value else "Nie"]
+    if isinstance(value, list):
+        flattened: List[str] = []
+        for item in value:
+            flattened.extend(_flatten_shareholding_value(item))
+        return flattened
+    if isinstance(value, dict):
+        name_parts: List[str] = []
+        stake_parts: List[str] = []
+        other_parts: List[str] = []
+
+        for raw_key, child in value.items():
+            key = _normalize_key(str(raw_key))
+            child_values = _flatten_shareholding_value(child)
+            if not child_values:
+                continue
+            if any(keyword in key for keyword in SHAREHOLDER_NAME_KEYWORDS):
+                name_parts.extend(child_values)
+                continue
+            if any(keyword in key for keyword in SHAREHOLDER_STAKE_KEYWORDS):
+                stake_parts.extend(child_values)
+                continue
+            label = _prettify_key(str(raw_key))
+            other_parts.append(
+                f"{label}: {', '.join(child_values)}".strip()
+                if label
+                else ", ".join(child_values)
+            )
+
+        combined: List[str] = []
+        name_joined = re.sub(r"\s+", " ", " ".join(name_parts)).strip()
+        stake_joined = re.sub(r"\s+", " ", " ".join(stake_parts)).strip()
+        if name_joined or stake_joined:
+            pieces = [part for part in [name_joined, stake_joined] if part]
+            combined.append(" – ".join(pieces))
+        combined.extend(part for part in other_parts if part)
+
+        if not combined:
+            fallback: List[str] = []
+            for child in value.values():
+                fallback.extend(_flatten_shareholding_value(child))
+            fallback = [re.sub(r"\s+", " ", item).strip() for item in fallback if item]
+            if fallback:
+                combined.append(", ".join(fallback))
+        return combined
+
+    return []
+
+
+def _flatten_generic_value(value: Any) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        cleaned = re.sub(r"<br\s*/?>", " ", value, flags=re.IGNORECASE)
+        cleaned = re.sub(r"<[^>]+>", " ", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        return [cleaned] if cleaned else []
+    if isinstance(value, (int, float)):
+        return [str(value)]
+    if isinstance(value, bool):
+        return ["Tak" if value else "Nie"]
+    if isinstance(value, list):
+        flattened: List[str] = []
+        for item in value:
+            flattened.extend(_flatten_generic_value(item))
+        return _deduplicate_strings(flattened)
+    if isinstance(value, dict):
+        entries: List[str] = []
+        for raw_key, child in value.items():
+            child_values = _flatten_generic_value(child)
+            if not child_values:
+                continue
+            label = _prettify_key(str(raw_key))
+            if not label:
+                entries.extend(child_values)
+            elif len(child_values) == 1:
+                entries.append(f"{label}: {child_values[0]}")
+            else:
+                entries.append(f"{label}: {', '.join(child_values)}")
+        return entries
+    return []
+
+
+def _extract_stooq_insights(raw_payload: Any) -> Dict[str, Any]:
+    payload: Any
+    if isinstance(raw_payload, str):
+        try:
+            payload = json.loads(raw_payload)
+        except json.JSONDecodeError:
+            return {}
+    else:
+        payload = raw_payload
+
+    if not isinstance(payload, dict):
+        return {}
+
+    shareholding_values = _collect_values_by_key_keywords(payload, SHAREHOLDER_KEYWORDS)
+    shareholding = _deduplicate_strings(
+        [item for value in shareholding_values for item in _flatten_shareholding_value(value)],
+        limit=20,
+    )
+
+    company_size_matches = _collect_values_by_key_keywords(
+        payload, COMPANY_SIZE_KEYWORDS, limit=1
+    )
+    company_size_candidates = (
+        _flatten_generic_value(company_size_matches[0]) if company_size_matches else []
+    )
+    company_size = company_size_candidates[0] if company_size_candidates else None
+
+    facts: List[Dict[str, str]] = []
+    for candidate in RAW_FACT_CANDIDATES:
+        matches = _collect_values_by_key_keywords(payload, candidate["keywords"], limit=1)
+        if not matches:
+            continue
+        flattened = _flatten_generic_value(matches[0])
+        value = next((entry for entry in flattened if entry), None)
+        if not value:
+            continue
+        facts.append({"label": str(candidate["label"]), "value": value})
+
+    deduped_facts: List[Dict[str, str]] = []
+    seen_facts: set[str] = set()
+    for fact in facts:
+        key = f"{fact['label']}|{fact['value']}".casefold()
+        if key in seen_facts:
+            continue
+        seen_facts.add(key)
+        deduped_facts.append(fact)
+
+    index_values = _collect_values_by_key_keywords(payload, INDEX_MEMBERSHIP_KEYWORDS)
+    index_entries = _deduplicate_strings(
+        [item for value in index_values for item in _flatten_generic_value(value)],
+        limit=20,
+    )
+
+    return {
+        "shareholding": shareholding,
+        "company_size": company_size,
+        "facts": deduped_facts,
+        "indices": index_entries,
+    }
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -753,6 +1052,22 @@ def _normalize_company_row(row: Dict[str, Any], symbol_column: str) -> Optional[
 
     canonical["symbol"] = pretty_symbol(str(raw_symbol_value))
     canonical["fundamentals"] = fundamentals
+
+    insights = _extract_stooq_insights(extra.get("raw_payload"))
+    if insights:
+        shareholding = insights.get("shareholding")
+        if isinstance(shareholding, list) and shareholding:
+            extra.setdefault("stooq_shareholding", shareholding)
+        company_size = insights.get("company_size")
+        if isinstance(company_size, str) and company_size.strip():
+            extra.setdefault("stooq_company_size", company_size.strip())
+        facts = insights.get("facts")
+        if isinstance(facts, list) and facts:
+            extra.setdefault("stooq_facts", facts)
+        indices = insights.get("indices")
+        if isinstance(indices, list) and indices:
+            extra.setdefault("stooq_indices", indices)
+
     canonical["extra"] = extra
     canonical["raw"] = {col: _convert_clickhouse_value(val) for col, val in row.items()}
 

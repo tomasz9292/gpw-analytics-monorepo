@@ -712,6 +712,46 @@ def test_harvester_sync_uses_stooq_profile_data():
     assert payload["stooq"]["employees"] == 45
 
 
+def test_normalize_company_row_extracts_stooq_insights():
+    raw_payload = {
+        "gpw": {},
+        "stooq": {
+            "raw_fields": {
+                "Akcjonariat": "Fundusz A 12,5%\nFundusz B 8,0%",
+                "Wielkość spółki": "Duża spółka",
+                "Free float": "45%",
+                "Rynek": "Rynek podstawowy",
+                "Indeks": "WIG20",
+            }
+        },
+    }
+
+    row = {
+        "symbol": "AAA",
+        "name": "AAA",
+        "raw_payload": json.dumps(raw_payload, ensure_ascii=False),
+    }
+
+    normalized = main._normalize_company_row(row, "symbol")
+    assert normalized is not None
+
+    extra = normalized["extra"]
+    assert "raw_payload" in extra
+    shareholding = extra.get("stooq_shareholding")
+    assert isinstance(shareholding, list)
+    assert shareholding[:2] == ["Fundusz A 12,5%", "Fundusz B 8,0%"]
+
+    assert extra.get("stooq_company_size") == "Duża spółka"
+
+    facts = extra.get("stooq_facts")
+    assert isinstance(facts, list)
+    assert any(fact.get("label") == "Rynek" and fact.get("value") == "Rynek podstawowy" for fact in facts)
+    assert any(fact.get("label") == "Free float" and fact.get("value") == "45%" for fact in facts)
+
+    indices = extra.get("stooq_indices")
+    assert indices == ["WIG20"]
+
+
 def test_harvester_sync_reports_progress_events():
     session = FakeSession([FakeResponse(GPW_FIXTURE)])
     harvester = CompanyDataHarvester(session=session, stooq_profile_url_template=None)
