@@ -3307,7 +3307,7 @@ const CompanySyncPanel = () => {
     );
 };
 
-type DashboardView = "analysis" | "score" | "portfolio";
+type DashboardView = "analysis" | "score" | "portfolio" | "sync";
 type NavItem = {
     href: string;
     label: string;
@@ -3407,6 +3407,44 @@ const IconPie = ({ className }: { className?: string }) => (
         />
         <path
             d="M19 12.5C18.8491 15.6537 16.1537 18.3491 13 18.5C9.41015 18.6745 6.32551 15.5899 6.5 12C6.65094 8.84634 9.34634 6.15094 12.5 6"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+        />
+    </svg>
+);
+
+const IconSync = ({ className }: { className?: string }) => (
+    <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        xmlns="http://www.w3.org/2000/svg"
+        className={className}
+    >
+        <path
+            d="M20 4V9H15"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+        />
+        <path
+            d="M4 20V15H9"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+        />
+        <path
+            d="M7 7C8.343 5.657 10.209 4.857 12.142 4.857C14.075 4.857 15.941 5.657 17.284 7"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+        />
+        <path
+            d="M17 17C15.657 18.343 13.791 19.143 11.858 19.143C9.925 19.143 8.059 18.343 6.716 17"
             stroke="currentColor"
             strokeWidth="1.8"
             strokeLinecap="round"
@@ -6813,6 +6851,21 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
             icon: IconPie,
             description: "Testuj portfele z rebalancingiem, kosztami i porównaniem do benchmarków.",
         },
+        ...(isAdmin
+            ? [
+                  {
+                      href:
+                          view === "sync"
+                              ? "#companies-sync"
+                              : "/synchronizacja-danych",
+                      label: "Synchronizacja danych",
+                      key: "sync",
+                      icon: IconSync,
+                      description:
+                          "Monitoruj status synchronizacji profili spółek i zarządzaj harmonogramem.",
+                  } satisfies NavItem,
+              ]
+            : []),
     ];
 
     const comparisonErrorEntries = useMemo(
@@ -7500,30 +7553,32 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
 
             <main className="flex-1">
                 <div className="mx-auto w-full max-w-6xl px-4 py-8 md:px-8 md:py-12 space-y-16">
-                    {isAdmin ? (
-                        <CompanySyncPanel />
-                    ) : (
-                        <Section
-                            id="companies-sync"
-                            kicker="GPW"
-                            title="Synchronizacja danych o spółkach"
-                            description="Panel synchronizacji jest dostępny wyłącznie dla administratorów."
-                        >
-                            <div className="rounded-2xl border border-dashed border-soft bg-white/70 p-6 text-sm text-muted">
-                                {isAuthenticated ? (
-                                    <p>
-                                        Twoje konto nie ma uprawnień administratora. Skontaktuj się z osobą
-                                        zarządzającą uprawnieniami, aby uzyskać dostęp do harmonogramu
-                                        synchronizacji.
-                                    </p>
-                                ) : (
-                                    <p>
-                                        Zaloguj się na konto administratora, aby uruchamiać synchronizację danych o
-                                        spółkach GPW.
-                                    </p>
-                                )}
-                            </div>
-                        </Section>
+                    {view === "sync" && (
+                        isAdmin ? (
+                            <CompanySyncPanel />
+                        ) : (
+                            <Section
+                                id="companies-sync"
+                                kicker="GPW"
+                                title="Synchronizacja danych o spółkach"
+                                description="Panel synchronizacji jest dostępny wyłącznie dla administratorów."
+                            >
+                                <div className="rounded-2xl border border-dashed border-soft bg-white/70 p-6 text-sm text-muted">
+                                    {isAuthenticated ? (
+                                        <p>
+                                            Twoje konto nie ma uprawnień administratora. Skontaktuj się z osobą
+                                            zarządzającą uprawnieniami, aby uzyskać dostęp do harmonogramu
+                                            synchronizacji.
+                                        </p>
+                                    ) : (
+                                        <p>
+                                            Zaloguj się na konto administratora, aby uruchamiać synchronizację danych o
+                                            spółkach GPW.
+                                        </p>
+                                    )}
+                                </div>
+                            </Section>
+                        )
                     )}
                     {view === "analysis" && (
                         <Section
