@@ -29,6 +29,7 @@ export type StoredScoreBuilderRule = {
     min?: string;
     max?: string;
     transform?: "raw" | "zscore" | "percentile" | "";
+    lookbackDays?: number | null;
 };
 
 export type StoredScoreTemplateRule = {
@@ -37,6 +38,7 @@ export type StoredScoreTemplateRule = {
     direction: "asc" | "desc";
     label?: string | null;
     transform?: "raw" | "zscore" | "percentile" | "";
+    lookbackDays?: number | null;
 };
 
 export type StoredScoreTemplate = {
@@ -126,11 +128,12 @@ export type PublicUserProfile = {
 
 const DEFAULT_SCORE_RULE: StoredScoreBuilderRule = {
     id: "return-weighted",
-    metric: "total_return",
+    metric: "total_return_252",
     weight: 50,
     direction: "desc",
     label: "Zwrot 12M",
     transform: "percentile",
+    lookbackDays: 252,
 };
 
 const DEFAULT_SCORE_DRAFT: StoredScoreDraft = {
@@ -239,6 +242,13 @@ const normalizeNumber = (value: unknown): number => {
     return Number.isFinite(numeric) ? numeric : 0;
 };
 
+const normalizeOptionalNumber = (value: unknown): number | null => {
+    if (value === null || value === undefined) return null;
+    const numeric = typeof value === "number" ? value : Number(value);
+    if (!Number.isFinite(numeric)) return null;
+    return numeric;
+};
+
 const normalizeRule = (rule: unknown): StoredScoreBuilderRule | null => {
     if (!rule || typeof rule !== "object") return null;
     const candidate = rule as Partial<StoredScoreBuilderRule> & { id?: unknown };
@@ -247,6 +257,11 @@ const normalizeRule = (rule: unknown): StoredScoreBuilderRule | null => {
     const id = normalizeString(candidate.id);
     const direction = candidate.direction === "asc" ? "asc" : "desc";
     const weight = normalizeNumber(candidate.weight);
+    const lookbackCandidate =
+        (candidate as { lookbackDays?: unknown }).lookbackDays ??
+        (candidate as { lookback_days?: unknown }).lookback_days ??
+        (candidate as { lookback?: unknown }).lookback;
+    const lookbackDays = normalizeOptionalNumber(lookbackCandidate);
     return {
         id: id || `${metric}-${direction}`,
         metric,
@@ -261,6 +276,7 @@ const normalizeRule = (rule: unknown): StoredScoreBuilderRule | null => {
                 : candidate.transform === "percentile"
                 ? "percentile"
                 : "raw",
+        lookbackDays: lookbackDays ?? undefined,
     };
 };
 
@@ -271,6 +287,11 @@ const normalizeTemplateRule = (rule: unknown): StoredScoreTemplateRule | null =>
     if (!metric) return null;
     const direction = candidate.direction === "asc" ? "asc" : "desc";
     const weight = normalizeNumber(candidate.weight) || 1;
+    const lookbackCandidate =
+        (candidate as { lookbackDays?: unknown }).lookbackDays ??
+        (candidate as { lookback_days?: unknown }).lookback_days ??
+        (candidate as { lookback?: unknown }).lookback;
+    const lookbackDays = normalizeOptionalNumber(lookbackCandidate);
     return {
         metric,
         direction,
@@ -282,6 +303,7 @@ const normalizeTemplateRule = (rule: unknown): StoredScoreTemplateRule | null =>
                 : candidate.transform === "percentile"
                 ? "percentile"
                 : "raw",
+        lookbackDays: lookbackDays ?? undefined,
     };
 };
 
