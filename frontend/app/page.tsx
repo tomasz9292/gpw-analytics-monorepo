@@ -1046,8 +1046,19 @@ const parseApiError = async (response: Response): Promise<string> => {
     }
     try {
         const parsed = JSON.parse(text);
-        if (parsed && typeof parsed.detail === "string") {
-            return parsed.detail;
+        if (parsed && typeof parsed === "object") {
+            const record = parsed as Record<string, unknown>;
+            const messageKeys: Array<"detail" | "error" | "message"> = [
+                "detail",
+                "error",
+                "message",
+            ];
+            for (const key of messageKeys) {
+                const value = record[key];
+                if (typeof value === "string" && value.trim()) {
+                    return value;
+                }
+            }
         }
     } catch {
         // ignorujemy – odpowiedź nie musi być JSON-em
