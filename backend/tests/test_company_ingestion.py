@@ -26,7 +26,6 @@ from api.company_ingestion import (
     HttpRequestLog,
     SimpleHttpSession,
     SimpleHttpResponse,
-    YAHOO_MODULES,
 )
 
 
@@ -375,96 +374,18 @@ def test_fetch_gpw_profiles_stooq_combines_multiple_pages():
     ]
 
 
-def test_fetch_yahoo_summary_normalizes_gpw_suffix():
-    session = FakeSession(
-        [
-            FakeResponse(
-                {
-                    "quoteSummary": {"result": [{"price": {"shortName": "CDR"}}]}
-                }
-            )
-        ]
-    )
-    harvester = CompanyDataHarvester(
-        session=session,
-        yahoo_url_template="https://example/{symbol}",
-    )
+def test_yahoo_fetch_is_disabled_by_default():
+    harvester = CompanyDataHarvester(session=FakeSession([]))
 
-    result = harvester.fetch_yahoo_summary("cdr.wa")
-
-    assert result == {"price": {"shortName": "CDR"}}
-    assert session.calls[0]["url"] == "https://example/CDR.WA"
+    with pytest.raises(RuntimeError, match="Yahoo Finance jest wyłączone"):
+        harvester.fetch_yahoo_summary("cdr")
 
 
-def test_fetch_yahoo_summary_refreshes_crumb_after_unauthorized():
-    session = FakeSession(
-        [
-            FakeResponse(status_code=401),
-            FakeResponse(text="crumb-token\n"),
-            FakeResponse(
-                {"quoteSummary": {"result": [{"price": {"shortName": "CDR"}}]}}
-            ),
-        ]
-    )
-    harvester = CompanyDataHarvester(
-        session=session,
-        yahoo_url_template="https://example/{symbol}",
-    )
+def test_google_fetch_is_disabled_by_default():
+    harvester = CompanyDataHarvester(session=FakeSession([]))
 
-    result = harvester.fetch_yahoo_summary("cdr")
-
-    assert result == {"price": {"shortName": "CDR"}}
-    assert session.calls[0]["params"] == {"modules": YAHOO_MODULES}
-    assert session.calls[1]["url"] == "https://example/v1/test/getcrumb"
-    assert session.calls[2]["params"] == {
-        "modules": YAHOO_MODULES,
-        "crumb": "crumb-token",
-    }
-
-
-def test_fetch_yahoo_summary_reuses_cached_crumb():
-    session = FakeSession(
-        [
-            FakeResponse(status_code=401),
-            FakeResponse(text="crumb-token"),
-            FakeResponse({"quoteSummary": {"result": [{}]}}),
-            FakeResponse({"quoteSummary": {"result": [{}]}}),
-        ]
-    )
-    harvester = CompanyDataHarvester(
-        session=session,
-        yahoo_url_template="https://example/{symbol}",
-    )
-
-    harvester.fetch_yahoo_summary("cdr")
-    harvester.fetch_yahoo_summary("ale")
-
-    assert session.calls[2]["params"] == {
-        "modules": YAHOO_MODULES,
-        "crumb": "crumb-token",
-    }
-    assert session.calls[3]["url"] == "https://example/ALE.WA"
-    assert session.calls[3]["params"] == {
-        "modules": YAHOO_MODULES,
-        "crumb": "crumb-token",
-    }
-
-
-def test_fetch_google_overview_parses_metrics():
-    session = FakeSession([FakeResponse(text=GOOGLE_CDR_HTML)])
-    harvester = CompanyDataHarvester(
-        session=session,
-        google_url_template="https://example/{symbol}",
-    )
-
-    result = harvester.fetch_google_overview("cdr.wa")
-
-    assert result["symbol"] == "CDR:WSE"
-    assert session.calls[0]["url"] == "https://example/CDR:WSE"
-    assert session.calls[0]["params"] == {"hl": "pl"}
-    assert pytest.approx(result["metrics"]["last_price"], rel=1e-6) == 102.5
-    assert result["metrics"]["currency"] == "PLN"
-    assert result["structured_data"], "Oczekiwano danych ustrukturyzowanych"
+    with pytest.raises(RuntimeError, match="Google Finance jest wyłączone"):
+        harvester.fetch_google_overview("cdr")
 
 
 def test_extract_symbol_rejects_non_gpw_symbols():
@@ -480,145 +401,8 @@ def test_extract_symbol_trims_wa_suffix():
     assert harvester._extract_symbol({"stockTicker": " ale.wa "}) == "ALE"
 
 
-YAHOO_CDR = {
-    "quoteSummary": {
-        "result": [
-            {
-                "price": {
-                    "longName": "CD PROJEKT S.A.",
-                    "shortName": "CD PROJEKT",
-                    "marketCap": {"raw": 45000000000},
-                },
-                "assetProfile": {
-                    "industry": "Electronic Gaming & Multimedia",
-                    "sector": "Communication Services",
-                    "country": "Poland",
-                    "city": "Warsaw",
-                    "longBusinessSummary": "Szczegółowy opis z Yahoo.",
-                    "website": "https://www.cdprojekt.com",
-                    "fullTimeEmployees": 1220,
-                },
-                "summaryDetail": {
-                    "trailingPE": {"raw": 21.5},
-                    "priceToBook": {"raw": 5.2},
-                    "dividendYield": {"raw": 0.012},
-                },
-                "defaultKeyStatistics": {
-                    "marketCap": {"raw": 45000000000},
-                    "trailingEps": {"raw": 12.34},
-                },
-                "financialData": {
-                    "totalRevenue": {"raw": 2000000000},
-                    "netIncomeToCommon": {"raw": 900000000},
-                    "ebitda": {"raw": 1000000000},
-                    "returnOnEquity": {"raw": 0.25},
-                    "returnOnAssets": {"raw": 0.12},
-                    "grossMargins": {"raw": 0.6},
-                    "operatingMargins": {"raw": 0.4},
-                    "profitMargins": {"raw": 0.35},
-                },
-            }
-        ],
-        "error": None,
-    }
-}
-
-YAHOO_PKN = {
-    "quoteSummary": {
-        "result": [
-            {
-                "price": {
-                    "longName": "PKN ORLEN SPÓŁKA AKCYJNA",
-                },
-                "assetProfile": {
-                    "industry": "Oil & Gas Refining & Marketing",
-                    "sector": "Energy",
-                    "country": "Poland",
-                    "city": "Płock",
-                    "website": "http://www.orlen.pl",
-                    "fullTimeEmployees": 40000,
-                },
-                "summaryDetail": {},
-                "defaultKeyStatistics": {
-                    "marketCap": {"raw": 80000000000},
-                },
-                "financialData": {},
-            }
-        ],
-        "error": None,
-    }
-}
-
-GOOGLE_CDR_HTML = """
-<html>
-  <head>
-    <script type="application/json" id="__NEXT_DATA__">
-    {
-      "quote": {
-        "lastPrice": {"raw": 102.5},
-        "priceChange": {"raw": -1.2},
-        "priceChangePercent": {"raw": -1.1},
-        "previousClose": {"raw": 103.7},
-        "open": {"raw": 104.0},
-        "dayLow": {"raw": 101.5},
-        "dayHigh": {"raw": 104.5},
-        "fiftyTwoWeekLow": {"raw": 90.0},
-        "fiftyTwoWeekHigh": {"raw": 150.0},
-        "marketCap": {"raw": 43000000000},
-        "peRatio": {"raw": 21.5},
-        "dividendYield": {"raw": 0.018},
-        "eps": {"raw": 11.5},
-        "employees": {"raw": 1200},
-        "foundedYear": "2002",
-        "headquarters": "Warsaw, Poland",
-        "currencyCode": "PLN"
-      }
-    }
-    </script>
-    <script type="application/ld+json">
-    {
-      "@context": "https://schema.org",
-      "@type": "FinancialProduct",
-      "name": "CD PROJEKT",
-      "price": "102.5",
-      "priceCurrency": "PLN"
-    }
-    </script>
-  </head>
-</html>
-"""
-
-GOOGLE_PKN_HTML = """
-<html>
-  <head>
-    <script type="application/json">
-    {
-      "quote": {
-        "marketCap": "145,5 mld PLN",
-        "peRatio": "7.3",
-        "dividendYield": "6.2%",
-        "eps": "12.1",
-        "employees": "18000",
-        "foundedYear": "1999",
-        "headquarters": "Płock, Poland"
-      }
-    }
-    </script>
-  </head>
-</html>
-"""
-
-
 def test_harvester_sync_inserts_expected_rows():
-    session = FakeSession(
-        [
-            FakeResponse(GPW_FIXTURE),
-            FakeResponse(YAHOO_CDR),
-            FakeResponse(text=GOOGLE_CDR_HTML),
-            FakeResponse(YAHOO_PKN),
-            FakeResponse(text=GOOGLE_PKN_HTML),
-        ]
-    )
+    session = FakeSession([FakeResponse(GPW_FIXTURE)])
     harvester = CompanyDataHarvester(session=session)
     fake_client = FakeClickHouseClient()
 
@@ -663,7 +447,7 @@ def test_harvester_sync_inserts_expected_rows():
     assert result.failed == 0
     assert result.errors == []
     assert result.started_at <= result.finished_at
-    assert len(result.request_log) == 5
+    assert len(result.request_log) == 1
     assert all(entry.finished_at is not None for entry in result.request_log)
     assert result.request_log[0].url.startswith("https://www.gpw.pl")
     assert len(fake_client.insert_calls) == 1
@@ -671,38 +455,30 @@ def test_harvester_sync_inserts_expected_rows():
     assert insert_call["table"] == "companies"
     used_columns = insert_call["columns"]
     assert "symbol" in used_columns
-    assert "market_cap" in used_columns
+    assert "market_cap" not in used_columns
 
     rows = [dict(zip(used_columns, row)) for row in insert_call["data"]]
     first = rows[0]
     assert first["symbol"] == "CDR"
     assert first["website"] == "https://www.cdprojekt.com"
     assert first["logo_url"] == "https://logo.clearbit.com/cdprojekt.com"
-    assert pytest.approx(first["market_cap"], rel=1e-6) == 45000000000
+    assert first.get("market_cap") is None
     payload = json.loads(first["raw_payload"])
     assert payload["gpw"]["stockTicker"] == "CDR"
-    assert payload["yahoo"]["assetProfile"]["industry"] == "Electronic Gaming & Multimedia"
-    assert payload["google"]["metrics"]["market_cap"] == 43000000000
+    assert payload["yahoo"] is None
+    assert payload["google"] is None
 
     second = rows[1]
     assert second["symbol"] == "PKN"
     assert second["website"] == "https://www.orlen.pl"
     assert second["description"].startswith("PKN Orlen")
-    assert pytest.approx(second["dividend_yield"], rel=1e-6) == 0.062
+    assert second.get("dividend_yield") is None
     second_payload = json.loads(second["raw_payload"])
-    assert pytest.approx(second_payload["google"]["metrics"]["dividend_yield"], rel=1e-6) == 0.062
+    assert second_payload["google"] is None
 
 
 def test_harvester_sync_reports_progress_events():
-    session = FakeSession(
-        [
-            FakeResponse(GPW_FIXTURE),
-            FakeResponse(YAHOO_CDR),
-            FakeResponse(text=GOOGLE_CDR_HTML),
-            FakeResponse(YAHOO_PKN),
-            FakeResponse(text=GOOGLE_PKN_HTML),
-        ]
-    )
+    session = FakeSession([FakeResponse(GPW_FIXTURE)])
     harvester = CompanyDataHarvester(session=session)
     fake_client = FakeClickHouseClient()
 
