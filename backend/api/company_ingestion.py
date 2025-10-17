@@ -143,6 +143,40 @@ def _clean_string(value: Any) -> Optional[str]:
     return str(value)
 
 
+def _is_blank(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    return False
+
+
+def _merge_missing_fields(target: Dict[str, Any], source: Dict[str, Any]) -> None:
+    for key, value in source.items():
+        if key == "raw_payload":
+            continue
+        if _is_blank(target.get(key)) and not _is_blank(value):
+            target[key] = value
+
+
+def _merge_company_rows(existing: Dict[str, Any], new_data: Dict[str, Any]) -> Dict[str, Any]:
+    merged = dict(existing)
+    for key, value in new_data.items():
+        if key == "raw_payload":
+            merged[key] = value
+            continue
+        if not _is_blank(value):
+            merged[key] = value
+        elif key not in merged:
+            merged[key] = value
+    return merged
+
+
+def _quote_sql_literal(value: str) -> str:
+    escaped = value.replace("'", "''")
+    return f"'{escaped}'"
+
+
 def _extract_xml_error_detail(document: str) -> Optional[str]:
     cleaned = document.lstrip("\ufeff").strip()
     if not cleaned.startswith("<"):
@@ -1246,6 +1280,60 @@ class CompanyDataHarvester:
         return row
 
     # ---------------------------
+    # Baza danych
+    # ---------------------------
+
+    def _load_existing_rows(
+        self,
+        ch_client: Any,
+        table_name: str,
+        symbols: Sequence[str],
+    ) -> Dict[str, Dict[str, Any]]:
+        if not symbols or not hasattr(ch_client, "query"):
+            return {}
+
+        placeholders = ", ".join(_quote_sql_literal(symbol) for symbol in symbols if symbol)
+        if not placeholders:
+            return {}
+
+        query = f"SELECT * FROM {table_name} WHERE symbol IN ({placeholders})"
+        result = ch_client.query(query)
+        columns = getattr(result, "column_names", None)
+        rows = getattr(result, "result_rows", None)
+        if not columns or rows is None:
+            return {}
+
+        existing: Dict[str, Dict[str, Any]] = {}
+        for values in rows:
+            record = dict(zip(columns, values))
+            symbol = record.get("symbol")
+            if not symbol:
+                continue
+            current = existing.get(symbol)
+            if current is None:
+                existing[symbol] = record
+            else:
+                _merge_missing_fields(current, record)
+        return existing
+
+    def _delete_existing_symbols(
+        self,
+        ch_client: Any,
+        table_name: str,
+        symbols: Sequence[str],
+    ) -> None:
+        if not symbols or not hasattr(ch_client, "command"):
+            return
+
+        placeholders = ", ".join(_quote_sql_literal(symbol) for symbol in symbols if symbol)
+        if not placeholders:
+            return
+
+        ch_client.command(
+            f"ALTER TABLE {table_name} DELETE WHERE symbol IN ({placeholders})"
+        )
+
+    # ---------------------------
     # Synchronizacja
     # ---------------------------
 
@@ -1339,22 +1427,52 @@ class CompanyDataHarvester:
             )
 
         normalized_rows = list(deduplicated.values())
+        final_rows: List[Dict[str, Any]] = []
         synced = 0
+
+        existing_rows: Dict[str, Dict[str, Any]] = {}
+        if normalized_rows:
+            symbols_for_lookup = sorted(deduplicated.keys())
+            try:
+                existing_rows = self._load_existing_rows(
+                    ch_client, table_name, symbols_for_lookup
+                )
+            except Exception as exc:  # pragma: no cover - zależy od konfiguracji DB
+                errors.append(f"Nie udało się odczytać istniejących spółek: {exc}")
+                failed_count = len(errors)
+            else:
+                if existing_rows:
+                    try:
+                        self._delete_existing_symbols(
+                            ch_client, table_name, sorted(existing_rows.keys())
+                        )
+                    except Exception as exc:  # pragma: no cover - zależy od konfiguracji DB
+                        errors.append(f"Nie udało się usunąć duplikatów: {exc}")
+                        failed_count = len(errors)
+
+        for row in normalized_rows:
+            symbol = row.get("symbol")
+            if symbol and symbol in existing_rows:
+                merged = _merge_company_rows(existing_rows[symbol], row)
+            else:
+                merged = row
+            final_rows.append(merged)
+
         usable_columns = [
-            column for column in columns if any(row.get(column) is not None for row in normalized_rows)
+            column for column in columns if any(row.get(column) is not None for row in final_rows)
         ]
         emit(
             "inserting",
             message="Zapisywanie danych w bazie",
         )
-        if normalized_rows and usable_columns:
-            data = [[row.get(column) for column in usable_columns] for row in normalized_rows]
+        if final_rows and usable_columns:
+            data = [[row.get(column) for column in usable_columns] for row in final_rows]
             ch_client.insert(
                 table=table_name,
                 data=data,
                 column_names=list(usable_columns),
             )
-            synced = len(normalized_rows)
+            synced = len(final_rows)
             deduplicated_count = synced
 
         finished_at = datetime.utcnow()

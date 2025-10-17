@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from socketserver import TCPServer
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 from types import SimpleNamespace
 import sys
 
@@ -101,8 +101,39 @@ class FakeSession:
 
 
 class FakeClickHouseClient:
-    def __init__(self) -> None:
+    def __init__(self, query_results: Optional[Dict[str, Any]] = None) -> None:
         self.insert_calls: List[Dict[str, Any]] = []
+        self.command_calls: List[str] = []
+        self.query_calls: List[str] = []
+        self._query_results: Dict[str, Any] = {}
+        if query_results:
+            for sql, payload in query_results.items():
+                columns = list(payload.get("columns", [])) if isinstance(payload, dict) else []
+                rows_payload = payload.get("rows", []) if isinstance(payload, dict) else []
+                rows = [list(row) for row in rows_payload]
+                self._query_results[sql] = {"columns": columns, "rows": rows}
+
+    def set_query_result(
+        self,
+        sql: str,
+        *,
+        columns: Sequence[str],
+        rows: Sequence[Sequence[Any]],
+    ) -> None:
+        self._query_results[sql] = {
+            "columns": list(columns),
+            "rows": [list(row) for row in rows],
+        }
+
+    def query(self, sql: str) -> Any:
+        self.query_calls.append(sql)
+        payload = self._query_results.get(sql) or {}
+        columns = list(payload.get("columns", []))
+        rows = [list(row) for row in payload.get("rows", [])]
+        return SimpleNamespace(result_rows=rows, column_names=columns)
+
+    def command(self, sql: str) -> None:
+        self.command_calls.append(sql)
 
     def insert(self, *, table: str, data: List[List[Any]], column_names: List[str]) -> None:
         self.insert_calls.append({"table": table, "data": data, "columns": column_names})
@@ -475,6 +506,58 @@ def test_harvester_sync_inserts_expected_rows():
     assert second.get("dividend_yield") is None
     second_payload = json.loads(second["raw_payload"])
     assert second_payload["google"] is None
+
+
+def test_harvester_sync_merges_existing_records_and_removes_duplicates():
+    session = FakeSession([FakeResponse(GPW_FIXTURE)])
+    harvester = CompanyDataHarvester(session=session)
+    fake_client = FakeClickHouseClient()
+
+    lookup_sql = "SELECT * FROM companies WHERE symbol IN ('CDR', 'PKN')"
+    fake_client.set_query_result(
+        lookup_sql,
+        columns=[
+            "symbol",
+            "name",
+            "website",
+            "logo_url",
+            "employees",
+            "raw_payload",
+        ],
+        rows=[["CDR", "CD PROJEKT", None, None, 1500, "{\"old\": true}"]],
+    )
+
+    columns = [
+        "symbol",
+        "name",
+        "short_name",
+        "website",
+        "logo_url",
+        "employees",
+        "raw_payload",
+    ]
+
+    result = harvester.sync(
+        ch_client=fake_client,
+        table_name="companies",
+        columns=columns,
+    )
+
+    assert result.synced == 2
+    assert lookup_sql in fake_client.query_calls
+    assert fake_client.command_calls == [
+        "ALTER TABLE companies DELETE WHERE symbol IN ('CDR')"
+    ]
+
+    insert_call = fake_client.insert_calls[0]
+    used_columns = insert_call["columns"]
+    rows = [dict(zip(used_columns, row)) for row in insert_call["data"]]
+    cdr_row = next(row for row in rows if row["symbol"] == "CDR")
+    assert cdr_row["employees"] == 1500
+    assert cdr_row["logo_url"] == "https://logo.clearbit.com/cdprojekt.com"
+    assert cdr_row["website"] == "https://www.cdprojekt.com"
+    payload = json.loads(cdr_row["raw_payload"])
+    assert "old" not in payload
 
 
 def test_harvester_sync_reports_progress_events():
