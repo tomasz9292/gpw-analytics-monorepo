@@ -944,6 +944,7 @@ type PortfolioStats = {
     trades?: number;
     final_value?: number;
     initial_value?: number;
+    fees?: number;
 };
 
 type PortfolioAllocation = {
@@ -1468,6 +1469,7 @@ function normalizePortfolioResponse(raw: unknown): PortfolioResp {
         trades: pickNumber(statsSources, ["trades", "transaction_count", "trades_count"]),
         final_value: pickNumber(statsSources, ["final_value", "ending_value", "last_value"]),
         initial_value: pickNumber(statsSources, ["initial_value", "starting_value", "start_value"]),
+        fees: pickNumber(statsSources, ["fees", "fees_paid", "transaction_fees", "costs"]),
     };
 
     const benchmarkSource =
@@ -4269,6 +4271,7 @@ function PortfolioStatsGrid({ stats }: { stats: PortfolioStats }) {
         { key: "volatility", label: "Vol" },
         { key: "sharpe", label: "Sharpe", format: (v) => v.toFixed(2) },
         { key: "turnover", label: "Obrót" },
+        { key: "fees", label: "Koszt transakcji", format: (v) => formatNumber(v, 2) },
         { key: "trades", label: "Transakcje", format: (v) => v.toFixed(0) },
         { key: "best_year", label: "Najlepszy rok" },
         { key: "worst_year", label: "Najgorszy rok" },
