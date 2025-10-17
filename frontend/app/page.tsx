@@ -466,7 +466,8 @@ const extractRawInsights = (payload: JsonValue): CompanyRawInsights => {
 
 const resolveUniverseWithFallback = (
     universe: ScorePreviewRequest["universe"],
-    fallback?: string[]
+    fallback?: string[],
+    preferFallback = false
 ): ScorePreviewRequest["universe"] => {
     if (typeof universe === "string" && universe.trim()) {
         return universe.trim();
@@ -479,7 +480,7 @@ const resolveUniverseWithFallback = (
             return cleaned;
         }
     }
-    if (fallback && fallback.length) {
+    if (preferFallback && fallback && fallback.length) {
         return [...fallback];
     }
     return undefined;
@@ -7831,11 +7832,8 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                                         placeholder="np. WIG20.WA, WIG40.WA"
                                     />
                                     <span className="text-xs text-subtle">
-                                        Pozostaw puste, aby automatycznie użyć listy
-                                        {" "}
-                                        {scoreUniverseFallback.length}
-                                        {" "}
-                                        najpłynniejszych spółek GPW z backendu.
+                                        Pozostaw puste, aby uwzględnić wszystkie spółki
+                                        GPW dostępne w bazie danych.
                                     </span>
                                 </label>
                                 <label className="flex flex-col gap-2">
