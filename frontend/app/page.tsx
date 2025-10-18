@@ -1077,6 +1077,20 @@ type OhlcSyncResultPayload = {
     sync_type: "historical_prices";
 };
 
+type OhlcSyncProgressPayload = {
+    status: "idle" | "running" | "success" | "error";
+    total_symbols: number;
+    processed_symbols: number;
+    inserted_rows: number;
+    skipped_symbols: number;
+    current_symbol: string | null;
+    started_at: string | null;
+    finished_at: string | null;
+    message: string | null;
+    errors: string[];
+    requested_as_admin: boolean;
+};
+
 const COMPANY_STAGE_LABELS: Record<CompanySyncStatusPayload["stage"], string> = {
     idle: "Oczekiwanie",
     fetching: "Pobieranie listy spółek",
@@ -1091,6 +1105,13 @@ const COMPANY_STATUS_LABELS: Record<CompanySyncStatusPayload["status"], string> 
     running: "Synchronizacja w toku",
     completed: "Synchronizacja zakończona",
     failed: "Synchronizacja zakończona błędem",
+};
+
+const OHLC_PROGRESS_STATUS_LABELS: Record<OhlcSyncProgressPayload["status"], string> = {
+    idle: "Brak aktywnej synchronizacji",
+    running: "Trwa synchronizacja",
+    success: "Zakończono pomyślnie",
+    error: "Błąd synchronizacji",
 };
 
 const SCHEDULE_MODE_LABELS: Record<CompanySyncScheduleStatusPayload["mode"], string> = {
@@ -1194,6 +1215,8 @@ const parseApiError = async (response: Response): Promise<string> => {
     }
     return text;
 };
+
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const portfolioPointsToRows = (points: PortfolioPoint[]): Row[] =>
     points.map((point) => ({
@@ -2049,6 +2072,7 @@ const CompanySyncPanel = () => {
     const [ohlcResult, setOhlcResult] = useState<OhlcSyncResultPayload | null>(null);
     const [ohlcRequestLog, setOhlcRequestLog] = useState<HttpRequestLogEntry[]>([]);
     const [ohlcShowRequestLog, setOhlcShowRequestLog] = useState(false);
+    const [ohlcProgress, setOhlcProgress] = useState<OhlcSyncProgressPayload | null>(null);
 
     const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const selectedSymbolRef = useRef<string | null>(null);
@@ -2187,6 +2211,21 @@ const CompanySyncPanel = () => {
     }, []);
 
     const ohlcHasErrors = Boolean(ohlcResult?.errors?.length);
+    const ohlcProgressPercent = useMemo(() => {
+        if (!ohlcProgress) {
+            return 0;
+        }
+        if (ohlcProgress.total_symbols > 0) {
+            const ratio = ohlcProgress.processed_symbols / ohlcProgress.total_symbols;
+            const bounded = Math.max(0, Math.min(1, Number.isFinite(ratio) ? ratio : 0));
+            return Math.round(bounded * 100);
+        }
+        return ohlcProgress.status === "success" ? 100 : 0;
+    }, [ohlcProgress]);
+    const ohlcProgressStatusLabel = useMemo(
+        () => (ohlcProgress ? OHLC_PROGRESS_STATUS_LABELS[ohlcProgress.status] : null),
+        [ohlcProgress]
+    );
 
     const stopPolling = useCallback(() => {
         if (pollingRef.current) {
@@ -2250,6 +2289,30 @@ const CompanySyncPanel = () => {
             } else {
                 setAdminsError("Nie udało się pobrać listy administratorów");
             }
+        }
+    }, []);
+
+    const fetchOhlcProgress = useCallback(async () => {
+        try {
+            const response = await fetch(`/api/admin/ohlc/progress`, { cache: "no-store" });
+            if (!response.ok) {
+                throw new Error(await parseApiError(response));
+            }
+            const payload = (await response.json()) as OhlcSyncProgressPayload;
+            setOhlcProgress(payload);
+            return payload;
+        } catch (error) {
+            if (error instanceof Error && error.message) {
+                setOhlcProgress((prev) =>
+                    prev
+                        ? {
+                              ...prev,
+                              message: error.message,
+                          }
+                        : prev
+                );
+            }
+            return null;
         }
     }, []);
 
@@ -2361,6 +2424,7 @@ const CompanySyncPanel = () => {
             setOhlcError(null);
             setOhlcResult(null);
             setOhlcRequestLog([]);
+            let pollingCancelled = false;
             try {
                 const parsedSymbols = ohlcSymbolsInput
                     .split(/[\s,;]+/)
@@ -2372,6 +2436,36 @@ const CompanySyncPanel = () => {
                     run_as_admin: ohlcRunAsAdmin,
                     truncate: ohlcTruncate,
                 };
+                const startedAtIso = new Date().toISOString();
+                setOhlcProgress({
+                    status: "running",
+                    total_symbols: uniqueSymbols.length,
+                    processed_symbols: 0,
+                    inserted_rows: 0,
+                    skipped_symbols: 0,
+                    current_symbol: null,
+                    started_at: startedAtIso,
+                    finished_at: null,
+                    message: "Inicjowanie synchronizacji...",
+                    errors: [],
+                    requested_as_admin: ohlcRunAsAdmin,
+                });
+                const pollProgress = async () => {
+                    while (!pollingCancelled) {
+                        const snapshot = await fetchOhlcProgress();
+                        if (
+                            snapshot &&
+                            (snapshot.status === "success" || snapshot.status === "error")
+                        ) {
+                            break;
+                        }
+                        if (pollingCancelled) {
+                            break;
+                        }
+                        await delay(1500);
+                    }
+                };
+                void pollProgress();
                 if (uniqueSymbols.length > 0) {
                     payload.symbols = uniqueSymbols;
                 }
@@ -2411,16 +2505,34 @@ const CompanySyncPanel = () => {
                 setOhlcRequestLog(resultPayload.request_log ?? []);
                 setOhlcShowRequestLog(false);
             } catch (error) {
-                setOhlcError(
+                const message =
                     error instanceof Error && error.message
                         ? error.message
-                        : "Nie udało się uruchomić synchronizacji notowań"
+                        : "Nie udało się uruchomić synchronizacji notowań";
+                setOhlcError(message);
+                setOhlcProgress((prev) =>
+                    prev
+                        ? {
+                              ...prev,
+                              status: "error",
+                              message,
+                              finished_at: new Date().toISOString(),
+                          }
+                        : prev
                 );
             } finally {
+                pollingCancelled = true;
+                await fetchOhlcProgress();
                 setOhlcIsSyncing(false);
             }
         },
-        [ohlcSymbolsInput, ohlcRunAsAdmin, ohlcTruncate, ohlcStartInput]
+        [
+            ohlcSymbolsInput,
+            ohlcRunAsAdmin,
+            ohlcTruncate,
+            ohlcStartInput,
+            fetchOhlcProgress,
+        ]
     );
 
     const handleScheduleOnce = useCallback(
@@ -2590,6 +2702,10 @@ const CompanySyncPanel = () => {
         },
         [companies]
     );
+
+    useEffect(() => {
+        void fetchOhlcProgress();
+    }, [fetchOhlcProgress]);
 
     useEffect(() => {
         fetchStatus();
@@ -2959,6 +3075,75 @@ const CompanySyncPanel = () => {
                                     </label>
                                 </div>
                                 {ohlcError && <div className="text-sm text-negative">{ohlcError}</div>}
+                                {ohlcProgress && ohlcProgress.status !== "idle" && (
+                                    <div className="space-y-3 rounded-xl border border-soft bg-white/70 p-4 text-xs text-subtle">
+                                        <div className="flex items-center justify-between gap-3 text-[13px] font-semibold text-primary">
+                                            <span>{ohlcProgressStatusLabel}</span>
+                                            <span className="text-[11px] text-muted">{ohlcProgressPercent}%</span>
+                                        </div>
+                                        <div className="h-2 rounded-full bg-soft">
+                                            <div
+                                                className={`h-2 rounded-full transition-all ${
+                                                    ohlcProgress.status === "error"
+                                                        ? "bg-negative"
+                                                        : ohlcProgress.status === "success"
+                                                        ? "bg-emerald-500"
+                                                        : "bg-primary"
+                                                }`}
+                                                style={{ width: `${ohlcProgressPercent}%` }}
+                                            />
+                                        </div>
+                                        <div className="grid gap-2 text-xs sm:grid-cols-2">
+                                            <div>
+                                                Symbole:
+                                                <span className="ml-1 font-semibold text-primary">
+                                                    {integerFormatter.format(ohlcProgress.processed_symbols)} /
+                                                    {" "}
+                                                    {integerFormatter.format(
+                                                        ohlcProgress.total_symbols ||
+                                                            Math.max(ohlcProgress.processed_symbols, 0)
+                                                    )}
+                                                </span>
+                                            </div>
+                                            <div>
+                                                Zapisane wiersze:
+                                                <span className="ml-1 font-semibold text-primary">
+                                                    {integerFormatter.format(ohlcProgress.inserted_rows)}
+                                                </span>
+                                            </div>
+                                            <div>
+                                                Pominięte symbole:
+                                                <span className="ml-1 font-semibold text-primary">
+                                                    {integerFormatter.format(ohlcProgress.skipped_symbols)}
+                                                </span>
+                                            </div>
+                                            <div>
+                                                Aktualny symbol:
+                                                <span className="ml-1 font-semibold text-primary">
+                                                    {ohlcProgress.current_symbol ?? "—"}
+                                                </span>
+                                            </div>
+                                        </div>
+                                        {ohlcProgress.message && (
+                                            <div
+                                                className={`text-xs ${
+                                                    ohlcProgress.status === "error"
+                                                        ? "text-negative"
+                                                        : "text-primary"
+                                                }`}
+                                            >
+                                                {ohlcProgress.message}
+                                            </div>
+                                        )}
+                                        {ohlcProgress.status === "error" && ohlcProgress.errors.length > 0 && (
+                                            <ul className="list-disc space-y-1 pl-4 text-[11px] text-negative">
+                                                {ohlcProgress.errors.map((error, index) => (
+                                                    <li key={`${error}-${index}`}>{error}</li>
+                                                ))}
+                                            </ul>
+                                        )}
+                                    </div>
+                                )}
                                 <div className="flex flex-wrap gap-3">
                                     <button
                                         type="submit"

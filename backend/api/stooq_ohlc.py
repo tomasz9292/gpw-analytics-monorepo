@@ -6,8 +6,8 @@ import csv
 import io
 import unicodedata
 from datetime import date, datetime
-from typing import Any, Dict, List, Optional, Sequence
-from typing import Literal
+from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Literal, TypedDict
 
 from pydantic import BaseModel, Field
 
@@ -73,6 +73,18 @@ class OhlcSyncResult(BaseModel):
     sync_type: Literal["historical_prices"] = Field(
         "historical_prices", description="Rodzaj przeprowadzonej synchronizacji"
     )
+
+
+class OhlcSyncProgressEvent(TypedDict):
+    processed: int
+    total: int
+    inserted: int
+    skipped: int
+    errors: List[str]
+    current_symbol: Optional[str]
+
+
+ProgressCallback = Callable[[OhlcSyncProgressEvent], None]
 
 
 class StooqOhlcHarvester:
@@ -173,6 +185,7 @@ class StooqOhlcHarvester:
         start_date: Optional[date] = None,
         truncate: bool = False,
         run_as_admin: bool = False,
+        progress_callback: Optional[ProgressCallback] = None,
     ) -> OhlcSyncResult:
         supports_history = hasattr(self.session, "clear_history") and hasattr(
             self.session, "get_history"
@@ -186,6 +199,21 @@ class StooqOhlcHarvester:
         skipped = 0
         processed = 0
         truncated = False
+        total = len(symbols)
+
+        def emit_progress(current_symbol: Optional[str] = None) -> None:
+            if not progress_callback:
+                return
+            progress_callback(
+                {
+                    "processed": processed,
+                    "total": total,
+                    "inserted": inserted,
+                    "skipped": skipped,
+                    "errors": list(errors),
+                    "current_symbol": current_symbol,
+                }
+            )
 
         if truncate:
             try:
@@ -193,19 +221,27 @@ class StooqOhlcHarvester:
                 truncated = True
             except Exception as exc:  # pragma: no cover - depends on DB configuration
                 errors.append(f"Nie udało się wyczyścić tabeli {table_name}: {exc}")
+            finally:
+                emit_progress()
+
+        emit_progress()
 
         for raw_symbol in symbols:
             processed += 1
+            current_symbol: Optional[str] = str(raw_symbol)
             try:
                 normalized_symbol = _normalize_gpw_symbol(raw_symbol)
+                current_symbol = normalized_symbol
             except Exception as exc:
                 errors.append(str(exc))
+                emit_progress(current_symbol=current_symbol)
                 continue
             try:
                 history = self.fetch_history(normalized_symbol)
             except Exception as exc:
                 errors.append(f"{normalized_symbol}: {exc}")
                 skipped += 1
+                emit_progress(current_symbol=normalized_symbol)
                 continue
 
             filtered_rows = [
@@ -215,6 +251,7 @@ class StooqOhlcHarvester:
             ]
             if not filtered_rows:
                 skipped += 1
+                emit_progress(current_symbol=normalized_symbol)
                 continue
 
             payload = [
@@ -246,13 +283,17 @@ class StooqOhlcHarvester:
             except Exception as exc:  # pragma: no cover - depends on DB configuration
                 errors.append(f"{normalized_symbol}: nie udało się zapisać danych: {exc}")
                 skipped += 1
+                emit_progress(current_symbol=normalized_symbol)
                 continue
             inserted += len(filtered_rows)
+            emit_progress(current_symbol=normalized_symbol)
 
         finished_at = datetime.utcnow()
         request_log: List[HttpRequestLog] = []
         if supports_history:
             request_log = self.session.get_history()
+
+        emit_progress()
 
         return OhlcSyncResult(
             symbols=processed,
@@ -289,4 +330,6 @@ __all__ = [
     "OhlcSyncResult",
     "StooqOhlcHarvester",
     "STOOQ_OHLC_DOWNLOAD_URL",
+    "OhlcSyncProgressEvent",
+    "ProgressCallback",
 ]
