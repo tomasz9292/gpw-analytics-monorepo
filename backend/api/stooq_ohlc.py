@@ -160,6 +160,30 @@ class StooqOhlcHarvester:
         document = response.text()
         parsed = self._parse_csv(document)
         if not parsed:
+            raw_bytes: Optional[bytes]
+            content = getattr(response, "content", None)
+            if isinstance(content, (bytes, bytearray)):
+                raw_bytes = bytes(content)
+            elif callable(content):  # pragma: no cover - depends on HTTP client implementation
+                try:
+                    possible_bytes = content()
+                except TypeError:  # pragma: no cover - defensive, unexpected signature
+                    possible_bytes = None
+                raw_bytes = bytes(possible_bytes) if possible_bytes is not None else None
+            else:
+                raw_bytes = None
+
+            if raw_bytes:
+                for encoding in ("utf-8-sig", "cp1250", "iso-8859-2"):
+                    try:
+                        fallback_document = raw_bytes.decode(encoding)
+                    except Exception:
+                        continue
+                    parsed = self._parse_csv(fallback_document)
+                    if parsed:
+                        document = fallback_document
+                        break
+        if not parsed:
             raise RuntimeError("Brak danych notowań ze Stooq")
         normalized_symbol = _normalize_gpw_symbol(symbol)
         rows: List[OhlcRow] = []

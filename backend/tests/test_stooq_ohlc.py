@@ -14,15 +14,20 @@ from api.stooq_ohlc import OhlcSyncResult, StooqOhlcHarvester
 
 
 class FakeResponse:
-    def __init__(self, text: str) -> None:
+    def __init__(self, text: str, raw_bytes: Optional[bytes] = None) -> None:
         self._text = text
+        self._raw_bytes = raw_bytes if raw_bytes is not None else text.encode()
 
     def text(self) -> str:
         return self._text
 
+    @property
+    def content(self) -> bytes:
+        return self._raw_bytes
+
 
 class FakeSession:
-    def __init__(self, payloads: List[str]) -> None:
+    def __init__(self, payloads: List[Any]) -> None:
         self._payloads = list(payloads)
         self.calls: List[str] = []
         self._history: List[HttpRequestLog] = []
@@ -33,7 +38,15 @@ class FakeSession:
         self._history.append(entry)
         if not self._payloads:
             raise AssertionError("Brak przygotowanych odpowiedzi testowych")
-        return FakeResponse(self._payloads.pop(0))
+        payload = self._payloads.pop(0)
+        if isinstance(payload, FakeResponse):
+            return payload
+        if isinstance(payload, dict):
+            return FakeResponse(
+                text=str(payload.get("text", "")),
+                raw_bytes=payload.get("raw_bytes"),
+            )
+        return FakeResponse(str(payload))
 
     def clear_history(self) -> None:
         self._history.clear()
@@ -87,6 +100,25 @@ def test_fetch_history_uses_alias_for_raw_symbols():
 
     assert [row.symbol for row in rows] == ["CDPROJEKT", "CDPROJEKT"]
     assert session.calls[0].endswith("s=cdr&i=d")
+
+
+def test_fetch_history_recovers_from_cp1250_encoded_payload():
+    csv_text = "Data,Otwarcie,Najwyższy,Najniższy,Zamknięcie,Wolumen\n2024-01-02,10,11,9,10.5,12345\n"
+    raw_bytes = csv_text.encode("cp1250")
+    broken_text = raw_bytes.decode("utf-8", errors="replace")
+
+    session = FakeSession([
+        {
+            "text": broken_text,
+            "raw_bytes": raw_bytes,
+        }
+    ])
+    harvester = StooqOhlcHarvester(session=session)
+
+    rows = harvester.fetch_history("CDR")
+
+    assert [row.date for row in rows] == [date(2024, 1, 2)]
+    assert rows[0].open == pytest.approx(10.0)
 
 
 def test_sync_truncates_and_inserts_filtered_rows():
