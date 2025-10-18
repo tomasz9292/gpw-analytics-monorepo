@@ -12,6 +12,7 @@ from typing import Literal, TypedDict
 from pydantic import BaseModel, Field
 
 from .company_ingestion import HttpRequestLog, SimpleHttpSession, _normalize_gpw_symbol
+from .symbols import to_stooq_symbol
 
 STOOQ_OHLC_DOWNLOAD_URL = "https://stooq.pl/q/d/l/?s={symbol}&i=d"
 
@@ -99,8 +100,8 @@ class StooqOhlcHarvester:
         self.download_url_template = download_url_template
 
     def _build_url(self, symbol: str) -> str:
-        normalized = _normalize_gpw_symbol(symbol)
-        return self.download_url_template.format(symbol=normalized.lower())
+        stooq_symbol = to_stooq_symbol(symbol)
+        return self.download_url_template.format(symbol=stooq_symbol.lower())
 
     @staticmethod
     def _parse_csv(text: str) -> List[Dict[str, Any]]:
