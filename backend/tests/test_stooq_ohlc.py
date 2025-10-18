@@ -79,6 +79,16 @@ def test_fetch_history_normalizes_symbol_and_returns_rows():
     assert session.calls[0].endswith("s=cdr&i=d")
 
 
+def test_fetch_history_uses_alias_for_raw_symbols():
+    session = FakeSession([CSV_SAMPLE])
+    harvester = StooqOhlcHarvester(session=session)
+
+    rows = harvester.fetch_history("CDPROJEKT")
+
+    assert [row.symbol for row in rows] == ["CDPROJEKT", "CDPROJEKT"]
+    assert session.calls[0].endswith("s=cdr&i=d")
+
+
 def test_sync_truncates_and_inserts_filtered_rows():
     session = FakeSession([CSV_SAMPLE])
     harvester = StooqOhlcHarvester(session=session)
