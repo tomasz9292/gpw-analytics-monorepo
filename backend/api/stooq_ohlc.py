@@ -104,9 +104,22 @@ class StooqOhlcHarvester:
         return self.download_url_template.format(symbol=stooq_symbol.lower())
 
     @staticmethod
-    def _parse_csv(text: str) -> List[Dict[str, Any]]:
+    def _detect_delimiter(text: str) -> str:
+        for line in text.splitlines():
+            cleaned = line.strip()
+            if not cleaned or cleaned.startswith("#"):
+                continue
+            if ";" in cleaned:
+                return ";"
+            if "," in cleaned:
+                return ","
+        return ","
+
+    @classmethod
+    def _parse_csv(cls, text: str) -> List[Dict[str, Any]]:
         stream = io.StringIO(text)
-        reader = csv.reader(stream)
+        delimiter = cls._detect_delimiter(text)
+        reader = csv.reader(stream, delimiter=delimiter)
         header: Optional[List[str]] = None
         for row in reader:
             if not row:
