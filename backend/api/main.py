@@ -20,10 +20,12 @@ import clickhouse_connect
 import threading
 from decimal import Decimal
 from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
+from fastapi.params import Query as QueryParam
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from .company_ingestion import CompanyDataHarvester, CompanySyncProgress, CompanySyncResult
+from .stooq_ohlc import OhlcSyncResult, StooqOhlcHarvester
 from .sector_classification_data import GPW_SECTOR_CLASSIFICATION
 
 # =========================
@@ -83,6 +85,22 @@ DEFAULT_COMPANIES_TABLE_DDL = textwrap.dedent(
     )
     ENGINE = MergeTree()
     ORDER BY symbol
+    """
+)
+
+DEFAULT_OHLC_TABLE_DDL = textwrap.dedent(
+    f"""
+    CREATE TABLE IF NOT EXISTS {TABLE_OHLC} (
+        symbol String,
+        date Date,
+        open Nullable(Float64),
+        high Nullable(Float64),
+        low Nullable(Float64),
+        close Nullable(Float64),
+        volume Nullable(Float64)
+    )
+    ENGINE = MergeTree()
+    ORDER BY (symbol, date)
     """
 )
 
@@ -757,6 +775,56 @@ def normalize_input_symbol(s: str) -> str:
     return cleaned.upper()
 
 
+class OhlcSyncRequest(BaseModel):
+    symbols: Optional[List[str]] = Field(
+        default=None,
+        description="Lista symboli do synchronizacji (np. CDR lub CDR.WA)",
+    )
+    start: Optional[date] = Field(
+        default=None,
+        description="Najwcześniejsza data notowań w formacie YYYY-MM-DD",
+    )
+    truncate: bool = Field(
+        default=False,
+        description="Czy wyczyścić tabelę przed synchronizacją",
+    )
+    run_as_admin: bool = Field(
+        default=False,
+        description="Czy wykonać synchronizację w trybie administratora",
+    )
+
+    @field_validator("symbols", mode="before")
+    @classmethod
+    def _normalize_symbols(cls, value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            value = [value]
+        symbols: List[str] = []
+        for item in value:
+            if item is None:
+                continue
+            normalized = normalize_input_symbol(str(item))
+            if normalized:
+                symbols.append(normalized)
+        return symbols or None
+
+    @field_validator("start", mode="before")
+    @classmethod
+    def _parse_start(cls, value):
+        if value is None or isinstance(value, date):
+            return value
+        if isinstance(value, str):
+            cleaned = value.strip()
+            if not cleaned:
+                return None
+            try:
+                return date.fromisoformat(cleaned)
+            except ValueError as exc:
+                raise ValueError("Data musi być w formacie YYYY-MM-DD") from exc
+        raise ValueError("Niepoprawny format daty")
+
+
 # =========================
 # Dane o spółkach (mapowania + cache)
 # =========================
@@ -864,6 +932,10 @@ def _create_companies_table_if_missing(ch_client) -> None:
 
 def _describe_companies_table(ch_client):
     return ch_client.query(f"DESCRIBE TABLE {TABLE_COMPANIES}").result_rows
+
+
+def _create_ohlc_table_if_missing(ch_client) -> None:
+    ch_client.command(DEFAULT_OHLC_TABLE_DDL)
 
 
 def _coerce_float(value: Any) -> Optional[float]:
@@ -1610,15 +1682,26 @@ def update_company_sync_schedule(payload: CompanySyncScheduleRequest) -> Company
 
 
 @app.post("/companies/sync", response_model=CompanySyncResult)
-def sync_companies(limit: Optional[int] = Query(default=None, ge=1, le=5000)):
+def sync_companies(
+    limit: Optional[int] = Query(default=None, ge=1, le=5000),
+    run_as_admin: bool = Query(
+        default=False, description="Czy wykonać synchronizację w trybie administratora"
+    ),
+):
     ch = get_ch()
     columns = _get_company_columns(ch)
     harvester = CompanyDataHarvester()
+    run_as_admin_value = (
+        bool(run_as_admin.default)
+        if isinstance(run_as_admin, QueryParam)
+        else bool(run_as_admin)
+    )
     result = harvester.sync(
         ch_client=ch,
         table_name=TABLE_COMPANIES,
         columns=columns,
         limit=limit,
+        run_as_admin=run_as_admin_value,
     )
     return result
 
@@ -1786,6 +1869,48 @@ def symbols(
 # =========================
 # /quotes – notowania OHLC
 # =========================
+
+
+@app.post("/ohlc/sync", response_model=OhlcSyncResult)
+def sync_ohlc(payload: OhlcSyncRequest) -> OhlcSyncResult:
+    ch = get_ch()
+    _create_ohlc_table_if_missing(ch)
+
+    if payload.truncate and not payload.run_as_admin:
+        raise HTTPException(403, "Czyszczenie tabeli wymaga uprawnień administratora")
+
+    if payload.symbols:
+        symbols = payload.symbols
+    else:
+        symbols = _collect_all_company_symbols(ch)
+        if not symbols:
+            raise HTTPException(400, "Brak symboli do synchronizacji")
+
+    deduplicated: List[str] = []
+    seen: set[str] = set()
+    for raw_symbol in symbols:
+        normalized = normalize_input_symbol(raw_symbol)
+        if not normalized:
+            continue
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        deduplicated.append(normalized)
+
+    if not deduplicated:
+        raise HTTPException(400, "Brak poprawnych symboli do synchronizacji")
+
+    harvester = StooqOhlcHarvester()
+    result = harvester.sync(
+        ch_client=ch,
+        table_name=TABLE_OHLC,
+        symbols=deduplicated,
+        start_date=payload.start,
+        truncate=payload.truncate,
+        run_as_admin=payload.run_as_admin,
+    )
+    return result
+
 
 @app.get("/quotes", response_model=List[QuoteRow])
 def quotes(symbol: str, start: Optional[str] = None):

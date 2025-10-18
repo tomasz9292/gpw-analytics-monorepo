@@ -387,6 +387,12 @@ class CompanySyncResult(BaseModel):
         default_factory=list,
         description="Historia zapytań HTTP wykonanych podczas synchronizacji",
     )
+    requested_as_admin: bool = Field(
+        False, description="Czy synchronizacja została wywołana w trybie administratora"
+    )
+    sync_type: Literal["company_info"] = Field(
+        "company_info", description="Rodzaj przeprowadzonej synchronizacji"
+    )
 
 
 def _extract_company_rows(payload: Any) -> List[Dict[str, Any]]:
@@ -1616,6 +1622,7 @@ class CompanyDataHarvester:
         columns: Sequence[str],
         limit: Optional[int] = None,
         progress_callback: Optional[Callable[[CompanySyncProgress], None]] = None,
+        run_as_admin: bool = False,
     ) -> CompanySyncResult:
         supports_history = hasattr(self.session, "clear_history") and hasattr(
             self.session, "get_history"
@@ -1773,6 +1780,7 @@ class CompanyDataHarvester:
             started_at=started_at,
             finished_at=finished_at,
             request_log=request_log,
+            requested_as_admin=run_as_admin,
         )
 
 

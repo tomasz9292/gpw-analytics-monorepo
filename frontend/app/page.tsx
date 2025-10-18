@@ -1055,6 +1055,28 @@ type CompanySyncScheduleStatusPayload = {
     last_run_status: "idle" | "running" | "success" | "failed";
 };
 
+type HttpRequestLogEntry = {
+    url: string;
+    params: Record<string, unknown>;
+    started_at: string;
+    finished_at?: string | null;
+    status_code?: number | null;
+    error?: string | null;
+};
+
+type OhlcSyncResultPayload = {
+    symbols: number;
+    inserted: number;
+    skipped: number;
+    errors: string[];
+    started_at: string;
+    finished_at: string;
+    truncated: boolean;
+    request_log: HttpRequestLogEntry[];
+    requested_as_admin: boolean;
+    sync_type: "historical_prices";
+};
+
 const COMPANY_STAGE_LABELS: Record<CompanySyncStatusPayload["stage"], string> = {
     idle: "Oczekiwanie",
     fetching: "Pobieranie listy spółek",
@@ -2018,6 +2040,14 @@ const CompanySyncPanel = () => {
     const [adminsSuccess, setAdminsSuccess] = useState<string | null>(null);
     const [isAddingAdmin, setIsAddingAdmin] = useState(false);
     const [newAdminEmail, setNewAdminEmail] = useState("");
+    const [ohlcSymbolsInput, setOhlcSymbolsInput] = useState("");
+    const [ohlcStartInput, setOhlcStartInput] = useState("");
+    const [ohlcTruncate, setOhlcTruncate] = useState(false);
+    const [ohlcRunAsAdmin, setOhlcRunAsAdmin] = useState(true);
+    const [ohlcIsSyncing, setOhlcIsSyncing] = useState(false);
+    const [ohlcError, setOhlcError] = useState<string | null>(null);
+    const [ohlcResult, setOhlcResult] = useState<OhlcSyncResultPayload | null>(null);
+    const [ohlcShowRequestLog, setOhlcShowRequestLog] = useState(false);
 
     const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const selectedSymbolRef = useRef<string | null>(null);
@@ -2051,6 +2081,43 @@ const CompanySyncPanel = () => {
         const parsed = new Date(value);
         if (Number.isNaN(parsed.getTime())) return value;
         return parsed.toLocaleDateString("pl-PL");
+    };
+
+    const formatDuration = (start?: string | null, end?: string | null) => {
+        if (!start || !end) return "—";
+        const started = new Date(start);
+        const finished = new Date(end);
+        if (Number.isNaN(started.getTime()) || Number.isNaN(finished.getTime())) {
+            return "—";
+        }
+        const diffMs = finished.getTime() - started.getTime();
+        if (diffMs < 0) return "—";
+        if (diffMs < 1000) {
+            return `${diffMs} ms`;
+        }
+        const totalSeconds = diffMs / 1000;
+        if (totalSeconds < 60) {
+            return `${totalSeconds.toFixed(1)} s`;
+        }
+        const minutes = Math.floor(totalSeconds / 60);
+        const seconds = Math.round(totalSeconds % 60);
+        if (minutes >= 60) {
+            const hours = Math.floor(minutes / 60);
+            const remainingMinutes = minutes % 60;
+            const parts: string[] = [`${hours} h`];
+            if (remainingMinutes) {
+                parts.push(`${remainingMinutes} min`);
+            }
+            if (seconds) {
+                parts.push(`${seconds} s`);
+            }
+            return parts.join(" ");
+        }
+        const parts: string[] = [`${minutes} min`];
+        if (seconds) {
+            parts.push(`${seconds} s`);
+        }
+        return parts.join(" ");
     };
 
     const formatFundamentalValue = (key: string, value: number | null) => {
@@ -2283,6 +2350,72 @@ const CompanySyncPanel = () => {
         setActiveQuery(undefined);
         fetchCompanies();
     }, [fetchCompanies]);
+
+    const handleOhlcSync = useCallback(
+        async (event: React.FormEvent<HTMLFormElement>) => {
+            event.preventDefault();
+            setOhlcIsSyncing(true);
+            setOhlcError(null);
+            setOhlcResult(null);
+            try {
+                const parsedSymbols = ohlcSymbolsInput
+                    .split(/[\s,;]+/)
+                    .map((symbol) => symbol.trim())
+                    .filter((symbol) => symbol.length > 0)
+                    .map((symbol) => symbol.toUpperCase());
+                const uniqueSymbols = Array.from(new Set(parsedSymbols));
+                const payload: Record<string, unknown> = {
+                    run_as_admin: ohlcRunAsAdmin,
+                    truncate: ohlcTruncate,
+                };
+                if (uniqueSymbols.length > 0) {
+                    payload.symbols = uniqueSymbols;
+                }
+                const trimmedStart = ohlcStartInput.trim();
+                if (trimmedStart) {
+                    payload.start = trimmedStart;
+                }
+                const response = await fetch(`/api/admin/ohlc/sync`, {
+                    method: "POST",
+                    cache: "no-store",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload),
+                });
+                let data: unknown = null;
+                try {
+                    data = await response.json();
+                } catch {
+                    data = null;
+                }
+                if (!response.ok) {
+                    const message =
+                        data &&
+                        typeof data === "object" &&
+                        "error" in data &&
+                        data.error &&
+                        typeof (data as { error: unknown }).error === "string"
+                            ? ((data as { error: string }).error ||
+                              "Nie udało się uruchomić synchronizacji notowań")
+                            : "Nie udało się uruchomić synchronizacji notowań";
+                    throw new Error(message);
+                }
+                if (!data || typeof data !== "object") {
+                    throw new Error("Nieprawidłowa odpowiedź serwera");
+                }
+                setOhlcResult(data as OhlcSyncResultPayload);
+                setOhlcShowRequestLog(false);
+            } catch (error) {
+                setOhlcError(
+                    error instanceof Error && error.message
+                        ? error.message
+                        : "Nie udało się uruchomić synchronizacji notowań"
+                );
+            } finally {
+                setOhlcIsSyncing(false);
+            }
+        },
+        [ohlcSymbolsInput, ohlcRunAsAdmin, ohlcTruncate, ohlcStartInput]
+    );
 
     const handleScheduleOnce = useCallback(
         async (event: React.FormEvent<HTMLFormElement>) => {
@@ -2748,7 +2881,237 @@ const CompanySyncPanel = () => {
     const hasActiveSchedule = schedule?.mode === "once" || schedule?.mode === "recurring";
 
     return (
-        <Section
+        <div className="space-y-16">
+            <Section
+                id="prices-sync"
+                kicker="Stooq"
+                title="Synchronizacja notowań historycznych"
+                description="Pobierz dzienne dane OHLC ze Stooq i zapisz je w bazie ClickHouse."
+            >
+                <div className="grid gap-6 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1.9fr)]">
+                    <div className="space-y-6">
+                        <Card title="Uruchom synchronizację notowań">
+                            <form onSubmit={handleOhlcSync} className="space-y-4">
+                                <p className="text-sm text-muted">
+                                    Skonfiguruj zakres danych i uruchom pobieranie notowań ze Stooq.
+                                </p>
+                                <label className="flex flex-col gap-2 text-sm font-medium text-primary">
+                                    <span>Lista symboli (opcjonalnie)</span>
+                                    <textarea
+                                        value={ohlcSymbolsInput}
+                                        onChange={(event) => setOhlcSymbolsInput(event.target.value)}
+                                        placeholder="np. CDR.WA, PKO.WA, PKN.WA"
+                                        className="min-h-[120px] rounded-xl border border-soft bg-white/70 px-3 py-2 text-sm text-primary shadow-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/40"
+                                        disabled={ohlcIsSyncing}
+                                    />
+                                    <span className="text-xs font-normal text-subtle">
+                                        Pozostaw puste, aby zsynchronizować wszystkie dostępne symbole z bazy.
+                                    </span>
+                                </label>
+                                <label className="flex flex-col gap-2 text-sm font-medium text-primary">
+                                    <span>Data początkowa (opcjonalnie)</span>
+                                    <input
+                                        type="date"
+                                        value={ohlcStartInput}
+                                        onChange={(event) => setOhlcStartInput(event.target.value)}
+                                        className="rounded-xl border border-soft bg-white/70 px-3 py-2 text-sm text-primary shadow-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/40"
+                                        disabled={ohlcIsSyncing}
+                                    />
+                                    <span className="text-xs font-normal text-subtle">
+                                        Zostaw puste, aby pobrać pełną historię dostępnych notowań.
+                                    </span>
+                                </label>
+                                <div className="space-y-3 text-sm text-primary">
+                                    <label className="flex items-center gap-3">
+                                        <input
+                                            type="checkbox"
+                                            className="h-4 w-4 rounded border-soft text-primary focus:ring-primary/40"
+                                            checked={ohlcTruncate}
+                                            onChange={(event) => {
+                                                const checked = event.target.checked;
+                                                setOhlcTruncate(checked);
+                                                if (checked && !ohlcRunAsAdmin) {
+                                                    setOhlcRunAsAdmin(true);
+                                                }
+                                            }}
+                                            disabled={ohlcIsSyncing}
+                                        />
+                                        <span>Wyczyść tabelę przed synchronizacją</span>
+                                    </label>
+                                    <p className="text-xs text-subtle">
+                                        Czyszczenie wymaga uruchomienia w trybie administratora.
+                                    </p>
+                                    <label className="flex items-center gap-3">
+                                        <input
+                                            type="checkbox"
+                                            className="h-4 w-4 rounded border-soft text-primary focus:ring-primary/40"
+                                            checked={ohlcRunAsAdmin}
+                                            onChange={(event) => setOhlcRunAsAdmin(event.target.checked)}
+                                            disabled={ohlcIsSyncing}
+                                        />
+                                        <span>Uruchom w trybie administratora</span>
+                                    </label>
+                                </div>
+                                {ohlcError && <div className="text-sm text-negative">{ohlcError}</div>}
+                                <div className="flex flex-wrap gap-3">
+                                    <button
+                                        type="submit"
+                                        disabled={ohlcIsSyncing}
+                                        className="rounded-full bg-primary px-4 py-2 text-sm font-semibold text-white shadow hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                        {ohlcIsSyncing ? "Synchronizowanie..." : "Synchronizuj notowania"}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setOhlcSymbolsInput("");
+                                            setOhlcStartInput("");
+                                            setOhlcTruncate(false);
+                                            setOhlcError(null);
+                                        }}
+                                        disabled={ohlcIsSyncing}
+                                        className="rounded-full border border-soft px-4 py-2 text-sm font-semibold text-primary transition hover:border-primary/40 hover:text-primary disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                        Wyczyść formularz
+                                    </button>
+                                </div>
+                            </form>
+                        </Card>
+                        <Card title="Ostatnia synchronizacja notowań">
+                            {ohlcResult ? (
+                                <div className="space-y-4">
+                                    <div className="grid grid-cols-2 gap-3 text-xs text-subtle sm:grid-cols-4">
+                                        <div>
+                                            <span className="block text-[10px] uppercase tracking-wide text-subtle">
+                                                Symbole
+                                            </span>
+                                            <span className="text-sm font-semibold text-primary">
+                                                {integerFormatter.format(ohlcResult.symbols)}
+                                            </span>
+                                        </div>
+                                        <div>
+                                            <span className="block text-[10px] uppercase tracking-wide text-subtle">
+                                                Zapisane wiersze
+                                            </span>
+                                            <span className="text-sm font-semibold text-primary">
+                                                {integerFormatter.format(ohlcResult.inserted)}
+                                            </span>
+                                        </div>
+                                        <div>
+                                            <span className="block text-[10px] uppercase tracking-wide text-subtle">
+                                                Pominięte symbole
+                                            </span>
+                                            <span className="text-sm font-semibold text-primary">
+                                                {integerFormatter.format(ohlcResult.skipped)}
+                                            </span>
+                                        </div>
+                                        <div>
+                                            <span className="block text-[10px] uppercase tracking-wide text-subtle">
+                                                Czyszczenie tabeli
+                                            </span>
+                                            <span className="text-sm font-semibold text-primary">
+                                                {ohlcResult.truncated ? "Tak" : "Nie"}
+                                            </span>
+                                        </div>
+                                    </div>
+                                    <div className="grid gap-2 text-xs text-subtle sm:grid-cols-2">
+                                        <div>Start: {formatDateTime(ohlcResult.started_at)}</div>
+                                        <div>Koniec: {formatDateTime(ohlcResult.finished_at)}</div>
+                                        <div>Czas trwania: {ohlcDurationLabel}</div>
+                                        <div>
+                                            Tryb: {ohlcResult.requested_as_admin ? "Administrator" : "Standardowy"}
+                                        </div>
+                                    </div>
+                                    {ohlcHasErrors ? (
+                                        <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-4 text-xs text-amber-600">
+                                            <div className="mb-2 font-semibold">Komunikaty błędów</div>
+                                            <ul className="list-disc space-y-1 pl-4">
+                                                {ohlcResult.errors.map((error, index) => (
+                                                    <li key={`${error}-${index}`}>{error}</li>
+                                                ))}
+                                            </ul>
+                                        </div>
+                                    ) : (
+                                        <div className="rounded-xl border border-soft bg-white/60 p-3 text-xs text-subtle">
+                                            Brak błędów zgłoszonych podczas synchronizacji.
+                                        </div>
+                                    )}
+                                    <div className="space-y-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => setOhlcShowRequestLog((prev) => !prev)}
+                                            className="text-xs font-semibold text-primary transition hover:text-primary/80"
+                                        >
+                                            {ohlcShowRequestLog ? "Ukryj logi zapytań" : "Pokaż logi zapytań HTTP"}
+                                        </button>
+                                        {ohlcShowRequestLog && (
+                                            <div className="space-y-2">
+                                                {ohlcRequestLog.length ? (
+                                                    ohlcRequestLog.map((entry, index) => (
+                                                        <div
+                                                            key={`${entry.url}-${entry.started_at}-${index}`}
+                                                            className="space-y-2 rounded-xl border border-soft bg-white/70 p-3 text-xs text-subtle"
+                                                        >
+                                                            <div className="break-all text-sm font-medium text-primary">
+                                                                {entry.url}
+                                                            </div>
+                                                            <div>Status: {entry.status_code ?? "—"}</div>
+                                                            <div>Start: {formatDateTime(entry.started_at)}</div>
+                                                            <div>
+                                                                Koniec:
+                                                                {entry.finished_at
+                                                                    ? ` ${formatDateTime(entry.finished_at)}`
+                                                                    : " —"}
+                                                            </div>
+                                                            <div>
+                                                                Czas: {formatDuration(entry.started_at, entry.finished_at ?? null)}
+                                                            </div>
+                                                            {entry.params && Object.keys(entry.params).length > 0 && (
+                                                                <pre className="whitespace-pre-wrap break-all rounded-lg bg-soft/60 px-3 py-2 text-[11px] text-muted">
+                                                                    {JSON.stringify(entry.params, null, 2)}
+                                                                </pre>
+                                                            )}
+                                                            {entry.error && (
+                                                                <div className="text-[11px] text-negative">Błąd: {entry.error}</div>
+                                                            )}
+                                                        </div>
+                                                    ))
+                                                ) : (
+                                                    <div className="rounded-xl border border-soft bg-white/60 p-3 text-xs text-subtle">
+                                                        Brak logów zapytań.
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            ) : (
+                                <p className="text-sm text-subtle">
+                                    Uruchom synchronizację, aby zobaczyć podsumowanie notowań.
+                                </p>
+                            )}
+                        </Card>
+                    </div>
+                    <div className="space-y-6">
+                        <Card title="Wskazówki">
+                            <div className="space-y-3 text-sm text-muted">
+                                <p>
+                                    Synchronizacja pobiera pliki CSV ze Stooq i zapisuje je do tabeli{" "}
+                                    <code className="mx-1 rounded bg-soft px-1 py-0.5 text-xs">ohlc</code>{" "}
+                                    w ClickHouse.
+                                </p>
+                                <p>
+                                    Jeżeli pozostawisz pole symboli puste, aplikacja spróbuje zsynchronizować wszystkie tickery dostępne w bazie spółek oraz w istniejącej tabeli notowań.
+                                </p>
+                                <p>
+                                    Tryb administratora umożliwia czyszczenie tabeli przed ponownym załadowaniem danych. Używaj go ostrożnie, aby nie utracić historycznych notowań.
+                                </p>
+                            </div>
+                        </Card>
+                    </div>
+                </div>
+            </Section>
+            <Section
             id="companies-sync"
             kicker="GPW"
             title="Synchronizacja danych o spółkach"
@@ -3412,7 +3775,8 @@ const CompanySyncPanel = () => {
                     )}
                 </Card>
             </div>
-        </Section>
+            </Section>
+        </div>
     );
 };
 
@@ -6966,13 +7330,13 @@ export function AnalyticsDashboard({ view }: { view: DashboardView }) {
                   {
                       href:
                           view === "sync"
-                              ? "#companies-sync"
+                              ? "#prices-sync"
                               : "/synchronizacja-danych",
                       label: "Synchronizacja danych",
                       key: "sync",
                       icon: IconSync,
                       description:
-                          "Monitoruj status synchronizacji profili spółek i zarządzaj harmonogramem.",
+                          "Zarządzaj synchronizacją profili spółek oraz notowań historycznych.",
                   } satisfies NavItem,
               ]
             : []),
