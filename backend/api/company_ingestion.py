@@ -1553,7 +1553,7 @@ class CompanyDataHarvester:
                 row["employee_count"] = stooq_employees
 
         payload = {"gpw": base, "yahoo": fundamentals, "google": google, "stooq": stooq}
-        row["raw_payload"] = json.dumps(payload, ensure_ascii=False)
+        row["raw_payload"] = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         return row
 
     # ---------------------------
