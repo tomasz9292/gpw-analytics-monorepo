@@ -114,3 +114,34 @@ def test_sync_truncates_and_inserts_filtered_rows():
         "volume",
     ]
     assert inserted["data"] == [["CDR", date(2024, 1, 3), 10.5, 11.5, 10.2, 11.0, 23456.0]]
+
+
+def test_sync_reports_progress_via_callback():
+    session = FakeSession([CSV_SAMPLE])
+    harvester = StooqOhlcHarvester(session=session)
+    client = FakeClickHouse()
+    events: List[dict] = []
+
+    def progress(event):
+        events.append(dict(event))
+
+    harvester.sync(
+        ch_client=client,
+        table_name="ohlc",
+        symbols=["CDR"],
+        start_date=date(2024, 1, 3),
+        truncate=False,
+        run_as_admin=False,
+        progress_callback=progress,
+    )
+
+    assert events, "Progress callback should be invoked at least once"
+    assert events[0]["total"] == 1
+    assert any(event["processed"] == 0 for event in events)
+    last_event = events[-1]
+    assert last_event["processed"] == 1
+    assert last_event["inserted"] == 1
+    assert last_event["current_symbol"] is None
+    assert any(
+        event.get("current_symbol") == "CDR" and event["processed"] >= 1 for event in events
+    )

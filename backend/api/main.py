@@ -25,7 +25,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from .company_ingestion import CompanyDataHarvester, CompanySyncProgress, CompanySyncResult
-from .stooq_ohlc import OhlcSyncResult, StooqOhlcHarvester
+from .ohlc_progress import OhlcSyncProgress, OhlcSyncProgressTracker
+from .stooq_ohlc import OhlcSyncProgressEvent, OhlcSyncResult, StooqOhlcHarvester
 from .sector_classification_data import GPW_SECTOR_CLASSIFICATION
 
 # =========================
@@ -697,6 +698,7 @@ def get_ch():
 # =========================
 
 app = FastAPI(title="GPW Analytics API", version="0.1.0")
+OHLC_SYNC_PROGRESS_TRACKER = OhlcSyncProgressTracker()
 
 app.add_middleware(
     CORSMiddleware,
@@ -1871,20 +1873,53 @@ def symbols(
 # =========================
 
 
+def _http_exception_message(exc: HTTPException) -> str:
+    detail = exc.detail
+    if isinstance(detail, str):
+        return detail
+    if isinstance(detail, dict):
+        for key in ("error", "message", "detail"):
+            value = detail.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+        try:
+            return json.dumps(detail, ensure_ascii=False)
+        except Exception:  # pragma: no cover - ostrożność
+            return str(detail)
+    if isinstance(detail, (list, tuple)):
+        return "; ".join(str(item) for item in detail if item)
+    return str(detail or exc)
+
+
 @app.post("/ohlc/sync", response_model=OhlcSyncResult)
 def sync_ohlc(payload: OhlcSyncRequest) -> OhlcSyncResult:
-    ch = get_ch()
-    _create_ohlc_table_if_missing(ch)
+    try:
+        ch = get_ch()
+    except Exception as exc:  # pragma: no cover - zależy od konfiguracji DB
+        message = f"Nie udało się połączyć z bazą ClickHouse: {exc}"
+        OHLC_SYNC_PROGRESS_TRACKER.fail(message)
+        raise HTTPException(500, message) from exc
+
+    try:
+        _create_ohlc_table_if_missing(ch)
+    except Exception as exc:  # pragma: no cover - zależy od konfiguracji DB
+        message = f"Nie udało się przygotować tabeli notowań: {exc}"
+        OHLC_SYNC_PROGRESS_TRACKER.fail(message)
+        raise HTTPException(500, message) from exc
 
     if payload.truncate and not payload.run_as_admin:
-        raise HTTPException(403, "Czyszczenie tabeli wymaga uprawnień administratora")
+        message = "Czyszczenie tabeli wymaga uprawnień administratora"
+        OHLC_SYNC_PROGRESS_TRACKER.fail(message)
+        raise HTTPException(403, message)
 
     if payload.symbols:
         symbols = payload.symbols
     else:
         symbols = _collect_all_company_symbols(ch)
         if not symbols:
-            raise HTTPException(400, "Brak symboli do synchronizacji")
+            message = "Brak symboli do synchronizacji"
+            OHLC_SYNC_PROGRESS_TRACKER.fail(message)
+            raise HTTPException(400, message)
 
     deduplicated: List[str] = []
     seen: set[str] = set()
@@ -1898,18 +1933,51 @@ def sync_ohlc(payload: OhlcSyncRequest) -> OhlcSyncResult:
         deduplicated.append(normalized)
 
     if not deduplicated:
-        raise HTTPException(400, "Brak poprawnych symboli do synchronizacji")
+        message = "Brak poprawnych symboli do synchronizacji"
+        OHLC_SYNC_PROGRESS_TRACKER.fail(message)
+        raise HTTPException(400, message)
+
+    OHLC_SYNC_PROGRESS_TRACKER.start(
+        total_symbols=len(deduplicated),
+        requested_as_admin=payload.run_as_admin,
+    )
 
     harvester = StooqOhlcHarvester()
-    result = harvester.sync(
-        ch_client=ch,
-        table_name=TABLE_OHLC,
-        symbols=deduplicated,
-        start_date=payload.start,
-        truncate=payload.truncate,
-        run_as_admin=payload.run_as_admin,
-    )
+
+    def handle_progress(event: OhlcSyncProgressEvent) -> None:
+        OHLC_SYNC_PROGRESS_TRACKER.update(
+            processed_symbols=event["processed"],
+            inserted_rows=event["inserted"],
+            skipped_symbols=event["skipped"],
+            current_symbol=event.get("current_symbol"),
+            errors=event["errors"],
+        )
+
+    try:
+        result = harvester.sync(
+            ch_client=ch,
+            table_name=TABLE_OHLC,
+            symbols=deduplicated,
+            start_date=payload.start,
+            truncate=payload.truncate,
+            run_as_admin=payload.run_as_admin,
+            progress_callback=handle_progress,
+        )
+    except HTTPException as exc:
+        OHLC_SYNC_PROGRESS_TRACKER.fail(_http_exception_message(exc))
+        raise
+    except Exception as exc:
+        message = f"Nieoczekiwany błąd synchronizacji notowań: {exc}"
+        OHLC_SYNC_PROGRESS_TRACKER.fail(message)
+        raise HTTPException(500, message) from exc
+
+    OHLC_SYNC_PROGRESS_TRACKER.finish(result)
     return result
+
+
+@app.get("/ohlc/sync/progress", response_model=OhlcSyncProgress)
+def sync_ohlc_progress() -> OhlcSyncProgress:
+    return OHLC_SYNC_PROGRESS_TRACKER.snapshot()
 
 
 @app.get("/quotes", response_model=List[QuoteRow])
