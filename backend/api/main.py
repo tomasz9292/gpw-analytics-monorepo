@@ -20,6 +20,7 @@ import clickhouse_connect
 import threading
 from decimal import Decimal
 from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
+from fastapi.params import Query as QueryParam
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
@@ -786,6 +787,10 @@ class OhlcSyncRequest(BaseModel):
     truncate: bool = Field(
         default=False,
         description="Czy wyczyścić tabelę przed synchronizacją",
+    )
+    run_as_admin: bool = Field(
+        default=False,
+        description="Czy wykonać synchronizację w trybie administratora",
     )
 
     @field_validator("symbols", mode="before")
@@ -1677,15 +1682,26 @@ def update_company_sync_schedule(payload: CompanySyncScheduleRequest) -> Company
 
 
 @app.post("/companies/sync", response_model=CompanySyncResult)
-def sync_companies(limit: Optional[int] = Query(default=None, ge=1, le=5000)):
+def sync_companies(
+    limit: Optional[int] = Query(default=None, ge=1, le=5000),
+    run_as_admin: bool = Query(
+        default=False, description="Czy wykonać synchronizację w trybie administratora"
+    ),
+):
     ch = get_ch()
     columns = _get_company_columns(ch)
     harvester = CompanyDataHarvester()
+    run_as_admin_value = (
+        bool(run_as_admin.default)
+        if isinstance(run_as_admin, QueryParam)
+        else bool(run_as_admin)
+    )
     result = harvester.sync(
         ch_client=ch,
         table_name=TABLE_COMPANIES,
         columns=columns,
         limit=limit,
+        run_as_admin=run_as_admin_value,
     )
     return result
 
@@ -1860,6 +1876,9 @@ def sync_ohlc(payload: OhlcSyncRequest) -> OhlcSyncResult:
     ch = get_ch()
     _create_ohlc_table_if_missing(ch)
 
+    if payload.truncate and not payload.run_as_admin:
+        raise HTTPException(403, "Czyszczenie tabeli wymaga uprawnień administratora")
+
     if payload.symbols:
         symbols = payload.symbols
     else:
@@ -1888,6 +1907,7 @@ def sync_ohlc(payload: OhlcSyncRequest) -> OhlcSyncResult:
         symbols=deduplicated,
         start_date=payload.start,
         truncate=payload.truncate,
+        run_as_admin=payload.run_as_admin,
     )
     return result
 

@@ -7,6 +7,7 @@ import io
 import unicodedata
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Sequence
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -66,6 +67,12 @@ class OhlcSyncResult(BaseModel):
     finished_at: datetime
     truncated: bool = False
     request_log: List[HttpRequestLog] = Field(default_factory=list)
+    requested_as_admin: bool = Field(
+        False, description="Czy synchronizacja została uruchomiona w trybie administratora"
+    )
+    sync_type: Literal["historical_prices"] = Field(
+        "historical_prices", description="Rodzaj przeprowadzonej synchronizacji"
+    )
 
 
 class StooqOhlcHarvester:
@@ -165,6 +172,7 @@ class StooqOhlcHarvester:
         symbols: Sequence[str],
         start_date: Optional[date] = None,
         truncate: bool = False,
+        run_as_admin: bool = False,
     ) -> OhlcSyncResult:
         supports_history = hasattr(self.session, "clear_history") and hasattr(
             self.session, "get_history"
@@ -255,6 +263,7 @@ class StooqOhlcHarvester:
             finished_at=finished_at,
             truncated=truncated,
             request_log=request_log,
+            requested_as_admin=run_as_admin,
         )
 
 

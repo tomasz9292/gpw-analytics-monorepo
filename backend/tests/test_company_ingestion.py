@@ -798,13 +798,22 @@ def test_companies_sync_endpoint(monkeypatch):
         def __init__(self):
             self.calls: List[Dict[str, Any]] = []
 
-        def sync(self, *, ch_client: Any, table_name: str, columns: List[str], limit: Optional[int] = None):
+        def sync(
+            self,
+            *,
+            ch_client: Any,
+            table_name: str,
+            columns: List[str],
+            limit: Optional[int] = None,
+            run_as_admin: bool = False,
+        ):
             self.calls.append(
                 {
                     "ch_client": ch_client,
                     "table_name": table_name,
                     "columns": columns,
                     "limit": limit,
+                    "run_as_admin": run_as_admin,
                 }
             )
             return fake_stats
@@ -828,6 +837,7 @@ def test_companies_sync_endpoint(monkeypatch):
     assert call["table_name"] == main.TABLE_COMPANIES
     assert call["columns"] == ["symbol", "name"]
     assert call["limit"] == 50
+    assert call["run_as_admin"] is False
 
 
 def test_companies_sync_background_endpoint(monkeypatch):
@@ -852,6 +862,7 @@ def test_companies_sync_background_endpoint(monkeypatch):
             columns: List[str],
             limit: Optional[int] = None,
             progress_callback=None,
+            run_as_admin: bool = False,
         ) -> CompanySyncResult:
             if progress_callback:
                 progress_callback(
@@ -1131,6 +1142,7 @@ def test_schedule_completion_updates_success(monkeypatch):
             columns: List[str],
             limit: Optional[int] = None,
             progress_callback=None,
+            run_as_admin: bool = False,
         ) -> CompanySyncResult:
             now = datetime.utcnow()
             if progress_callback:
@@ -1210,6 +1222,7 @@ def test_schedule_completion_failure_updates_state(monkeypatch):
             columns: List[str],
             limit: Optional[int] = None,
             progress_callback=None,
+            run_as_admin: bool = False,
         ) -> CompanySyncResult:
             raise RuntimeError("boom")
 

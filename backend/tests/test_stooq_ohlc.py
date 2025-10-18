@@ -90,6 +90,7 @@ def test_sync_truncates_and_inserts_filtered_rows():
         symbols=["CDR"],
         start_date=date(2024, 1, 3),
         truncate=True,
+        run_as_admin=True,
     )
 
     assert isinstance(result, OhlcSyncResult)
@@ -97,6 +98,8 @@ def test_sync_truncates_and_inserts_filtered_rows():
     assert result.inserted == 1
     assert result.skipped == 0
     assert result.truncated is True
+    assert result.requested_as_admin is True
+    assert result.sync_type == "historical_prices"
     assert client.command_calls == ["TRUNCATE TABLE ohlc"]
     assert len(client.insert_calls) == 1
     inserted = client.insert_calls[0]
