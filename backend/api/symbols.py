@@ -9,18 +9,53 @@ from .company_ingestion import _normalize_gpw_symbol
 
 # Dodawaj wg potrzeb.
 ALIASES_RAW_TO_WA: Dict[str, str] = {
-    "CDPROJEKT": "CDR.WA",
-    "PKNORLEN": "PKN.WA",
-    "PEKAO": "PEO.WA",
-    "KGHM": "KGH.WA",
-    "PGE": "PGE.WA",
+    "ALIOR": "ALR.WA",
     "ALLEGRO": "ALE.WA",
+    "ASSECOPOL": "ACP.WA",
+    "CCC": "CCC.WA",
+    "CDPROJEKT": "CDR.WA",
+    "CYFRPLSAT": "CPS.WA",
     "DINOPL": "DNP.WA",
+    "JSW": "JSW.WA",
+    "KGHM": "KGH.WA",
+    "KRUK": "KRU.WA",
     "LPP": "LPP.WA",
-    "ORANGEPL": "OPL.WA",
+    "MBANK": "MBK.WA",
     "MERCATOR": "MRC.WA",
+    "ORANGEPL": "OPL.WA",
+    "PEKAO": "PEO.WA",
+    "PEPCO": "PCO.WA",
+    "PGE": "PGE.WA",
+    "PKNORLEN": "PKN.WA",
+    "PKOBP": "PKO.WA",
+    "SANPL": "SPL.WA",
+    "TAURONPE": "TPE.WA",
     # ...
 }
+
+DEFAULT_OHLC_SYNC_SYMBOLS = (
+    "ALIOR",
+    "ALLEGRO",
+    "ASSECOPOL",
+    "CCC",
+    "CDPROJEKT",
+    "CYFRPLSAT",
+    "DINOPL",
+    "JSW",
+    "KGHM",
+    "KRUK",
+    "LPP",
+    "MBANK",
+    "MERCATOR",
+    "ORANGEPL",
+    "PEKAO",
+    "PEPCO",
+    "PGE",
+    "PKNORLEN",
+    "PKOBP",
+    "SANPL",
+    "TAURONPE",
+)
 
 ALIASES_WA_TO_RAW: Dict[str, str] = {wa.lower(): raw for raw, wa in ALIASES_RAW_TO_WA.items()}
 
@@ -75,6 +110,7 @@ def to_stooq_symbol(value: str) -> str:
 __all__ = [
     "ALIASES_RAW_TO_WA",
     "ALIASES_WA_TO_RAW",
+    "DEFAULT_OHLC_SYNC_SYMBOLS",
     "normalize_input_symbol",
     "pretty_symbol",
     "to_stooq_symbol",
