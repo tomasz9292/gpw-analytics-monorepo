@@ -62,9 +62,21 @@ class OhlcSyncProgressTracker:
         with self._lock:
             if self._state.status != "running":
                 return
-            self._state.processed_symbols = max(0, processed_symbols)
-            self._state.inserted_rows = max(0, inserted_rows)
-            self._state.skipped_symbols = max(0, skipped_symbols)
+            processed_clean = max(0, processed_symbols)
+            inserted_clean = max(0, inserted_rows)
+            skipped_clean = max(0, skipped_symbols)
+
+            # Nie cofamy progresu – wartości z callbacka powinny rosnąć
+            # kumulatywnie, ale jeśli z jakiegoś powodu otrzymamy mniejsze
+            # liczby (np. chwilowy brak danych dla bieżącego symbolu),
+            # zachowujemy dotychczasowy stan.
+            self._state.processed_symbols = max(
+                self._state.processed_symbols, processed_clean
+            )
+            self._state.inserted_rows = max(self._state.inserted_rows, inserted_clean)
+            self._state.skipped_symbols = max(
+                self._state.skipped_symbols, skipped_clean
+            )
             self._state.current_symbol = current_symbol
             self._state.errors = list(errors)
 
