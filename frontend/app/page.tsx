@@ -2047,6 +2047,7 @@ const CompanySyncPanel = () => {
     const [ohlcIsSyncing, setOhlcIsSyncing] = useState(false);
     const [ohlcError, setOhlcError] = useState<string | null>(null);
     const [ohlcResult, setOhlcResult] = useState<OhlcSyncResultPayload | null>(null);
+    const [ohlcRequestLog, setOhlcRequestLog] = useState<HttpRequestLogEntry[]>([]);
     const [ohlcShowRequestLog, setOhlcShowRequestLog] = useState(false);
 
     const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -2184,6 +2185,8 @@ const CompanySyncPanel = () => {
         }
         return `co ${minutes} minut`;
     }, []);
+
+    const ohlcHasErrors = Boolean(ohlcResult?.errors?.length);
 
     const stopPolling = useCallback(() => {
         if (pollingRef.current) {
@@ -2357,6 +2360,7 @@ const CompanySyncPanel = () => {
             setOhlcIsSyncing(true);
             setOhlcError(null);
             setOhlcResult(null);
+            setOhlcRequestLog([]);
             try {
                 const parsedSymbols = ohlcSymbolsInput
                     .split(/[\s,;]+/)
@@ -2402,7 +2406,9 @@ const CompanySyncPanel = () => {
                 if (!data || typeof data !== "object") {
                     throw new Error("Nieprawidłowa odpowiedź serwera");
                 }
-                setOhlcResult(data as OhlcSyncResultPayload);
+                const resultPayload = data as OhlcSyncResultPayload;
+                setOhlcResult(resultPayload);
+                setOhlcRequestLog(resultPayload.request_log ?? []);
                 setOhlcShowRequestLog(false);
             } catch (error) {
                 setOhlcError(
@@ -3017,7 +3023,7 @@ const CompanySyncPanel = () => {
                                     <div className="grid gap-2 text-xs text-subtle sm:grid-cols-2">
                                         <div>Start: {formatDateTime(ohlcResult.started_at)}</div>
                                         <div>Koniec: {formatDateTime(ohlcResult.finished_at)}</div>
-                                        <div>Czas trwania: {ohlcDurationLabel}</div>
+                                        <div>Czas trwania: {formatDuration(ohlcResult.started_at, ohlcResult.finished_at)}</div>
                                         <div>
                                             Tryb: {ohlcResult.requested_as_admin ? "Administrator" : "Standardowy"}
                                         </div>
