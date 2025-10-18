@@ -71,7 +71,7 @@ class FakeClickHouse:
         })
 
 
-CSV_SAMPLE = """Data,Otwarcie,Najwyzszy,Najnizszy,Zamkniecie,Wolumen\n2024-01-02,10,11,9,10.5,12345\n2024-01-03,10.5,11.5,10.2,11,23456\n"""
+CSV_SAMPLE = """Data;Otwarcie;Najwyzszy;Najnizszy;Zamkniecie;Wolumen\n2024-01-02;10;11;9;10.5;12345\n2024-01-03;10.5;11.5;10.2;11;23456\n"""
 
 
 def test_parse_csv_returns_sorted_rows():
@@ -79,6 +79,16 @@ def test_parse_csv_returns_sorted_rows():
     assert [row["date"] for row in parsed] == [date(2024, 1, 2), date(2024, 1, 3)]
     assert parsed[0]["open"] == pytest.approx(10.0)
     assert parsed[1]["volume"] == pytest.approx(23456.0)
+
+
+def test_parse_csv_handles_comma_delimiter():
+    sample = (
+        "Data,Otwarcie,Najwyzszy,Najnizszy,Zamkniecie,Wolumen\n"
+        "2024-01-02,10,11,9,10.5,12345\n"
+    )
+    parsed = StooqOhlcHarvester._parse_csv(sample)
+    assert [row["date"] for row in parsed] == [date(2024, 1, 2)]
+    assert parsed[0]["close"] == pytest.approx(10.5)
 
 
 def test_fetch_history_normalizes_symbol_and_returns_rows():
@@ -103,7 +113,7 @@ def test_fetch_history_uses_alias_for_raw_symbols():
 
 
 def test_fetch_history_recovers_from_cp1250_encoded_payload():
-    csv_text = "Data,Otwarcie,Najwyższy,Najniższy,Zamknięcie,Wolumen\n2024-01-02,10,11,9,10.5,12345\n"
+    csv_text = "Data;Otwarcie;Najwyższy;Najniższy;Zamknięcie;Wolumen\n2024-01-02;10;11;9;10.5;12345\n"
     raw_bytes = csv_text.encode("cp1250")
     broken_text = raw_bytes.decode("utf-8", errors="replace")
 
