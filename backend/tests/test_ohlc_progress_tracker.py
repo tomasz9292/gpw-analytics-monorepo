@@ -77,3 +77,31 @@ def test_tracker_fail_overrides_message_and_errors():
     assert failed.finished_at is not None
     assert failed.current_symbol is None
     assert failed.started_at is not None
+
+
+def test_tracker_update_is_monotonic():
+    tracker = OhlcSyncProgressTracker()
+    tracker.start(total_symbols=3, requested_as_admin=False)
+
+    tracker.update(
+        processed_symbols=2,
+        inserted_rows=120,
+        skipped_symbols=1,
+        current_symbol="CDR",
+        errors=["ostrzeżenie"],
+    )
+
+    # Kolejny snapshot z mniejszymi wartościami nie powinien cofnąć progresu.
+    tracker.update(
+        processed_symbols=1,
+        inserted_rows=0,
+        skipped_symbols=0,
+        current_symbol="PKN",
+        errors=["ostrzeżenie"],
+    )
+
+    snapshot = tracker.snapshot()
+    assert snapshot.processed_symbols == 2
+    assert snapshot.inserted_rows == 120
+    assert snapshot.skipped_symbols == 1
+    assert snapshot.current_symbol == "PKN"
