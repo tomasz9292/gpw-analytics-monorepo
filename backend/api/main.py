@@ -28,7 +28,7 @@ from .company_ingestion import CompanyDataHarvester, CompanySyncProgress, Compan
 from .ohlc_progress import OhlcSyncProgress, OhlcSyncProgressTracker
 from .sector_classification_data import GPW_SECTOR_CLASSIFICATION
 from .stooq_ohlc import OhlcSyncProgressEvent, OhlcSyncResult, StooqOhlcHarvester
-from .symbols import normalize_input_symbol, pretty_symbol
+from .symbols import DEFAULT_OHLC_SYNC_SYMBOLS, normalize_input_symbol, pretty_symbol
 
 # =========================
 # Konfiguracja / połączenie
@@ -1859,9 +1859,12 @@ def sync_ohlc(payload: OhlcSyncRequest) -> OhlcSyncResult:
     else:
         symbols = _collect_all_company_symbols(ch)
         if not symbols:
-            message = "Brak symboli do synchronizacji"
-            OHLC_SYNC_PROGRESS_TRACKER.fail(message)
-            raise HTTPException(400, message)
+            symbols = list(DEFAULT_OHLC_SYNC_SYMBOLS)
+
+    if not symbols:
+        message = "Brak symboli do synchronizacji"
+        OHLC_SYNC_PROGRESS_TRACKER.fail(message)
+        raise HTTPException(400, message)
 
     deduplicated: List[str] = []
     seen: set[str] = set()
