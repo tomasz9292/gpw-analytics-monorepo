@@ -18,6 +18,7 @@ const createProxy = (apiBase: string) =>
   });
 
 const nextConfig: NextConfig = {
+  output: "standalone",
   outputFileTracingRoot: workspaceRoot,
   env: {
     GOOGLE_CLIENT_ID_FALLBACK: process.env.GOOGLE_CLIENT_ID,
