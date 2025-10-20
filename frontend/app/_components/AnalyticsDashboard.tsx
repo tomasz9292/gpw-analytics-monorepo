@@ -3971,7 +3971,11 @@ const CompanySyncPanel = () => {
     );
 };
 
-type DashboardView = "analysis" | "score" | "portfolio" | "sync";
+export type DashboardView = "analysis" | "score" | "portfolio" | "sync";
+
+export type AnalyticsDashboardProps = {
+    view: DashboardView;
+};
 type NavItem = {
     href: string;
     label: string;
@@ -6255,7 +6259,7 @@ function RsiChart({ rows }: { rows: RowRSI[] }) {
 /** =========================
  *  Główny komponent dashboardu
  *  ========================= */
-export function AnalyticsDashboard({ view }: { view: DashboardView }) {
+export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
     const defaultScoreDraft = useMemo(() => getDefaultScoreDraft(), []);
     const defaultPortfolioDraft = useMemo(() => getDefaultPortfolioDraft(), []);
 
