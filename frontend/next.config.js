@@ -4,12 +4,13 @@ const nextConfig = {
     GOOGLE_CLIENT_ID_FALLBACK: process.env.GOOGLE_CLIENT_ID,
   },
   async rewrites() {
-    const apiBase =
+    const rawBase =
       process.env.NEXT_PUBLIC_API_BASE ||
       "https://gpw-analytics-starter-backend-1.onrender.com";
+    const apiBase = rawBase.endsWith("/") ? rawBase : `${rawBase}/`;
     const proxy = (source, destination) => ({
       source,
-      destination: `${apiBase}${destination}`,
+      destination: new URL(destination, apiBase).toString(),
     });
 
     return [
@@ -20,6 +21,8 @@ const nextConfig = {
       proxy("/api/companies/:path*", "/companies/:path*"),
       proxy("/api/symbols", "/symbols"),
       proxy("/api/symbols/:path*", "/symbols/:path*"),
+      proxy("/api/quotes", "/quotes"),
+      proxy("/api/quotes/:path*", "/quotes/:path*"),
     ];
   },
 };
