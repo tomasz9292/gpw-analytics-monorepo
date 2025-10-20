@@ -22,6 +22,7 @@ class OhlcSyncProgress(BaseModel):
     message: Optional[str] = None
     errors: List[str] = Field(default_factory=list)
     requested_as_admin: bool = False
+    result: Optional[OhlcSyncResult] = None
 
 
 class OhlcSyncProgressTracker:
@@ -48,6 +49,7 @@ class OhlcSyncProgressTracker:
                 message=None,
                 errors=[],
                 requested_as_admin=requested_as_admin,
+                result=None,
             )
 
     def update(
@@ -94,6 +96,7 @@ class OhlcSyncProgressTracker:
                 message="Synchronizacja zakończona pomyślnie.",
                 errors=list(result.errors),
                 requested_as_admin=result.requested_as_admin,
+                result=result,
             )
 
     def fail(self, message: str, *, errors: Optional[List[str]] = None) -> None:
@@ -112,6 +115,7 @@ class OhlcSyncProgressTracker:
                 message=message,
                 errors=list(errors) if errors else self._state.errors,
                 requested_as_admin=self._state.requested_as_admin,
+                result=None,
             )
 
     def reset(self) -> None:

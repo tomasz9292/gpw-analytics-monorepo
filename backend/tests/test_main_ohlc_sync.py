@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, List, Optional
 
 import pytest
+from fastapi import HTTPException
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -83,3 +84,47 @@ def test_sync_ohlc_uses_default_symbol_list_when_database_empty(
     assert result.symbols == len(DEFAULT_OHLC_SYNC_SYMBOLS)
     assert result.errors == []
     assert fake_clickhouse.commands == []
+
+
+def test_sync_ohlc_background_starts_thread(monkeypatch: pytest.MonkeyPatch):
+    main_module.OHLC_SYNC_PROGRESS_TRACKER.reset()
+
+    captured: List[OhlcSyncRequest] = []
+
+    def fake_perform(payload: OhlcSyncRequest) -> None:
+        captured.append(payload)
+
+    monkeypatch.setattr(main_module, "_perform_ohlc_sync", fake_perform)
+
+    def fake_thread(target, args=(), kwargs=None, daemon=False):
+        assert daemon is True
+        assert not kwargs
+
+        class DummyThread:
+            def start(self_nonlocal):
+                target(*args)
+
+        return DummyThread()
+
+    monkeypatch.setattr(main_module.threading, "Thread", fake_thread)
+
+    request = OhlcSyncRequest(symbols=["CDR"])
+    response = main_module.sync_ohlc_background(request)
+
+    assert response == {"status": "accepted"}
+    assert captured, "Background sync should invoke the worker"
+    assert captured[0].symbols == ["CDR"]
+
+
+def test_sync_ohlc_background_rejects_when_running():
+    tracker = main_module.OHLC_SYNC_PROGRESS_TRACKER
+    tracker.reset()
+    tracker.start(total_symbols=1, requested_as_admin=False)
+
+    request = OhlcSyncRequest()
+
+    with pytest.raises(HTTPException) as exc:
+        main_module.sync_ohlc_background(request)
+
+    assert exc.value.status_code == 409
+    tracker.reset()
