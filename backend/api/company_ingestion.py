@@ -72,6 +72,10 @@ class HttpRequestLog(BaseModel):
     finished_at: Optional[datetime] = None
     status_code: Optional[int] = None
     error: Optional[str] = None
+    source: Optional[str] = Field(
+        default=None,
+        description="Nazwa źródła danych, z którego pochodzi zapytanie (np. stooq, yahoo).",
+    )
 
 
 class SimpleHttpSession:

@@ -26,8 +26,9 @@ from pydantic import BaseModel, Field, ValidationError, field_validator, model_v
 
 from .company_ingestion import CompanyDataHarvester, CompanySyncProgress, CompanySyncResult
 from .ohlc_progress import OhlcSyncProgress, OhlcSyncProgressTracker
+from .ohlc_sources import MultiSourceOhlcHarvester
 from .sector_classification_data import GPW_SECTOR_CLASSIFICATION
-from .stooq_ohlc import OhlcSyncProgressEvent, OhlcSyncResult, StooqOhlcHarvester
+from .stooq_ohlc import OhlcSyncProgressEvent, OhlcSyncResult
 from .symbols import DEFAULT_OHLC_SYNC_SYMBOLS, normalize_input_symbol, pretty_symbol
 
 # =========================
@@ -505,6 +506,76 @@ _SCHEDULE_THREAD: Optional[threading.Thread] = None
 _SYNC_SCHEDULE_STATE = CompanySyncScheduleStatus()
 
 
+class OhlcSyncScheduleStatus(BaseModel):
+    mode: Literal["idle", "once", "recurring"] = Field(
+        default="idle", description="Tryb harmonogramu synchronizacji notowań",
+    )
+    next_run_at: Optional[datetime] = Field(
+        default=None, description="Najbliższy zaplanowany termin synchronizacji notowań",
+    )
+    recurring_interval_minutes: Optional[int] = Field(
+        default=None, description="Interwał w minutach między kolejnymi synchronizacjami",
+    )
+    recurring_start_at: Optional[datetime] = Field(
+        default=None, description="Planowany start harmonogramu cyklicznego",
+    )
+    last_run_started_at: Optional[datetime] = Field(
+        default=None, description="Czas rozpoczęcia ostatniej synchronizacji z harmonogramu",
+    )
+    last_run_finished_at: Optional[datetime] = Field(
+        default=None, description="Czas zakończenia ostatniej synchronizacji z harmonogramu",
+    )
+    last_run_status: Literal["idle", "running", "success", "failed"] = Field(
+        default="idle", description="Status ostatniej synchronizacji z harmonogramu",
+    )
+    options: Optional["OhlcSyncRequest"] = Field(
+        default=None,
+        description="Parametry synchronizacji notowań używane przez harmonogram",
+    )
+
+
+class OhlcSyncScheduleRequest(BaseModel):
+    mode: Literal["once", "recurring", "cancel"]
+    scheduled_for: Optional[datetime] = Field(
+        default=None,
+        description="Data i czas jednorazowej synchronizacji notowań",
+    )
+    interval_minutes: Optional[int] = Field(
+        default=None,
+        ge=5,
+        le=7 * 24 * 60,
+        description="Interwał w minutach między synchronizacjami cyklicznymi",
+    )
+    start_at: Optional[datetime] = Field(
+        default=None,
+        description="Początek harmonogramu cyklicznego",
+    )
+    options: Optional["OhlcSyncRequest"] = Field(
+        default=None,
+        description="Parametry synchronizacji notowań wykonywanej przez harmonogram",
+    )
+
+    @model_validator(mode="after")
+    def validate_payload(self):  # type: ignore[override]
+        if self.mode == "once":
+            if not self.scheduled_for:
+                raise ValueError("Należy podać termin synchronizacji jednorazowej")
+            if not self.options:
+                raise ValueError("Należy określić parametry synchronizacji notowań")
+        if self.mode == "recurring":
+            if not self.interval_minutes:
+                raise ValueError("Należy określić interwał synchronizacji cyklicznej")
+            if not self.options:
+                raise ValueError("Należy określić parametry synchronizacji notowań")
+        return self
+
+
+_OHLC_SCHEDULE_LOCK = threading.Lock()
+_OHLC_SCHEDULE_EVENT = threading.Event()
+_OHLC_SCHEDULE_THREAD: Optional[threading.Thread] = None
+_OHLC_SCHEDULE_STATE: "OhlcSyncScheduleStatus"
+
+
 def _normalize_datetime(value: datetime) -> datetime:
     if value.tzinfo is not None:
         return value.astimezone(timezone.utc).replace(tzinfo=None)
@@ -550,6 +621,47 @@ def _ensure_schedule_thread_running() -> None:
 
     _SCHEDULE_THREAD = threading.Thread(target=_loop_wrapper, daemon=True)
     _SCHEDULE_THREAD.start()
+
+
+def _snapshot_ohlc_schedule_state() -> OhlcSyncScheduleStatus:
+    with _OHLC_SCHEDULE_LOCK:
+        return _OHLC_SCHEDULE_STATE.model_copy(deep=True)
+
+
+def _notify_ohlc_schedule_loop() -> None:
+    _OHLC_SCHEDULE_EVENT.set()
+
+
+def _ensure_ohlc_schedule_thread_running() -> None:
+    global _OHLC_SCHEDULE_THREAD
+    if _OHLC_SCHEDULE_THREAD and _OHLC_SCHEDULE_THREAD.is_alive():
+        return
+
+    def _loop_wrapper() -> None:
+        while True:
+            with _OHLC_SCHEDULE_LOCK:
+                next_run = _OHLC_SCHEDULE_STATE.next_run_at
+
+            if next_run is None:
+                _OHLC_SCHEDULE_EVENT.wait()
+                _OHLC_SCHEDULE_EVENT.clear()
+                continue
+
+            now = datetime.utcnow()
+            wait_seconds = (next_run - now).total_seconds()
+            if wait_seconds > 0:
+                triggered = _OHLC_SCHEDULE_EVENT.wait(timeout=min(wait_seconds, 60.0))
+                if triggered:
+                    _OHLC_SCHEDULE_EVENT.clear()
+                    continue
+
+            started = _check_and_run_ohlc_scheduled_job()
+            if not started:
+                _OHLC_SCHEDULE_EVENT.wait(timeout=5.0)
+                _OHLC_SCHEDULE_EVENT.clear()
+
+    _OHLC_SCHEDULE_THREAD = threading.Thread(target=_loop_wrapper, daemon=True)
+    _OHLC_SCHEDULE_THREAD.start()
 
 
 def _str_to_bool(value: str, default: bool) -> bool:
@@ -767,6 +879,13 @@ class OhlcSyncRequest(BaseModel):
             except ValueError as exc:
                 raise ValueError("Data musi być w formacie YYYY-MM-DD") from exc
         raise ValueError("Niepoprawny format daty")
+
+
+# Aktualizacja modeli zależnych po zdefiniowaniu OhlcSyncRequest
+OhlcSyncScheduleStatus.model_rebuild()
+OhlcSyncScheduleRequest.model_rebuild()
+
+_OHLC_SCHEDULE_STATE = OhlcSyncScheduleStatus()
 
 
 # =========================
@@ -1214,6 +1333,64 @@ def _check_and_run_scheduled_job(now: Optional[datetime] = None) -> bool:
         elif mode == "recurring" and interval:
             _SYNC_SCHEDULE_STATE.next_run_at = started_at + timedelta(minutes=interval)
         _notify_schedule_loop()
+
+    return True
+
+
+def _check_and_run_ohlc_scheduled_job(now: Optional[datetime] = None) -> bool:
+    if now is None:
+        now = datetime.utcnow()
+
+    with _OHLC_SCHEDULE_LOCK:
+        next_run = _OHLC_SCHEDULE_STATE.next_run_at
+        mode = _OHLC_SCHEDULE_STATE.mode
+        interval = _OHLC_SCHEDULE_STATE.recurring_interval_minutes
+        options = (
+            _OHLC_SCHEDULE_STATE.options.model_copy(deep=True)
+            if _OHLC_SCHEDULE_STATE.options
+            else None
+        )
+
+    if next_run is None or next_run > now or options is None:
+        return False
+
+    snapshot = OHLC_SYNC_PROGRESS_TRACKER.snapshot()
+    if snapshot.status == "running":
+        return False
+
+    try:
+        payload = OhlcSyncRequest.model_validate(options.model_dump())
+    except Exception:
+        return False
+
+    schedule_mode: Optional[str]
+    if mode in {"once", "recurring"}:
+        schedule_mode = mode
+    else:
+        schedule_mode = None
+
+    started_at = datetime.utcnow()
+    with _OHLC_SCHEDULE_LOCK:
+        _OHLC_SCHEDULE_STATE.last_run_started_at = started_at
+        _OHLC_SCHEDULE_STATE.last_run_status = "running"
+        if mode == "once":
+            _OHLC_SCHEDULE_STATE.mode = "idle"
+            _OHLC_SCHEDULE_STATE.next_run_at = None
+            _OHLC_SCHEDULE_STATE.recurring_interval_minutes = None
+            _OHLC_SCHEDULE_STATE.recurring_start_at = None
+        elif mode == "recurring" and interval:
+            _OHLC_SCHEDULE_STATE.next_run_at = started_at + timedelta(minutes=interval)
+            if _OHLC_SCHEDULE_STATE.recurring_start_at is None:
+                _OHLC_SCHEDULE_STATE.recurring_start_at = started_at
+        _notify_ohlc_schedule_loop()
+
+    thread = threading.Thread(
+        target=_run_ohlc_sync_in_background,
+        args=(payload,),
+        kwargs={"schedule_mode": schedule_mode},
+        daemon=True,
+    )
+    thread.start()
 
     return True
 
@@ -1833,7 +2010,11 @@ def _http_exception_message(exc: HTTPException) -> str:
     return str(detail or exc)
 
 
-def _perform_ohlc_sync(payload: OhlcSyncRequest) -> OhlcSyncResult:
+def _perform_ohlc_sync(
+    payload: OhlcSyncRequest,
+    *,
+    schedule_mode: Optional[Literal["once", "recurring"]] = None,
+) -> OhlcSyncResult:
     try:
         ch = get_ch()
     except Exception as exc:  # pragma: no cover - zależy od konfiguracji DB
@@ -1886,7 +2067,7 @@ def _perform_ohlc_sync(payload: OhlcSyncRequest) -> OhlcSyncResult:
         requested_as_admin=payload.run_as_admin,
     )
 
-    harvester = StooqOhlcHarvester()
+    harvester = MultiSourceOhlcHarvester()
 
     def handle_progress(event: OhlcSyncProgressEvent) -> None:
         OHLC_SYNC_PROGRESS_TRACKER.update(
@@ -1909,13 +2090,32 @@ def _perform_ohlc_sync(payload: OhlcSyncRequest) -> OhlcSyncResult:
         )
     except HTTPException as exc:
         OHLC_SYNC_PROGRESS_TRACKER.fail(_http_exception_message(exc))
+        if schedule_mode:
+            with _OHLC_SCHEDULE_LOCK:
+                if _OHLC_SCHEDULE_STATE.last_run_status == "running":
+                    _OHLC_SCHEDULE_STATE.last_run_finished_at = datetime.utcnow()
+                    _OHLC_SCHEDULE_STATE.last_run_status = "failed"
+            _notify_ohlc_schedule_loop()
         raise
     except Exception as exc:
         message = f"Nieoczekiwany błąd synchronizacji notowań: {exc}"
         OHLC_SYNC_PROGRESS_TRACKER.fail(message)
+        if schedule_mode:
+            with _OHLC_SCHEDULE_LOCK:
+                if _OHLC_SCHEDULE_STATE.last_run_status == "running":
+                    _OHLC_SCHEDULE_STATE.last_run_finished_at = datetime.utcnow()
+                    _OHLC_SCHEDULE_STATE.last_run_status = "failed"
+            _notify_ohlc_schedule_loop()
         raise HTTPException(500, message) from exc
 
     OHLC_SYNC_PROGRESS_TRACKER.finish(result)
+    if schedule_mode:
+        with _OHLC_SCHEDULE_LOCK:
+            if _OHLC_SCHEDULE_STATE.last_run_status == "running":
+                finished_at = result.finished_at or datetime.utcnow()
+                _OHLC_SCHEDULE_STATE.last_run_finished_at = finished_at
+                _OHLC_SCHEDULE_STATE.last_run_status = "success"
+        _notify_ohlc_schedule_loop()
     return result
 
 
@@ -1924,9 +2124,13 @@ def sync_ohlc(payload: OhlcSyncRequest) -> OhlcSyncResult:
     return _perform_ohlc_sync(payload)
 
 
-def _run_ohlc_sync_in_background(payload: OhlcSyncRequest) -> None:
+def _run_ohlc_sync_in_background(
+    payload: OhlcSyncRequest,
+    *,
+    schedule_mode: Optional[Literal["once", "recurring"]] = None,
+) -> None:
     try:
-        _perform_ohlc_sync(payload)
+        _perform_ohlc_sync(payload, schedule_mode=schedule_mode)
     except HTTPException:
         # Błąd został już zapisany w trackerze – nie ponownie podnosimy wyjątku.
         return
@@ -1953,6 +2157,65 @@ def sync_ohlc_background(payload: OhlcSyncRequest):
 @app.get("/ohlc/sync/progress", response_model=OhlcSyncProgress)
 def sync_ohlc_progress() -> OhlcSyncProgress:
     return OHLC_SYNC_PROGRESS_TRACKER.snapshot()
+
+
+@app.get("/ohlc/sync/schedule", response_model=OhlcSyncScheduleStatus)
+def ohlc_sync_schedule() -> OhlcSyncScheduleStatus:
+    return _snapshot_ohlc_schedule_state()
+
+
+@app.post("/ohlc/sync/schedule", response_model=OhlcSyncScheduleStatus)
+def update_ohlc_sync_schedule(payload: OhlcSyncScheduleRequest) -> OhlcSyncScheduleStatus:
+    now = datetime.utcnow()
+
+    if payload.mode == "cancel":
+        with _OHLC_SCHEDULE_LOCK:
+            _OHLC_SCHEDULE_STATE.mode = "idle"
+            _OHLC_SCHEDULE_STATE.next_run_at = None
+            _OHLC_SCHEDULE_STATE.recurring_interval_minutes = None
+            _OHLC_SCHEDULE_STATE.recurring_start_at = None
+            _OHLC_SCHEDULE_STATE.options = None
+        _notify_ohlc_schedule_loop()
+        return _snapshot_ohlc_schedule_state()
+
+    if payload.mode == "once":
+        scheduled_for = _normalize_datetime(payload.scheduled_for)  # type: ignore[arg-type]
+        if scheduled_for <= now:
+            raise HTTPException(400, "Termin jednorazowej synchronizacji musi być w przyszłości")
+        options = payload.options.model_copy(deep=True) if payload.options else None
+        if options is None:
+            raise HTTPException(400, "Brak konfiguracji synchronizacji notowań")
+        with _OHLC_SCHEDULE_LOCK:
+            _OHLC_SCHEDULE_STATE.mode = "once"
+            _OHLC_SCHEDULE_STATE.next_run_at = scheduled_for
+            _OHLC_SCHEDULE_STATE.recurring_interval_minutes = None
+            _OHLC_SCHEDULE_STATE.recurring_start_at = None
+            _OHLC_SCHEDULE_STATE.options = options
+        _ensure_ohlc_schedule_thread_running()
+        _notify_ohlc_schedule_loop()
+        return _snapshot_ohlc_schedule_state()
+
+    interval = payload.interval_minutes or 0
+    if interval <= 0:
+        raise HTTPException(400, "Interwał synchronizacji musi być dodatni")
+    options = payload.options.model_copy(deep=True) if payload.options else None
+    if options is None:
+        raise HTTPException(400, "Brak konfiguracji synchronizacji notowań")
+
+    start_at_source = payload.start_at or (now + timedelta(minutes=interval))
+    start_at = _normalize_datetime(start_at_source)
+    if start_at <= now:
+        start_at = now + timedelta(seconds=5)
+
+    with _OHLC_SCHEDULE_LOCK:
+        _OHLC_SCHEDULE_STATE.mode = "recurring"
+        _OHLC_SCHEDULE_STATE.recurring_interval_minutes = interval
+        _OHLC_SCHEDULE_STATE.recurring_start_at = start_at
+        _OHLC_SCHEDULE_STATE.next_run_at = start_at
+        _OHLC_SCHEDULE_STATE.options = options
+    _ensure_ohlc_schedule_thread_running()
+    _notify_ohlc_schedule_loop()
+    return _snapshot_ohlc_schedule_state()
 
 
 @app.get("/quotes", response_model=List[QuoteRow])

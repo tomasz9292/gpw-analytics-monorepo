@@ -1062,6 +1062,7 @@ type HttpRequestLogEntry = {
     finished_at?: string | null;
     status_code?: number | null;
     error?: string | null;
+    source?: string | null;
 };
 
 type OhlcSyncResultPayload = {
@@ -1090,6 +1091,24 @@ type OhlcSyncProgressPayload = {
     errors: string[];
     requested_as_admin: boolean;
     result?: OhlcSyncResultPayload | null;
+};
+
+type OhlcSyncScheduleOptionsPayload = {
+    symbols?: string[] | null;
+    start?: string | null;
+    truncate?: boolean;
+    run_as_admin?: boolean;
+};
+
+type OhlcSyncScheduleStatusPayload = {
+    mode: "idle" | "once" | "recurring";
+    next_run_at: string | null;
+    recurring_interval_minutes: number | null;
+    recurring_start_at: string | null;
+    last_run_started_at: string | null;
+    last_run_finished_at: string | null;
+    last_run_status: "idle" | "running" | "success" | "failed";
+    options?: OhlcSyncScheduleOptionsPayload | null;
 };
 
 const COMPANY_STAGE_LABELS: Record<CompanySyncStatusPayload["stage"], string> = {
@@ -1121,7 +1140,20 @@ const SCHEDULE_MODE_LABELS: Record<CompanySyncScheduleStatusPayload["mode"], str
     recurring: "Cykliczny",
 };
 
+const OHLC_SCHEDULE_MODE_LABELS: Record<OhlcSyncScheduleStatusPayload["mode"], string> = {
+    idle: "Brak aktywnego harmonogramu",
+    once: "Jednorazowy",
+    recurring: "Cykliczny",
+};
+
 const SCHEDULE_STATUS_LABELS: Record<CompanySyncScheduleStatusPayload["last_run_status"], string> = {
+    idle: "Brak uruchomień",
+    running: "W trakcie",
+    success: "Zakończono pomyślnie",
+    failed: "Zakończono błędem",
+};
+
+const OHLC_SCHEDULE_STATUS_LABELS: Record<OhlcSyncScheduleStatusPayload["last_run_status"], string> = {
     idle: "Brak uruchomień",
     running: "W trakcie",
     success: "Zakończono pomyślnie",
@@ -2074,6 +2106,18 @@ const CompanySyncPanel = () => {
     const [ohlcRequestLog, setOhlcRequestLog] = useState<HttpRequestLogEntry[]>([]);
     const [ohlcShowRequestLog, setOhlcShowRequestLog] = useState(false);
     const [ohlcProgress, setOhlcProgress] = useState<OhlcSyncProgressPayload | null>(null);
+    const [ohlcSchedule, setOhlcSchedule] = useState<OhlcSyncScheduleStatusPayload | null>(null);
+    const [ohlcScheduleError, setOhlcScheduleError] = useState<string | null>(null);
+    const [ohlcScheduleSuccess, setOhlcScheduleSuccess] = useState<string | null>(null);
+    const [ohlcIsScheduling, setOhlcIsScheduling] = useState(false);
+    const [ohlcScheduleMode, setOhlcScheduleMode] = useState<"once" | "recurring">("once");
+    const [ohlcOnceDateInput, setOhlcOnceDateInput] = useState("");
+    const [ohlcRecurringIntervalInput, setOhlcRecurringIntervalInput] = useState("1440");
+    const [ohlcRecurringStartInput, setOhlcRecurringStartInput] = useState("");
+    const [ohlcScheduleSymbolsInput, setOhlcScheduleSymbolsInput] = useState("");
+    const [ohlcScheduleStartInput, setOhlcScheduleStartInput] = useState("");
+    const [ohlcScheduleTruncate, setOhlcScheduleTruncate] = useState(false);
+    const [ohlcScheduleRunAsAdmin, setOhlcScheduleRunAsAdmin] = useState(true);
 
     const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const selectedSymbolRef = useRef<string | null>(null);
@@ -2196,6 +2240,21 @@ const CompanySyncPanel = () => {
         []
     );
 
+    const toOptionalIsoDate = useCallback(
+        (value: string, errorMessage: string) => {
+            const trimmed = value.trim();
+            if (!trimmed) {
+                return null;
+            }
+            const parsed = new Date(trimmed);
+            if (Number.isNaN(parsed.getTime())) {
+                throw new Error(errorMessage);
+            }
+            return parsed.toISOString().slice(0, 10);
+        },
+        []
+    );
+
     const formatIntervalLabel = useCallback((minutes: number | null) => {
         if (!minutes || !Number.isFinite(minutes)) {
             return "—";
@@ -2271,6 +2330,26 @@ const CompanySyncPanel = () => {
                 setScheduleError(error.message);
             } else {
                 setScheduleError("Nie udało się pobrać harmonogramu synchronizacji");
+            }
+        }
+    }, []);
+
+    const fetchOhlcSchedule = useCallback(async () => {
+        setOhlcScheduleError(null);
+        try {
+            const response = await fetch(`${ADMIN_API}/ohlc/sync/schedule`, {
+                cache: "no-store",
+            });
+            if (!response.ok) {
+                throw new Error(await parseApiError(response));
+            }
+            const payload = (await response.json()) as OhlcSyncScheduleStatusPayload;
+            setOhlcSchedule(payload);
+        } catch (error) {
+            if (error instanceof Error && error.message) {
+                setOhlcScheduleError(error.message);
+            } else {
+                setOhlcScheduleError("Nie udało się pobrać harmonogramu notowań");
             }
         }
     }, []);
@@ -2642,6 +2721,124 @@ const CompanySyncPanel = () => {
         }
     }, []);
 
+    const handleOhlcScheduleSubmit = useCallback(
+        async (event: React.FormEvent<HTMLFormElement>) => {
+            event.preventDefault();
+            setOhlcIsScheduling(true);
+            setOhlcScheduleError(null);
+            setOhlcScheduleSuccess(null);
+            try {
+                const optionsPayload: Record<string, unknown> = {
+                    run_as_admin: ohlcScheduleRunAsAdmin,
+                    truncate: ohlcScheduleTruncate,
+                };
+                const symbols = ohlcScheduleSymbolsInput
+                    .split(/[\s,;]+/)
+                    .map((symbol) => symbol.trim())
+                    .filter(Boolean);
+                if (symbols.length > 0) {
+                    optionsPayload.symbols = symbols;
+                }
+                const startIso = toOptionalIsoDate(
+                    ohlcScheduleStartInput,
+                    "Podaj poprawną datę początkową (YYYY-MM-DD)."
+                );
+                if (startIso) {
+                    optionsPayload.start = startIso;
+                }
+
+                const payload: Record<string, unknown> = {
+                    mode: ohlcScheduleMode,
+                    options: optionsPayload,
+                };
+
+                if (ohlcScheduleMode === "once") {
+                    payload.scheduled_for = toIsoDateTime(
+                        ohlcOnceDateInput,
+                        "Podaj datę i godzinę uruchomienia synchronizacji."
+                    );
+                } else {
+                    const intervalNumeric = Number(ohlcRecurringIntervalInput);
+                    if (!Number.isFinite(intervalNumeric) || intervalNumeric <= 0) {
+                        throw new Error("Interwał musi być dodatnią liczbą minut.");
+                    }
+                    payload.interval_minutes = Math.round(intervalNumeric);
+                    const startAtIso = toOptionalIsoDateTime(
+                        ohlcRecurringStartInput,
+                        "Podaj poprawną datę rozpoczęcia harmonogramu."
+                    );
+                    if (startAtIso) {
+                        payload.start_at = startAtIso;
+                    }
+                }
+
+                const response = await fetch(`${ADMIN_API}/ohlc/sync/schedule`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload),
+                });
+                if (!response.ok) {
+                    throw new Error(await parseApiError(response));
+                }
+                const result = (await response.json()) as OhlcSyncScheduleStatusPayload;
+                setOhlcSchedule(result);
+                setOhlcScheduleSuccess(
+                    ohlcScheduleMode === "once"
+                        ? "Zapisano harmonogram jednorazowy."
+                        : "Zapisano harmonogram cykliczny."
+                );
+            } catch (error) {
+                setOhlcScheduleError(
+                    error instanceof Error
+                        ? error.message
+                        : "Nie udało się zapisać harmonogramu notowań."
+                );
+            } finally {
+                setOhlcIsScheduling(false);
+            }
+        },
+        [
+            ohlcScheduleMode,
+            ohlcOnceDateInput,
+            ohlcRecurringIntervalInput,
+            ohlcRecurringStartInput,
+            ohlcScheduleRunAsAdmin,
+            ohlcScheduleTruncate,
+            ohlcScheduleSymbolsInput,
+            ohlcScheduleStartInput,
+            toIsoDateTime,
+            toOptionalIsoDateTime,
+            toOptionalIsoDate,
+        ]
+    );
+
+    const handleOhlcScheduleCancel = useCallback(async () => {
+        setOhlcIsScheduling(true);
+        setOhlcScheduleError(null);
+        setOhlcScheduleSuccess(null);
+        try {
+            const response = await fetch(`${ADMIN_API}/ohlc/sync/schedule`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ mode: "cancel" }),
+            });
+            if (!response.ok) {
+                throw new Error(await parseApiError(response));
+            }
+            const payload = (await response.json()) as OhlcSyncScheduleStatusPayload;
+            setOhlcSchedule(payload);
+            setOhlcScheduleSuccess("Usunięto harmonogram notowań.");
+        } catch (error) {
+            setOhlcScheduleError(
+                error instanceof Error
+                    ? error.message
+                    : "Nie udało się usunąć harmonogramu notowań."
+            );
+        } finally {
+            setOhlcIsScheduling(false);
+        }
+    }, []);
+
     const handleAddAdmin = useCallback(
         async (event: React.FormEvent<HTMLFormElement>) => {
             event.preventDefault();
@@ -2683,6 +2880,11 @@ const CompanySyncPanel = () => {
         void fetchSchedule();
     }, [fetchSchedule]);
 
+    const refreshOhlcSchedule = useCallback(() => {
+        setOhlcScheduleSuccess(null);
+        void fetchOhlcSchedule();
+    }, [fetchOhlcSchedule]);
+
     const refreshAdmins = useCallback(() => {
         setAdminsSuccess(null);
         void fetchAdmins();
@@ -2711,8 +2913,16 @@ const CompanySyncPanel = () => {
         fetchCompanies();
         fetchSchedule();
         fetchAdmins();
+        fetchOhlcSchedule();
         return () => stopPolling();
-    }, [fetchStatus, fetchCompanies, fetchSchedule, fetchAdmins, stopPolling]);
+    }, [
+        fetchStatus,
+        fetchCompanies,
+        fetchSchedule,
+        fetchAdmins,
+        fetchOhlcSchedule,
+        stopPolling,
+    ]);
 
     useEffect(() => {
         if (status?.status === "running") {
@@ -2726,6 +2936,7 @@ const CompanySyncPanel = () => {
             if (status?.status === "completed") {
                 fetchCompanies(activeQuery);
                 fetchSchedule();
+                fetchOhlcSchedule();
             }
         }
     }, [
@@ -2735,6 +2946,7 @@ const CompanySyncPanel = () => {
         fetchCompanies,
         activeQuery,
         fetchSchedule,
+        fetchOhlcSchedule,
     ]);
 
     useEffect(() => () => stopPolling(), [stopPolling]);
@@ -2760,6 +2972,55 @@ const CompanySyncPanel = () => {
             setRecurringStartInput("");
         }
     }, [schedule, toLocalDateTimeInputValue]);
+
+    useEffect(() => {
+        if (!ohlcSchedule) {
+            setOhlcScheduleMode("once");
+            setOhlcOnceDateInput("");
+            setOhlcRecurringIntervalInput("1440");
+            setOhlcRecurringStartInput("");
+            setOhlcScheduleSymbolsInput("");
+            setOhlcScheduleStartInput("");
+            setOhlcScheduleTruncate(false);
+            setOhlcScheduleRunAsAdmin(true);
+            return;
+        }
+        setOhlcScheduleMode(
+            ohlcSchedule.mode === "recurring"
+                ? "recurring"
+                : ohlcSchedule.mode === "once"
+                ? "once"
+                : "once"
+        );
+        if (ohlcSchedule.mode === "once") {
+            setOhlcOnceDateInput(toLocalDateTimeInputValue(ohlcSchedule.next_run_at));
+        }
+        if (ohlcSchedule.mode === "recurring") {
+            if (ohlcSchedule.recurring_interval_minutes) {
+                setOhlcRecurringIntervalInput(String(ohlcSchedule.recurring_interval_minutes));
+            }
+            const nextInput = ohlcSchedule.next_run_at || ohlcSchedule.recurring_start_at;
+            setOhlcRecurringStartInput(toLocalDateTimeInputValue(nextInput));
+        }
+        if (ohlcSchedule.mode === "idle") {
+            setOhlcOnceDateInput("");
+            setOhlcRecurringStartInput("");
+            setOhlcRecurringIntervalInput("1440");
+        }
+        const options = ohlcSchedule.options ?? null;
+        if (options?.symbols && options.symbols.length > 0) {
+            setOhlcScheduleSymbolsInput(options.symbols.join(", "));
+        } else {
+            setOhlcScheduleSymbolsInput("");
+        }
+        if (options?.start) {
+            setOhlcScheduleStartInput(options.start);
+        } else {
+            setOhlcScheduleStartInput("");
+        }
+        setOhlcScheduleTruncate(Boolean(options?.truncate));
+        setOhlcScheduleRunAsAdmin(options?.run_as_admin ?? true);
+    }, [ohlcSchedule, toLocalDateTimeInputValue]);
 
     useEffect(() => {
         if (!selectedSymbol) {
@@ -3000,6 +3261,26 @@ const CompanySyncPanel = () => {
         schedule?.recurring_interval_minutes ?? null
     );
     const hasActiveSchedule = schedule?.mode === "once" || schedule?.mode === "recurring";
+    const ohlcScheduleModeLabel = ohlcSchedule
+        ? OHLC_SCHEDULE_MODE_LABELS[ohlcSchedule.mode]
+        : OHLC_SCHEDULE_MODE_LABELS.idle;
+    const ohlcScheduleStatusLabel = ohlcSchedule
+        ? OHLC_SCHEDULE_STATUS_LABELS[ohlcSchedule.last_run_status]
+        : OHLC_SCHEDULE_STATUS_LABELS.idle;
+    const ohlcScheduleNextRunLabel = ohlcSchedule?.next_run_at
+        ? formatDateTime(ohlcSchedule.next_run_at)
+        : "—";
+    const ohlcScheduleLastStartLabel = ohlcSchedule?.last_run_started_at
+        ? formatDateTime(ohlcSchedule.last_run_started_at)
+        : "—";
+    const ohlcScheduleLastFinishLabel = ohlcSchedule?.last_run_finished_at
+        ? formatDateTime(ohlcSchedule.last_run_finished_at)
+        : "—";
+    const ohlcScheduleIntervalLabel = formatIntervalLabel(
+        ohlcSchedule?.recurring_interval_minutes ?? null
+    );
+    const ohlcHasActiveSchedule =
+        ohlcSchedule?.mode === "once" || ohlcSchedule?.mode === "recurring";
 
     return (
         <div className="space-y-16">
@@ -3167,6 +3448,211 @@ const CompanySyncPanel = () => {
                                 </div>
                             </form>
                         </Card>
+                        <Card
+                            title="Harmonogram synchronizacji notowań"
+                            right={
+                                <button
+                                    type="button"
+                                    onClick={refreshOhlcSchedule}
+                                    className="rounded-full border border-soft px-4 py-2 text-sm font-semibold text-primary transition hover:border-primary/40 hover:text-primary"
+                                >
+                                    Odśwież harmonogram
+                                </button>
+                            }
+                        >
+                            <div className="space-y-4">
+                                <div className="grid gap-3 text-xs text-subtle sm:grid-cols-2">
+                                    <div className="rounded-xl border border-soft bg-white/60 p-3">
+                                        <div className="text-[10px] uppercase tracking-wide text-muted">Tryb</div>
+                                        <div className="text-sm font-semibold text-primary">
+                                            {ohlcScheduleModeLabel}
+                                        </div>
+                                    </div>
+                                    <div className="rounded-xl border border-soft bg-white/60 p-3">
+                                        <div className="text-[10px] uppercase tracking-wide text-muted">Status</div>
+                                        <div className="text-sm font-semibold text-primary">
+                                            {ohlcScheduleStatusLabel}
+                                        </div>
+                                    </div>
+                                    <div className="rounded-xl border border-soft bg-white/60 p-3">
+                                        <div className="text-[10px] uppercase tracking-wide text-muted">Najbliższe uruchomienie</div>
+                                        <div className="text-sm font-semibold text-primary">
+                                            {ohlcScheduleNextRunLabel}
+                                        </div>
+                                    </div>
+                                    <div className="rounded-xl border border-soft bg-white/60 p-3">
+                                        <div className="text-[10px] uppercase tracking-wide text-muted">Interwał</div>
+                                        <div className="text-sm font-semibold text-primary">
+                                            {ohlcScheduleIntervalLabel}
+                                        </div>
+                                    </div>
+                                    <div className="rounded-xl border border-soft bg-white/60 p-3">
+                                        <div className="text-[10px] uppercase tracking-wide text-muted">Ostatni start</div>
+                                        <div className="text-sm font-semibold text-primary">
+                                            {ohlcScheduleLastStartLabel}
+                                        </div>
+                                    </div>
+                                    <div className="rounded-xl border border-soft bg-white/60 p-3">
+                                        <div className="text-[10px] uppercase tracking-wide text-muted">Ostatnie zakończenie</div>
+                                        <div className="text-sm font-semibold text-primary">
+                                            {ohlcScheduleLastFinishLabel}
+                                        </div>
+                                    </div>
+                                </div>
+                                {ohlcScheduleSuccess && (
+                                    <div className="rounded-xl border border-emerald-200/60 bg-emerald-50/70 px-3 py-2 text-xs text-emerald-700">
+                                        {ohlcScheduleSuccess}
+                                    </div>
+                                )}
+                                {ohlcScheduleError && (
+                                    <div className="rounded-xl border border-rose-200/60 bg-rose-50/70 px-3 py-2 text-xs text-rose-600">
+                                        {ohlcScheduleError}
+                                    </div>
+                                )}
+                                <form onSubmit={handleOhlcScheduleSubmit} className="space-y-3">
+                                    <div className="flex flex-wrap gap-4 text-sm font-medium text-primary">
+                                        <label className="flex items-center gap-2">
+                                            <input
+                                                type="radio"
+                                                value="once"
+                                                checked={ohlcScheduleMode === "once"}
+                                                onChange={() => setOhlcScheduleMode("once")}
+                                                disabled={ohlcIsScheduling}
+                                            />
+                                            <span>Jednorazowy</span>
+                                        </label>
+                                        <label className="flex items-center gap-2">
+                                            <input
+                                                type="radio"
+                                                value="recurring"
+                                                checked={ohlcScheduleMode === "recurring"}
+                                                onChange={() => setOhlcScheduleMode("recurring")}
+                                                disabled={ohlcIsScheduling}
+                                            />
+                                            <span>Cykliczny</span>
+                                        </label>
+                                    </div>
+                                    {ohlcScheduleMode === "once" ? (
+                                        <label className="flex flex-col gap-2 text-sm font-medium text-primary">
+                                            <span>Data i godzina uruchomienia</span>
+                                            <input
+                                                type="datetime-local"
+                                                value={ohlcOnceDateInput}
+                                                onChange={(event) => setOhlcOnceDateInput(event.target.value)}
+                                                className="rounded-xl border border-soft bg-white/70 px-3 py-2 text-sm text-primary shadow-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/40"
+                                                disabled={ohlcIsScheduling}
+                                                required
+                                            />
+                                        </label>
+                                    ) : (
+                                        <div className="grid gap-3 sm:grid-cols-2">
+                                            <label className="flex flex-col gap-2 text-sm font-medium text-primary">
+                                                <span>Interwał (minuty)</span>
+                                                <input
+                                                    type="number"
+                                                    min={5}
+                                                    value={ohlcRecurringIntervalInput}
+                                                    onChange={(event) =>
+                                                        setOhlcRecurringIntervalInput(event.target.value)
+                                                    }
+                                                    className="rounded-xl border border-soft bg-white/70 px-3 py-2 text-sm text-primary shadow-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/40"
+                                                    disabled={ohlcIsScheduling}
+                                                />
+                                                <span className="text-xs font-normal text-subtle">
+                                                    Minimalnie 5 minut.
+                                                </span>
+                                            </label>
+                                            <label className="flex flex-col gap-2 text-sm font-medium text-primary">
+                                                <span>Start harmonogramu (opcjonalnie)</span>
+                                                <input
+                                                    type="datetime-local"
+                                                    value={ohlcRecurringStartInput}
+                                                    onChange={(event) =>
+                                                        setOhlcRecurringStartInput(event.target.value)
+                                                    }
+                                                    className="rounded-xl border border-soft bg-white/70 px-3 py-2 text-sm text-primary shadow-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/40"
+                                                    disabled={ohlcIsScheduling}
+                                                />
+                                                <span className="text-xs font-normal text-subtle">
+                                                    Domyślnie harmonogram startuje natychmiast.
+                                                </span>
+                                            </label>
+                                        </div>
+                                    )}
+                                    <label className="flex flex-col gap-2 text-sm font-medium text-primary">
+                                        <span>Lista symboli (opcjonalnie)</span>
+                                        <textarea
+                                            value={ohlcScheduleSymbolsInput}
+                                            onChange={(event) => setOhlcScheduleSymbolsInput(event.target.value)}
+                                            className="min-h-[100px] rounded-xl border border-soft bg-white/70 px-3 py-2 text-sm text-primary shadow-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/40"
+                                            placeholder="np. CDR.WA, PKN.WA"
+                                            disabled={ohlcIsScheduling}
+                                        />
+                                        <span className="text-xs font-normal text-subtle">
+                                            Pozostaw puste, aby zsynchronizować wszystkie dostępne symbole.
+                                        </span>
+                                    </label>
+                                    <label className="flex flex-col gap-2 text-sm font-medium text-primary">
+                                        <span>Data początkowa (opcjonalnie)</span>
+                                        <input
+                                            type="date"
+                                            value={ohlcScheduleStartInput}
+                                            onChange={(event) => setOhlcScheduleStartInput(event.target.value)}
+                                            className="rounded-xl border border-soft bg-white/70 px-3 py-2 text-sm text-primary shadow-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/40"
+                                            disabled={ohlcIsScheduling}
+                                        />
+                                    </label>
+                                    <div className="space-y-3 text-sm text-primary">
+                                        <label className="flex items-center gap-3">
+                                            <input
+                                                type="checkbox"
+                                                className="h-4 w-4 rounded border-soft text-primary focus:ring-primary/40"
+                                                checked={ohlcScheduleTruncate}
+                                                onChange={(event) => {
+                                                    const checked = event.target.checked;
+                                                    setOhlcScheduleTruncate(checked);
+                                                    if (checked && !ohlcScheduleRunAsAdmin) {
+                                                        setOhlcScheduleRunAsAdmin(true);
+                                                    }
+                                                }}
+                                                disabled={ohlcIsScheduling}
+                                            />
+                                            <span>Wyczyść tabelę przed synchronizacją</span>
+                                        </label>
+                                        <p className="text-xs text-subtle">
+                                            Czyszczenie wymaga trybu administratora.
+                                        </p>
+                                        <label className="flex items-center gap-3">
+                                            <input
+                                                type="checkbox"
+                                                className="h-4 w-4 rounded border-soft text-primary focus:ring-primary/40"
+                                                checked={ohlcScheduleRunAsAdmin}
+                                                onChange={(event) => setOhlcScheduleRunAsAdmin(event.target.checked)}
+                                                disabled={ohlcIsScheduling}
+                                            />
+                                            <span>Uruchom w trybie administratora</span>
+                                        </label>
+                                    </div>
+                                    <div className="flex flex-wrap gap-3">
+                                        <button
+                                            type="submit"
+                                            disabled={ohlcIsScheduling}
+                                            className="rounded-full bg-primary px-4 py-2 text-sm font-semibold text-white shadow hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
+                                            Zapisz harmonogram
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={handleOhlcScheduleCancel}
+                                            disabled={ohlcIsScheduling || !ohlcHasActiveSchedule}
+                                            className="rounded-full border border-soft px-4 py-2 text-sm font-semibold text-muted transition hover:border-primary/40 hover:text-primary disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
+                                            Usuń harmonogram
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
+                        </Card>
                         <Card title="Ostatnia synchronizacja notowań">
                             {ohlcResult ? (
                                 <div className="space-y-4">
@@ -3245,6 +3731,14 @@ const CompanySyncPanel = () => {
                                                             <div className="break-all text-sm font-medium text-primary">
                                                                 {entry.url}
                                                             </div>
+                                                            {entry.source && (
+                                                                <div>
+                                                                    Źródło:
+                                                                    <span className="ml-1 font-semibold text-primary">
+                                                                        {entry.source}
+                                                                    </span>
+                                                                </div>
+                                                            )}
                                                             <div>Status: {entry.status_code ?? "—"}</div>
                                                             <div>Start: {formatDateTime(entry.started_at)}</div>
                                                             <div>
