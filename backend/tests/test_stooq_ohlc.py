@@ -14,9 +14,16 @@ from api.stooq_ohlc import OhlcSyncResult, StooqOhlcHarvester
 
 
 class FakeResponse:
-    def __init__(self, text: str, raw_bytes: Optional[bytes] = None) -> None:
+    def __init__(
+        self,
+        text: str,
+        raw_bytes: Optional[bytes] = None,
+        *,
+        status_code: int = 200,
+    ) -> None:
         self._text = text
         self._raw_bytes = raw_bytes if raw_bytes is not None else text.encode()
+        self.status_code = status_code
 
     def text(self) -> str:
         return self._text
@@ -24,6 +31,10 @@ class FakeResponse:
     @property
     def content(self) -> bytes:
         return self._raw_bytes
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
 
 
 class FakeSession:
@@ -45,6 +56,7 @@ class FakeSession:
             return FakeResponse(
                 text=str(payload.get("text", "")),
                 raw_bytes=payload.get("raw_bytes"),
+                status_code=payload.get("status_code", 200),
             )
         return FakeResponse(str(payload))
 
@@ -197,3 +209,22 @@ def test_sync_reports_progress_via_callback():
     assert any(
         event.get("current_symbol") == "CDR" and event["processed"] >= 1 for event in events
     )
+
+
+def test_fetch_history_raises_for_http_errors():
+    session = FakeSession([FakeResponse("", status_code=403)])
+    harvester = StooqOhlcHarvester(session=session)
+
+    with pytest.raises(RuntimeError) as exc:
+        harvester.fetch_history("CDR")
+
+    assert "HTTP 403" in str(exc.value)
+
+
+def test_default_session_uses_csv_friendly_headers():
+    harvester = StooqOhlcHarvester()
+    headers = getattr(harvester.session, "headers", {})
+
+    assert headers.get("Accept", "").startswith("text/csv")
+    assert headers.get("Referer") == "https://stooq.pl/"
+    assert "X-Requested-With" not in headers or not headers["X-Requested-With"]
