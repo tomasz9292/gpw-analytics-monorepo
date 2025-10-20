@@ -1,7 +1,21 @@
 "use client";
 
-import { AnalyticsDashboard } from "../page";
+import dynamic from "next/dynamic";
 
-export default function SymulatorPortfelaPage() {
+import { AnalyticsDashboardLoading } from "../_components/AnalyticsDashboardLoading";
+import type { AnalyticsDashboardProps } from "../_components/AnalyticsDashboard";
+
+const AnalyticsDashboard = dynamic<AnalyticsDashboardProps>(
+    () =>
+        import("../_components/AnalyticsDashboard").then(
+            (mod) => mod.AnalyticsDashboard
+        ),
+    {
+        ssr: false,
+        loading: () => <AnalyticsDashboardLoading />,
+    }
+);
+
+export default function PortfolioSimulatorPage() {
     return <AnalyticsDashboard view="portfolio" />;
 }
