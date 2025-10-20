@@ -96,7 +96,17 @@ class StooqOhlcHarvester:
         session: Optional[Any] = None,
         download_url_template: str = STOOQ_OHLC_DOWNLOAD_URL,
     ) -> None:
-        self.session = session or SimpleHttpSession()
+        if session is None:
+            session = SimpleHttpSession(
+                headers={
+                    "Accept": "text/csv, text/plain, */*;q=0.8",
+                    "Referer": "https://stooq.pl/",
+                }
+            )
+            # Stooq zwraca błąd 403 dla części niestandardowych nagłówków.
+            if hasattr(session, "headers"):
+                session.headers.pop("X-Requested-With", None)
+        self.session = session
         self.download_url_template = download_url_template
 
     def _build_url(self, symbol: str) -> str:
@@ -170,6 +180,12 @@ class StooqOhlcHarvester:
     def fetch_history(self, symbol: str) -> List[OhlcRow]:
         url = self._build_url(symbol)
         response = self.session.get(url)
+        status_code = getattr(response, "status_code", None)
+        raise_for_status = getattr(response, "raise_for_status", None)
+        if callable(raise_for_status):
+            raise_for_status()
+        elif isinstance(status_code, int) and status_code >= 400:
+            raise RuntimeError(f"HTTP {status_code}")
         document = response.text()
         parsed = self._parse_csv(document)
         if not parsed:
