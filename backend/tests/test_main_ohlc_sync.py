@@ -1,7 +1,7 @@
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Sequence
 
 import pytest
 from fastapi import HTTPException
@@ -36,7 +36,7 @@ class FakeHarvester:
         *,
         ch_client: Any,
         table_name: str,
-        symbols: List[str],
+        symbols: Sequence[str],
         start_date: Optional[datetime] = None,
         truncate: bool = False,
         run_as_admin: bool = False,
@@ -60,7 +60,7 @@ class FakeHarvester:
 @pytest.fixture()
 def fake_harvester(monkeypatch: pytest.MonkeyPatch) -> FakeHarvester:
     harvester = FakeHarvester()
-    monkeypatch.setattr(main_module, "StooqOhlcHarvester", lambda: harvester)
+    monkeypatch.setattr(main_module, "MultiSourceOhlcHarvester", lambda: harvester)
     return harvester
 
 
@@ -91,18 +91,18 @@ def test_sync_ohlc_background_starts_thread(monkeypatch: pytest.MonkeyPatch):
 
     captured: List[OhlcSyncRequest] = []
 
-    def fake_perform(payload: OhlcSyncRequest) -> None:
+    def fake_perform(payload: OhlcSyncRequest, *, schedule_mode=None) -> None:
         captured.append(payload)
 
     monkeypatch.setattr(main_module, "_perform_ohlc_sync", fake_perform)
 
     def fake_thread(target, args=(), kwargs=None, daemon=False):
         assert daemon is True
-        assert not kwargs
+        kwargs = kwargs or {}
 
         class DummyThread:
             def start(self_nonlocal):
-                target(*args)
+                target(*args, **kwargs)
 
         return DummyThread()
 
@@ -128,3 +128,68 @@ def test_sync_ohlc_background_rejects_when_running():
 
     assert exc.value.status_code == 409
     tracker.reset()
+
+
+def test_update_ohlc_schedule_once_sets_state(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(main_module, "_ensure_ohlc_schedule_thread_running", lambda: None)
+    monkeypatch.setattr(main_module, "_notify_ohlc_schedule_loop", lambda: None)
+    schedule_state = main_module.OhlcSyncScheduleStatus()
+    monkeypatch.setattr(main_module, "_OHLC_SCHEDULE_STATE", schedule_state)
+
+    scheduled_for = datetime.utcnow() + timedelta(minutes=10)
+    payload = main_module.OhlcSyncScheduleRequest(
+        mode="once",
+        scheduled_for=scheduled_for,
+        options=OhlcSyncRequest(symbols=["CDR"]),
+    )
+
+    status = main_module.update_ohlc_sync_schedule(payload)
+
+    assert status.mode == "once"
+    assert status.next_run_at is not None
+    assert status.options is not None
+
+    cancel_status = main_module.update_ohlc_sync_schedule(
+        main_module.OhlcSyncScheduleRequest(mode="cancel")
+    )
+    assert cancel_status.mode == "idle"
+    assert cancel_status.next_run_at is None
+
+
+def test_check_and_run_ohlc_scheduled_job_triggers(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(main_module, "_notify_ohlc_schedule_loop", lambda: None)
+    state = main_module.OhlcSyncScheduleStatus(
+        mode="once",
+        next_run_at=datetime.utcnow() - timedelta(seconds=1),
+        options=OhlcSyncRequest(symbols=["PKN"]),
+    )
+    monkeypatch.setattr(main_module, "_OHLC_SCHEDULE_STATE", state)
+    main_module.OHLC_SYNC_PROGRESS_TRACKER.reset()
+
+    captured: List[tuple[OhlcSyncRequest, Optional[str]]] = []
+
+    def fake_run(payload: OhlcSyncRequest, *, schedule_mode: Optional[str] = None):
+        captured.append((payload, schedule_mode))
+
+    monkeypatch.setattr(main_module, "_run_ohlc_sync_in_background", fake_run)
+
+    def fake_thread(target, args=(), kwargs=None, daemon=False):
+        kwargs = kwargs or {}
+
+        class DummyThread:
+            def start(self_nonlocal):
+                target(*args, **kwargs)
+
+        return DummyThread()
+
+    monkeypatch.setattr(main_module.threading, "Thread", fake_thread)
+
+    started = main_module._check_and_run_ohlc_scheduled_job(now=datetime.utcnow())
+
+    assert started is True
+    assert captured, "Scheduled job should invoke runner"
+    payload, mode = captured[0]
+    assert payload.symbols == ["PKN"]
+    assert mode == "once"
+    assert state.mode == "idle"
+    assert state.last_run_status == "running"
