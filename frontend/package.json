@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev --turbopack",
     "build": "next build",
+    "postbuild": "node scripts/cleanup-next-cache.mjs",
     "start": "next start",
     "lint": "eslint"
   },
