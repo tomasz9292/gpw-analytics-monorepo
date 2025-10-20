@@ -1,5 +1,10 @@
+const path = require("node:path");
+
+const workspaceRoot = path.join(__dirname, "..");
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  outputFileTracingRoot: workspaceRoot,
   env: {
     GOOGLE_CLIENT_ID_FALLBACK: process.env.GOOGLE_CLIENT_ID,
   },
