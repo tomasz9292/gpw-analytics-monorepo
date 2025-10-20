@@ -1,12 +1,11 @@
 {
   "name": "gpw-analytics-monorepo",
   "private": true,
-  "workspaces": ["frontend"],
   "scripts": {
-    "build": "npm run build --workspace frontend",
-    "lint": "npm run lint --workspace frontend",
-    "dev": "npm run dev --workspace frontend",
-    "start": "npm run start --workspace frontend"
+    "build": "npm --prefix frontend run build",
+    "lint": "npm --prefix frontend run lint",
+    "dev": "npm --prefix frontend run dev",
+    "start": "npm --prefix frontend run start"
   },
   "engines": {
     "node": "^18.18.0 || >=20"
