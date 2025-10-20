@@ -1,6 +1,4 @@
-"use client";
-
-import { AnalyticsDashboard } from "../page";
+import { AnalyticsDashboard } from "../_components/AnalyticsDashboard";
 
 export default function SymulatorPortfelaPage() {
     return <AnalyticsDashboard view="portfolio" />;
