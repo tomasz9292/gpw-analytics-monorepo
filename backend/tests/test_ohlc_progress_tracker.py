@@ -55,6 +55,8 @@ def test_tracker_start_update_finish():
     assert finished.errors == ["CDR: timeout"]
     assert finished.requested_as_admin is True
     assert finished.message == "Synchronizacja zakończona pomyślnie."
+    assert finished.result is not None
+    assert finished.result.inserted == 42
 
 
 def test_tracker_fail_overrides_message_and_errors():
@@ -77,6 +79,7 @@ def test_tracker_fail_overrides_message_and_errors():
     assert failed.finished_at is not None
     assert failed.current_symbol is None
     assert failed.started_at is not None
+    assert failed.result is None
 
 
 def test_tracker_update_is_monotonic():

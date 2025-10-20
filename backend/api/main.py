@@ -1833,8 +1833,7 @@ def _http_exception_message(exc: HTTPException) -> str:
     return str(detail or exc)
 
 
-@app.post("/ohlc/sync", response_model=OhlcSyncResult)
-def sync_ohlc(payload: OhlcSyncRequest) -> OhlcSyncResult:
+def _perform_ohlc_sync(payload: OhlcSyncRequest) -> OhlcSyncResult:
     try:
         ch = get_ch()
     except Exception as exc:  # pragma: no cover - zależy od konfiguracji DB
@@ -1918,6 +1917,37 @@ def sync_ohlc(payload: OhlcSyncRequest) -> OhlcSyncResult:
 
     OHLC_SYNC_PROGRESS_TRACKER.finish(result)
     return result
+
+
+@app.post("/ohlc/sync", response_model=OhlcSyncResult)
+def sync_ohlc(payload: OhlcSyncRequest) -> OhlcSyncResult:
+    return _perform_ohlc_sync(payload)
+
+
+def _run_ohlc_sync_in_background(payload: OhlcSyncRequest) -> None:
+    try:
+        _perform_ohlc_sync(payload)
+    except HTTPException:
+        # Błąd został już zapisany w trackerze – nie ponownie podnosimy wyjątku.
+        return
+
+
+@app.post("/ohlc/sync/background", status_code=202)
+def sync_ohlc_background(payload: OhlcSyncRequest):
+    snapshot = OHLC_SYNC_PROGRESS_TRACKER.snapshot()
+    if snapshot.status == "running":
+        raise HTTPException(409, "Synchronizacja notowań jest już w toku")
+
+    payload_copy = OhlcSyncRequest.model_validate(payload.model_dump())
+
+    thread = threading.Thread(
+        target=_run_ohlc_sync_in_background,
+        args=(payload_copy,),
+        daemon=True,
+    )
+    thread.start()
+
+    return {"status": "accepted"}
 
 
 @app.get("/ohlc/sync/progress", response_model=OhlcSyncProgress)

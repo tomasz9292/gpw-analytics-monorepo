@@ -1089,6 +1089,7 @@ type OhlcSyncProgressPayload = {
     message: string | null;
     errors: string[];
     requested_as_admin: boolean;
+    result?: OhlcSyncResultPayload | null;
 };
 
 const COMPANY_STAGE_LABELS: Record<CompanySyncStatusPayload["stage"], string> = {
@@ -2300,6 +2301,11 @@ const CompanySyncPanel = () => {
             }
             const payload = (await response.json()) as OhlcSyncProgressPayload;
             setOhlcProgress(payload);
+            if (payload?.result) {
+                setOhlcResult(payload.result);
+                setOhlcRequestLog(payload.result.request_log ?? []);
+                setOhlcShowRequestLog(false);
+            }
             return payload;
         } catch (error) {
             if (error instanceof Error && error.message) {
@@ -2473,7 +2479,7 @@ const CompanySyncPanel = () => {
                 if (trimmedStart) {
                     payload.start = trimmedStart;
                 }
-                const response = await fetch(`/api/admin/ohlc/sync`, {
+                const response = await fetch(`/api/admin/ohlc/sync/background`, {
                     method: "POST",
                     cache: "no-store",
                     headers: { "Content-Type": "application/json" },
@@ -2497,13 +2503,6 @@ const CompanySyncPanel = () => {
                             : "Nie udało się uruchomić synchronizacji notowań";
                     throw new Error(message);
                 }
-                if (!data || typeof data !== "object") {
-                    throw new Error("Nieprawidłowa odpowiedź serwera");
-                }
-                const resultPayload = data as OhlcSyncResultPayload;
-                setOhlcResult(resultPayload);
-                setOhlcRequestLog(resultPayload.request_log ?? []);
-                setOhlcShowRequestLog(false);
             } catch (error) {
                 const message =
                     error instanceof Error && error.message
