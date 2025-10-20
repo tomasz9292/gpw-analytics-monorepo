@@ -7,7 +7,7 @@ import io
 from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence
 
-from pydantic import BaseModel
+from pydantic import BaseModel, PrivateAttr
 
 from .company_ingestion import HttpRequestLog, SimpleHttpSession, _normalize_gpw_symbol
 from .stooq_ohlc import OhlcRow, OhlcSyncResult, ProgressCallback
@@ -33,8 +33,10 @@ class StooqOhlcSource(OhlcSource):
     """Adapter exposing :class:`StooqOhlcHarvester` as a generic source."""
 
     name: str = "stooq"
+    _harvester: Any = PrivateAttr()
 
     def __init__(self, harvester: Optional[Any] = None) -> None:
+        super().__init__()
         from .stooq_ohlc import StooqOhlcHarvester
 
         if harvester is None:
