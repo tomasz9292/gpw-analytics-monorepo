@@ -1,5 +1,5 @@
 #!/bin/sh
-set -eu
+set -euo pipefail
 
 if [ -f "./frontend/package.json" ]; then
   npm install --prefix frontend

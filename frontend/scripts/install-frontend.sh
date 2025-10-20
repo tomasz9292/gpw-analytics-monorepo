@@ -1,7 +1,9 @@
 #!/bin/sh
-set -eu
+set -euo pipefail
 
 # Resolve repository root relative to this script (frontend/scripts)
-REPO_ROOT="$(cd "$(dirname "$0")"/../.. && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR"/../.. && pwd)"
 
-"$REPO_ROOT/scripts/install-frontend.sh"
+cd "$REPO_ROOT"
+exec ./scripts/install-frontend.sh "$@"
