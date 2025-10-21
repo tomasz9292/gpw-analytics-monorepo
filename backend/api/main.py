@@ -14,12 +14,12 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from typing import Literal
 from uuid import uuid4
 
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import clickhouse_connect
 import threading
 from decimal import Decimal
-from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.params import Query as QueryParam
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
@@ -436,6 +436,24 @@ CLICKHOUSE_SECURE = _env_bool("CLICKHOUSE_SECURE", default=True)
 CLICKHOUSE_VERIFY = _env_bool("CLICKHOUSE_VERIFY", default=True)
 CLICKHOUSE_CA = os.getenv("CLICKHOUSE_CA", "").strip()  # ścieżka do dodatkowego certyfikatu, opcjonalna
 
+_INITIAL_CLICKHOUSE_SETTINGS = {
+    "CLICKHOUSE_URL": CLICKHOUSE_URL,
+    "CLICKHOUSE_HOST": CLICKHOUSE_HOST,
+    "CLICKHOUSE_PORT": CLICKHOUSE_PORT,
+    "CLICKHOUSE_DATABASE": CLICKHOUSE_DATABASE,
+    "CLICKHOUSE_USER": CLICKHOUSE_USER,
+    "CLICKHOUSE_PASSWORD": CLICKHOUSE_PASSWORD,
+    "CLICKHOUSE_SECURE": CLICKHOUSE_SECURE,
+    "CLICKHOUSE_VERIFY": CLICKHOUSE_VERIFY,
+    "CLICKHOUSE_CA": CLICKHOUSE_CA,
+}
+
+_INITIAL_CLICKHOUSE_MODE: Literal["url", "manual"] = (
+    "url" if CLICKHOUSE_URL else "manual"
+)
+_CLICKHOUSE_CONFIG_SOURCE: Literal["env", "override"] = "env"
+_CLICKHOUSE_CONFIG_MODE: Literal["url", "manual"] = _INITIAL_CLICKHOUSE_MODE
+
 # CORS – domyślnie pozwalamy wszystkim, ale można podać np. domenę z Vercel.
 _cors_origins = os.getenv("CORS_ALLOW_ORIGINS", "*").strip()
 if _cors_origins == "*":
@@ -740,6 +758,93 @@ def _parse_clickhouse_url():
     }
 
 
+def _mask_clickhouse_url(url: str) -> str:
+    parsed = urlparse(url)
+    username = parsed.username or ""
+    password = parsed.password or ""
+    hostname = parsed.hostname or ""
+    port = parsed.port
+
+    if username:
+        userinfo = username
+        if password:
+            userinfo = f"{userinfo}:***"
+        netloc = f"{userinfo}@{hostname}"
+    else:
+        netloc = hostname
+    if port:
+        netloc = f"{netloc}:{port}"
+
+    sanitized = parsed._replace(netloc=netloc)
+    if password:
+        sanitized = sanitized._replace(path=parsed.path or "/")
+    if parsed.query:
+        query_params = parse_qs(parsed.query, keep_blank_values=True)
+        masked_items = []
+        for key, values in query_params.items():
+            lowered = key.lower()
+            if lowered in {"password", "pass"}:
+                masked_items.append((key, "***"))
+            else:
+                for value in values:
+                    masked_items.append((key, value))
+        sanitized = sanitized._replace(query=urlencode(masked_items, doseq=True))
+    return urlunparse(sanitized)
+
+
+def _snapshot_clickhouse_settings() -> Dict[str, Any]:
+    return {
+        "CLICKHOUSE_URL": CLICKHOUSE_URL,
+        "CLICKHOUSE_HOST": CLICKHOUSE_HOST,
+        "CLICKHOUSE_PORT": CLICKHOUSE_PORT,
+        "CLICKHOUSE_DATABASE": CLICKHOUSE_DATABASE,
+        "CLICKHOUSE_USER": CLICKHOUSE_USER,
+        "CLICKHOUSE_PASSWORD": CLICKHOUSE_PASSWORD,
+        "CLICKHOUSE_SECURE": CLICKHOUSE_SECURE,
+        "CLICKHOUSE_VERIFY": CLICKHOUSE_VERIFY,
+        "CLICKHOUSE_CA": CLICKHOUSE_CA,
+        "source": _CLICKHOUSE_CONFIG_SOURCE,
+        "mode": _CLICKHOUSE_CONFIG_MODE,
+    }
+
+
+def _apply_clickhouse_settings(
+    settings: Dict[str, Any],
+    *,
+    source: Literal["env", "override"],
+    mode: Literal["url", "manual"],
+) -> None:
+    global CLICKHOUSE_URL, CLICKHOUSE_HOST, CLICKHOUSE_PORT, CLICKHOUSE_DATABASE
+    global CLICKHOUSE_USER, CLICKHOUSE_PASSWORD, CLICKHOUSE_SECURE, CLICKHOUSE_VERIFY
+    global CLICKHOUSE_CA, _CLICKHOUSE_CONFIG_SOURCE, _CLICKHOUSE_CONFIG_MODE
+
+    CLICKHOUSE_URL = str(settings.get("CLICKHOUSE_URL", "") or "").strip()
+    CLICKHOUSE_HOST = str(settings.get("CLICKHOUSE_HOST", "") or "").strip()
+    CLICKHOUSE_PORT = str(settings.get("CLICKHOUSE_PORT", "") or "").strip()
+    CLICKHOUSE_DATABASE = str(
+        settings.get("CLICKHOUSE_DATABASE", "default") or "default"
+    ).strip()
+    CLICKHOUSE_USER = str(settings.get("CLICKHOUSE_USER", "default") or "default").strip()
+    CLICKHOUSE_PASSWORD = str(settings.get("CLICKHOUSE_PASSWORD", "") or "")
+    CLICKHOUSE_SECURE = bool(settings.get("CLICKHOUSE_SECURE", True))
+    CLICKHOUSE_VERIFY = bool(settings.get("CLICKHOUSE_VERIFY", True))
+    CLICKHOUSE_CA = str(settings.get("CLICKHOUSE_CA", "") or "").strip()
+    _CLICKHOUSE_CONFIG_SOURCE = source
+    _CLICKHOUSE_CONFIG_MODE = mode
+
+
+def _reset_clickhouse_client_cache() -> None:
+    global _THREAD_LOCAL, _CH_CLIENT_KWARGS
+    _CH_CLIENT_KWARGS = None
+    client = getattr(_THREAD_LOCAL, "ch_client", None)
+    if client is not None:
+        try:
+            client.close()
+        except Exception:  # pragma: no cover - zależy od środowiska
+            pass
+    _THREAD_LOCAL = threading.local()
+
+
 def _get_ch_client_kwargs():
     global _CH_CLIENT_KWARGS
     if _CH_CLIENT_KWARGS is not None:
@@ -815,6 +920,7 @@ def get_ch():
 # =========================
 
 app = FastAPI(title="GPW Analytics API", version="0.1.0")
+api_router = APIRouter()
 OHLC_SYNC_PROGRESS_TRACKER = OhlcSyncProgressTracker()
 
 app.add_middleware(
@@ -830,9 +936,235 @@ app.add_middleware(
 )
 
 
-@app.get("/ping")
+@api_router.get("/ping")
 def ping() -> str:
     return "pong"
+
+
+class ClickHouseConfigRequest(BaseModel):
+    reset: bool = Field(
+        default=False,
+        description="Czy przywrócić ustawienia środowiskowe ClickHouse",
+    )
+    mode: Literal["url", "manual"] = Field(
+        default="url",
+        description="Tryb konfiguracji: pełny adres URL lub ręczne parametry",
+    )
+    url: Optional[str] = Field(
+        default=None,
+        description="Adres połączenia ClickHouse (np. https://example:8443/db)",
+    )
+    host: Optional[str] = Field(
+        default=None,
+        description="Host ClickHouse w trybie ręcznym (np. srv.clickhouse.tech)",
+    )
+    port: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=65535,
+        description="Port ClickHouse w trybie ręcznym",
+    )
+    database: Optional[str] = Field(
+        default=None,
+        description="Nazwa bazy danych ClickHouse",
+    )
+    username: Optional[str] = Field(
+        default=None,
+        description="Login użytkownika ClickHouse",
+    )
+    password: Optional[str] = Field(
+        default=None,
+        description="Hasło użytkownika ClickHouse",
+    )
+    secure: Optional[bool] = Field(
+        default=None,
+        description="Czy użyć połączenia TLS/HTTPS w trybie ręcznym",
+    )
+    verify: Optional[bool] = Field(
+        default=None,
+        description="Czy weryfikować certyfikat TLS (ręczny tryb)",
+    )
+    ca: Optional[str] = Field(
+        default=None,
+        description="Ścieżka do dodatkowego certyfikatu CA (opcjonalnie)",
+    )
+
+    @model_validator(mode="after")
+    def _normalize(cls, values: "ClickHouseConfigRequest") -> "ClickHouseConfigRequest":
+        if values.reset:
+            return values
+
+        if values.url is not None:
+            cleaned = values.url.strip()
+            values.url = cleaned or None
+        if values.host is not None:
+            cleaned = values.host.strip()
+            values.host = cleaned or None
+        if values.database is not None:
+            cleaned = values.database.strip()
+            values.database = cleaned or None
+        if values.username is not None:
+            cleaned = values.username.strip()
+            values.username = cleaned or None
+        if values.ca is not None:
+            cleaned = values.ca.strip()
+            values.ca = cleaned or None
+
+        if values.mode not in {"url", "manual"}:
+            values.mode = "url"
+
+        if values.mode == "url":
+            if not values.url:
+                raise ValueError("W trybie URL należy podać adres ClickHouse")
+        else:
+            if not values.host:
+                raise ValueError("W trybie ręcznym należy podać hosta ClickHouse")
+
+        return values
+
+
+class ClickHouseConfigResponse(BaseModel):
+    source: Literal["env", "override"] = Field(
+        description="Źródło konfiguracji backendu: zmienne środowiskowe lub nadpisanie"
+    )
+    mode: Literal["url", "manual"] = Field(
+        description="Tryb konfiguracji używany aktualnie przez backend"
+    )
+    url: Optional[str] = Field(
+        default=None,
+        description="Zanonimizowany adres URL ClickHouse (bez hasła)",
+    )
+    host: Optional[str] = Field(
+        default=None,
+        description="Host ClickHouse ustawiony w backendzie",
+    )
+    port: Optional[int] = Field(
+        default=None,
+        description="Port ClickHouse ustawiony w backendzie",
+    )
+    secure: bool = Field(description="Czy backend używa szyfrowanego połączenia")
+    verify: Optional[bool] = Field(
+        default=None,
+        description="Czy backend weryfikuje certyfikat TLS (None = domyślnie)",
+    )
+    database: Optional[str] = Field(
+        default=None,
+        description="Nazwa bazy danych używanej przez backend",
+    )
+    username: Optional[str] = Field(
+        default=None,
+        description="Użytkownik ClickHouse ustawiony w backendzie",
+    )
+    has_password: bool = Field(
+        description="Czy backend posiada skonfigurowane hasło do ClickHouse"
+    )
+    ca: Optional[str] = Field(
+        default=None,
+        description="Skonfigurowany dodatkowy certyfikat CA",
+    )
+
+
+def _build_clickhouse_config_response() -> ClickHouseConfigResponse:
+    client_kwargs = _get_ch_client_kwargs()
+    host = str(client_kwargs.get("host") or "").strip()
+    port_value = client_kwargs.get("port")
+    try:
+        port = int(port_value) if port_value is not None else None
+    except (TypeError, ValueError):
+        port = None
+    secure = bool(client_kwargs.get("secure", True))
+    verify_value = client_kwargs.get("verify")
+    verify = None if verify_value is None else bool(verify_value)
+    username = client_kwargs.get("username") or None
+    database = client_kwargs.get("database") or None
+    password = client_kwargs.get("password") or None
+    ca_cert = client_kwargs.get("ca_cert") or (CLICKHOUSE_CA or None)
+
+    url_display = CLICKHOUSE_URL.strip() or None
+    if url_display:
+        url_display = _mask_clickhouse_url(url_display)
+
+    return ClickHouseConfigResponse(
+        source=_CLICKHOUSE_CONFIG_SOURCE,
+        mode=_CLICKHOUSE_CONFIG_MODE,
+        url=url_display,
+        host=host or None,
+        port=port,
+        secure=secure,
+        verify=verify,
+        database=database,
+        username=username,
+        has_password=bool(password),
+        ca=ca_cert,
+    )
+
+
+@api_router.get("/config/clickhouse", response_model=ClickHouseConfigResponse)
+def get_clickhouse_config() -> ClickHouseConfigResponse:
+    try:
+        return _build_clickhouse_config_response()
+    except Exception as exc:  # pragma: no cover - zależy od środowiska
+        raise HTTPException(500, str(exc)) from exc
+
+
+@api_router.post("/config/clickhouse", response_model=ClickHouseConfigResponse)
+def update_clickhouse_config(payload: ClickHouseConfigRequest) -> ClickHouseConfigResponse:
+    previous = _snapshot_clickhouse_settings()
+    previous_settings = {
+        key: previous[key]
+        for key in _INITIAL_CLICKHOUSE_SETTINGS.keys()
+    }
+    previous_source: Literal["env", "override"] = previous["source"]
+    previous_mode: Literal["url", "manual"] = previous["mode"]
+
+    if payload.reset:
+        settings = dict(_INITIAL_CLICKHOUSE_SETTINGS)
+        target_source: Literal["env", "override"] = "env"
+        target_mode: Literal["url", "manual"] = _INITIAL_CLICKHOUSE_MODE
+    else:
+        settings = dict(previous_settings)
+        target_source = "override"
+        target_mode = payload.mode
+        if payload.mode == "url":
+            settings["CLICKHOUSE_URL"] = payload.url or ""
+            settings["CLICKHOUSE_HOST"] = payload.host or ""
+            settings["CLICKHOUSE_PORT"] = (
+                str(payload.port) if payload.port is not None else ""
+            )
+        else:
+            settings["CLICKHOUSE_URL"] = ""
+            settings["CLICKHOUSE_HOST"] = payload.host or ""
+            settings["CLICKHOUSE_PORT"] = (
+                str(payload.port) if payload.port is not None else ""
+            )
+
+        if payload.database is not None:
+            settings["CLICKHOUSE_DATABASE"] = payload.database or ""
+        if payload.username is not None:
+            settings["CLICKHOUSE_USER"] = payload.username or ""
+        if payload.password is not None:
+            settings["CLICKHOUSE_PASSWORD"] = payload.password or ""
+        if payload.secure is not None:
+            settings["CLICKHOUSE_SECURE"] = bool(payload.secure)
+        if payload.verify is not None:
+            settings["CLICKHOUSE_VERIFY"] = bool(payload.verify)
+        if payload.ca is not None:
+            settings["CLICKHOUSE_CA"] = payload.ca or ""
+
+    try:
+        _apply_clickhouse_settings(settings, source=target_source, mode=target_mode)
+        _reset_clickhouse_client_cache()
+        _get_ch_client_kwargs()
+    except Exception as exc:
+        _apply_clickhouse_settings(
+            previous_settings,
+            source=previous_source,
+            mode=previous_mode,
+        )
+        _reset_clickhouse_client_cache()
+        raise HTTPException(400, str(exc)) from exc
+
+    return _build_clickhouse_config_response()
 
 
 class OhlcSyncRequest(BaseModel):
@@ -1758,7 +2090,7 @@ def _run_company_sync_job(job_id: str, limit: Optional[int]) -> None:
             _SYNC_THREAD = None
 
 
-@app.post("/companies/sync/background", response_model=CompanySyncJobStatus)
+@api_router.post("/companies/sync/background", response_model=CompanySyncJobStatus)
 def start_company_sync(
     limit: Optional[int] = Query(default=None, ge=1, le=5000),
 ) -> CompanySyncJobStatus:
@@ -1769,17 +2101,17 @@ def start_company_sync(
         return _SYNC_STATE.model_copy(deep=True)
 
 
-@app.get("/companies/sync/status", response_model=CompanySyncJobStatus)
+@api_router.get("/companies/sync/status", response_model=CompanySyncJobStatus)
 def company_sync_status() -> CompanySyncJobStatus:
     return _snapshot_sync_state()
 
 
-@app.get("/companies/sync/schedule", response_model=CompanySyncScheduleStatus)
+@api_router.get("/companies/sync/schedule", response_model=CompanySyncScheduleStatus)
 def company_sync_schedule() -> CompanySyncScheduleStatus:
     return _snapshot_schedule_state()
 
 
-@app.post("/companies/sync/schedule", response_model=CompanySyncScheduleStatus)
+@api_router.post("/companies/sync/schedule", response_model=CompanySyncScheduleStatus)
 def update_company_sync_schedule(payload: CompanySyncScheduleRequest) -> CompanySyncScheduleStatus:
     now = datetime.utcnow()
 
@@ -1824,7 +2156,7 @@ def update_company_sync_schedule(payload: CompanySyncScheduleRequest) -> Company
     return _snapshot_schedule_state()
 
 
-@app.post("/companies/sync", response_model=CompanySyncResult)
+@api_router.post("/companies/sync", response_model=CompanySyncResult)
 def sync_companies(
     limit: Optional[int] = Query(default=None, ge=1, le=5000),
     run_as_admin: bool = Query(
@@ -1849,7 +2181,7 @@ def sync_companies(
     return result
 
 
-@app.get("/companies", response_model=List[CompanyProfile])
+@api_router.get("/companies", response_model=List[CompanyProfile])
 def list_companies(
     q: Optional[str] = Query(
         default=None, description="Fragment symbolu, nazwy, branży lub ISIN spółki."
@@ -1918,7 +2250,7 @@ def list_companies(
     return output
 
 
-@app.get("/companies/{symbol}", response_model=CompanyProfile)
+@api_router.get("/companies/{symbol}", response_model=CompanyProfile)
 def get_company_profile(symbol: str) -> CompanyProfile:
     ch = get_ch()
     columns = _get_company_columns(ch)
@@ -1969,7 +2301,7 @@ def get_company_profile(symbol: str) -> CompanyProfile:
 # /symbols – lista tickerów
 # =========================
 
-@app.get("/symbols")
+@api_router.get("/symbols")
 def symbols(
     q: Optional[str] = Query(default=None, description="fragment symbolu"),
     limit: int = Query(default=200, ge=1, le=2000),
@@ -2141,7 +2473,7 @@ def _perform_ohlc_sync(
     return result
 
 
-@app.post("/ohlc/sync", response_model=OhlcSyncResult)
+@api_router.post("/ohlc/sync", response_model=OhlcSyncResult)
 def sync_ohlc(payload: OhlcSyncRequest) -> OhlcSyncResult:
     return _perform_ohlc_sync(payload)
 
@@ -2158,7 +2490,7 @@ def _run_ohlc_sync_in_background(
         return
 
 
-@app.post("/ohlc/sync/background", status_code=202)
+@api_router.post("/ohlc/sync/background", status_code=202)
 def sync_ohlc_background(payload: OhlcSyncRequest):
     snapshot = OHLC_SYNC_PROGRESS_TRACKER.snapshot()
     if snapshot.status == "running":
@@ -2176,17 +2508,17 @@ def sync_ohlc_background(payload: OhlcSyncRequest):
     return {"status": "accepted"}
 
 
-@app.get("/ohlc/sync/progress", response_model=OhlcSyncProgress)
+@api_router.get("/ohlc/sync/progress", response_model=OhlcSyncProgress)
 def sync_ohlc_progress() -> OhlcSyncProgress:
     return OHLC_SYNC_PROGRESS_TRACKER.snapshot()
 
 
-@app.get("/ohlc/sync/schedule", response_model=OhlcSyncScheduleStatus)
+@api_router.get("/ohlc/sync/schedule", response_model=OhlcSyncScheduleStatus)
 def ohlc_sync_schedule() -> OhlcSyncScheduleStatus:
     return _snapshot_ohlc_schedule_state()
 
 
-@app.post("/ohlc/sync/schedule", response_model=OhlcSyncScheduleStatus)
+@api_router.post("/ohlc/sync/schedule", response_model=OhlcSyncScheduleStatus)
 def update_ohlc_sync_schedule(payload: OhlcSyncScheduleRequest) -> OhlcSyncScheduleStatus:
     now = datetime.utcnow()
 
@@ -2240,7 +2572,7 @@ def update_ohlc_sync_schedule(payload: OhlcSyncScheduleRequest) -> OhlcSyncSched
     return _snapshot_ohlc_schedule_state()
 
 
-@app.get("/quotes", response_model=List[QuoteRow])
+@api_router.get("/quotes", response_model=List[QuoteRow])
 def quotes(symbol: str, start: Optional[str] = None):
     """
     Zwraca notowania OHLC dla symbolu od wskazanej daty.
@@ -2281,7 +2613,7 @@ def quotes(symbol: str, start: Optional[str] = None):
     return out
 
 
-@app.get("/data-collection", response_model=List[DataCollectionItem])
+@api_router.get("/data-collection", response_model=List[DataCollectionItem])
 def collect_data(
     symbols: List[str] = Query(
         ...,
@@ -2335,7 +2667,7 @@ def collect_data(
     return items
 
 
-@app.get("/sectors/classification", response_model=List[SectorClassificationEntry])
+@api_router.get("/sectors/classification", response_model=List[SectorClassificationEntry])
 def list_sector_classification() -> List[SectorClassificationEntry]:
     """Zwraca hierarchiczną klasyfikację sektorową GPW."""
 
@@ -3263,12 +3595,12 @@ def _run_score_preview(req: ScorePreviewRequest) -> ScorePreviewResponse:
     )
 
 
-@app.post("/score/preview", response_model=ScorePreviewResponse)
+@api_router.post("/score/preview", response_model=ScorePreviewResponse)
 def score_preview(req: ScorePreviewRequest):
     return _run_score_preview(req)
 
 
-@app.post("/scores/preview", response_model=ScorePreviewResponse)
+@api_router.post("/scores/preview", response_model=ScorePreviewResponse)
 def scores_preview(req: ScorePreviewRequest):
     return _run_score_preview(req)
 
@@ -3472,7 +3804,7 @@ def _parse_backtest_get(
         raise HTTPException(422, exc.errors()) from exc
 
 
-@app.get("/backtest/portfolio", response_model=PortfolioResp)
+@api_router.get("/backtest/portfolio", response_model=PortfolioResp)
 def backtest_portfolio_get(req: BacktestPortfolioRequest = Depends(_parse_backtest_get)):
     """GET-owy wariant backtestu portfela.
 
@@ -3486,7 +3818,7 @@ def backtest_portfolio_get(req: BacktestPortfolioRequest = Depends(_parse_backte
     return _run_backtest(req)
 
 
-@app.post("/backtest/portfolio", response_model=PortfolioResp)
+@api_router.post("/backtest/portfolio", response_model=PortfolioResp)
 def backtest_portfolio(req: BacktestPortfolioRequest):
     """Backtest portfela na bazie kursów zamknięcia.
 
@@ -3499,14 +3831,14 @@ def backtest_portfolio(req: BacktestPortfolioRequest):
     return _run_backtest(req)
 
 
-@app.post("/backtest/portfolio/score", response_model=List[PortfolioScoreItem])
+@api_router.post("/backtest/portfolio/score", response_model=List[PortfolioScoreItem])
 def backtest_portfolio_score(req: PortfolioScoreRequest):
     """Zwraca ranking spółek na podstawie konfiguracji trybu auto."""
 
     return _compute_portfolio_score(req)
 
 
-@app.get("/backtest/portfolio/tooling", response_model=BacktestPortfolioTooling)
+@api_router.get("/backtest/portfolio/tooling", response_model=BacktestPortfolioTooling)
 def backtest_portfolio_tooling():
     """Zwraca metadane pomagające zbudować formularz do backtestów.
 
@@ -3546,3 +3878,7 @@ def backtest_portfolio_tooling():
             },
         ),
     )
+
+
+app.include_router(api_router)
+app.include_router(api_router, prefix="/api/admin")

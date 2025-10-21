@@ -50,6 +50,7 @@ declare global {
 const API = "/api";
 const ADMIN_API = "/api/admin";
 const LOCAL_ADMIN_API = "http://localhost:8000/api/admin";
+const LOCAL_CLICKHOUSE_STORAGE_KEY = "gpw-local-clickhouse-config";
 
 const NETWORK_ERROR_PATTERNS = [
     "failed to fetch",
@@ -104,6 +105,35 @@ type ScoreComponentRequest = {
     direction: "asc" | "desc";
     label?: string;
 };
+
+type LocalClickhouseConfigState = {
+    source: "env" | "override";
+    mode: "url" | "manual";
+    url: string | null;
+    host: string | null;
+    port: number | null;
+    secure: boolean;
+    verify: boolean | null;
+    database: string | null;
+    username: string | null;
+    has_password: boolean;
+    ca: string | null;
+};
+
+type LocalClickhousePersistedConfig = {
+    mode: "url" | "manual";
+    url?: string;
+    host?: string;
+    port?: string;
+    database?: string;
+    username?: string;
+    password?: string;
+    secure?: boolean;
+    verify?: boolean;
+    ca?: string;
+};
+
+type LocalClickhouseEnsureResult = { ok: true } | { ok: false; error: string };
 
 const buildScoreComponents = (rules: ScoreBuilderRule[]): ScoreComponentRequest[] =>
     rules.reduce<ScoreComponentRequest[]>((acc, rule) => {
@@ -2162,6 +2192,33 @@ const CompanySyncPanel = () => {
     const [ohlcScheduleStartInput, setOhlcScheduleStartInput] = useState("");
     const [ohlcScheduleTruncate, setOhlcScheduleTruncate] = useState(false);
     const [ohlcScheduleRunAsAdmin, setOhlcScheduleRunAsAdmin] = useState(true);
+    const [localClickhouseMode, setLocalClickhouseMode] = useState<"url" | "manual">(
+        "url"
+    );
+    const [localClickhouseUrl, setLocalClickhouseUrl] = useState("");
+    const [localClickhouseHost, setLocalClickhouseHost] = useState("");
+    const [localClickhousePort, setLocalClickhousePort] = useState("");
+    const [localClickhouseDatabase, setLocalClickhouseDatabase] = useState("");
+    const [localClickhouseUsername, setLocalClickhouseUsername] = useState("");
+    const [localClickhousePassword, setLocalClickhousePassword] = useState("");
+    const [localClickhouseSecure, setLocalClickhouseSecure] = useState(true);
+    const [localClickhouseVerify, setLocalClickhouseVerify] = useState(true);
+    const [localClickhouseCa, setLocalClickhouseCa] = useState("");
+    const [localClickhouseDirty, setLocalClickhouseDirty] = useState(false);
+    const [localClickhouseSaving, setLocalClickhouseSaving] = useState(false);
+    const [localClickhouseError, setLocalClickhouseError] = useState<string | null>(
+        null
+    );
+    const [localClickhouseSuccess, setLocalClickhouseSuccess] = useState<
+        string | null
+    >(null);
+    const [localClickhouseAppliedAt, setLocalClickhouseAppliedAt] = useState<
+        number | null
+    >(null);
+    const [localClickhouseStatus, setLocalClickhouseStatus] =
+        useState<LocalClickhouseConfigState | null>(null);
+    const [localClickhouseBackendReachable, setLocalClickhouseBackendReachable] =
+        useState(false);
 
     const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const selectedSymbolRef = useRef<string | null>(null);
@@ -2169,6 +2226,67 @@ const CompanySyncPanel = () => {
     useEffect(() => {
         selectedSymbolRef.current = selectedSymbol;
     }, [selectedSymbol]);
+
+    useEffect(() => {
+        try {
+            const raw = localStorage.getItem(LOCAL_CLICKHOUSE_STORAGE_KEY);
+            if (!raw) {
+                return;
+            }
+            const parsed = JSON.parse(raw) as LocalClickhousePersistedConfig;
+            if (parsed.mode === "manual" || parsed.mode === "url") {
+                setLocalClickhouseMode(parsed.mode);
+            }
+            setLocalClickhouseUrl(parsed.url ?? "");
+            setLocalClickhouseHost(parsed.host ?? "");
+            setLocalClickhousePort(parsed.port ?? "");
+            setLocalClickhouseDatabase(parsed.database ?? "");
+            setLocalClickhouseUsername(parsed.username ?? "");
+            setLocalClickhousePassword(parsed.password ?? "");
+            setLocalClickhouseSecure(
+                parsed.secure !== undefined ? Boolean(parsed.secure) : true
+            );
+            setLocalClickhouseVerify(
+                parsed.verify !== undefined ? Boolean(parsed.verify) : true
+            );
+            setLocalClickhouseCa(parsed.ca ?? "");
+            const hasConfig =
+                (parsed.mode === "url" && (parsed.url?.trim().length ?? 0) > 0) ||
+                (parsed.mode === "manual" && (parsed.host?.trim().length ?? 0) > 0);
+            setLocalClickhouseDirty(hasConfig);
+            setLocalClickhouseAppliedAt(null);
+        } catch {
+            // Ignorujemy błędy parsowania – użytkownik może nadpisać konfigurację ręcznie.
+        }
+    }, []);
+
+    useEffect(() => {
+        let cancelled = false;
+        (async () => {
+            try {
+                const response = await fetch(`${LOCAL_ADMIN_API}/config/clickhouse`, {
+                    cache: "no-store",
+                });
+                if (!response.ok) {
+                    return;
+                }
+                const data = (await response.json()) as LocalClickhouseConfigState;
+                if (cancelled) {
+                    return;
+                }
+                setLocalClickhouseStatus(data);
+                setLocalClickhouseBackendReachable(true);
+            } catch {
+                if (cancelled) {
+                    return;
+                }
+                setLocalClickhouseBackendReachable(false);
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, []);
 
     const numberFormatter = useMemo(
         () => new Intl.NumberFormat("pl-PL", { maximumFractionDigits: 2 }),
@@ -2189,6 +2307,246 @@ const CompanySyncPanel = () => {
         if (Number.isNaN(parsed.getTime())) return value;
         return parsed.toLocaleString("pl-PL", { hour12: false });
     };
+
+    const applyLocalClickhouseConfig = useCallback(async (): Promise<LocalClickhouseEnsureResult> => {
+        const trimmedUrl = localClickhouseUrl.trim();
+        const trimmedHost = localClickhouseHost.trim();
+        const trimmedPort = localClickhousePort.trim();
+        const trimmedDatabase = localClickhouseDatabase.trim();
+        const trimmedUsername = localClickhouseUsername.trim();
+        const trimmedPassword = localClickhousePassword;
+        const trimmedCa = localClickhouseCa.trim();
+
+        const requiresConfig =
+            (localClickhouseMode === "url" && trimmedUrl.length > 0) ||
+            (localClickhouseMode === "manual" && trimmedHost.length > 0);
+
+        if (!requiresConfig) {
+            const error =
+                "Podaj konfigurację ClickHouse lub przywróć ustawienia domyślne.";
+            setLocalClickhouseError(error);
+            setLocalClickhouseSuccess(null);
+            return { ok: false, error };
+        }
+
+        if (trimmedPort.length > 0) {
+            const portNumber = Number(trimmedPort);
+            if (
+                !Number.isInteger(portNumber) ||
+                portNumber <= 0 ||
+                portNumber > 65535
+            ) {
+                const error = "Port ClickHouse musi być liczbą z zakresu 1-65535.";
+                setLocalClickhouseError(error);
+                setLocalClickhouseSuccess(null);
+                return { ok: false, error };
+            }
+        }
+
+        const payload: Record<string, unknown> = {
+            mode: localClickhouseMode,
+            secure: localClickhouseSecure,
+            verify: localClickhouseVerify,
+        };
+        if (localClickhouseMode === "url") {
+            payload.url = trimmedUrl;
+        } else {
+            payload.host = trimmedHost;
+        }
+        if (trimmedPort.length > 0) {
+            payload.port = Number(trimmedPort);
+        }
+        if (trimmedDatabase.length > 0) {
+            payload.database = trimmedDatabase;
+        }
+        if (trimmedUsername.length > 0) {
+            payload.username = trimmedUsername;
+        }
+        if (trimmedPassword.length > 0) {
+            payload.password = trimmedPassword;
+        }
+        if (trimmedCa.length > 0) {
+            payload.ca = trimmedCa;
+        }
+
+        setLocalClickhouseSaving(true);
+        setLocalClickhouseError(null);
+        setLocalClickhouseSuccess(null);
+        try {
+            const response = await fetch(`${LOCAL_ADMIN_API}/config/clickhouse`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+            });
+            if (!response.ok) {
+                throw new Error(await parseApiError(response));
+            }
+            const data = (await response.json()) as LocalClickhouseConfigState;
+            setLocalClickhouseStatus(data);
+            setLocalClickhouseBackendReachable(true);
+            setLocalClickhouseSuccess(
+                "Zapisano konfigurację połączenia z ClickHouse."
+            );
+            setLocalClickhouseAppliedAt(Date.now());
+            setLocalClickhouseDirty(false);
+            try {
+                const toPersist: LocalClickhousePersistedConfig = {
+                    mode: localClickhouseMode,
+                    url:
+                        localClickhouseMode === "url" && trimmedUrl.length > 0
+                            ? trimmedUrl
+                            : undefined,
+                    host:
+                        localClickhouseMode === "manual" && trimmedHost.length > 0
+                            ? trimmedHost
+                            : undefined,
+                    port: trimmedPort.length > 0 ? trimmedPort : undefined,
+                    database:
+                        trimmedDatabase.length > 0 ? trimmedDatabase : undefined,
+                    username:
+                        trimmedUsername.length > 0 ? trimmedUsername : undefined,
+                    password:
+                        trimmedPassword.length > 0 ? trimmedPassword : undefined,
+                    secure: localClickhouseSecure,
+                    verify: localClickhouseVerify,
+                    ca: trimmedCa.length > 0 ? trimmedCa : undefined,
+                };
+                localStorage.setItem(
+                    LOCAL_CLICKHOUSE_STORAGE_KEY,
+                    JSON.stringify(toPersist)
+                );
+            } catch {
+                // Ignorujemy błąd zapisu w localStorage.
+            }
+            return { ok: true };
+        } catch (error) {
+            const message = resolveErrorMessage(
+                error,
+                "Nie udało się zapisać konfiguracji ClickHouse"
+            );
+            setLocalClickhouseError(message);
+            setLocalClickhouseSuccess(null);
+            if (isNetworkError(error)) {
+                setLocalClickhouseBackendReachable(false);
+            }
+            return { ok: false, error: message };
+        } finally {
+            setLocalClickhouseSaving(false);
+        }
+    }, [
+        localClickhouseMode,
+        localClickhouseUrl,
+        localClickhouseHost,
+        localClickhousePort,
+        localClickhouseDatabase,
+        localClickhouseUsername,
+        localClickhousePassword,
+        localClickhouseSecure,
+        localClickhouseVerify,
+        localClickhouseCa,
+    ]);
+
+    const ensureLocalClickhouseConfig = useCallback(async (): Promise<LocalClickhouseEnsureResult> => {
+        const trimmedUrl = localClickhouseUrl.trim();
+        const trimmedHost = localClickhouseHost.trim();
+        const requiresConfig =
+            (localClickhouseMode === "url" && trimmedUrl.length > 0) ||
+            (localClickhouseMode === "manual" && trimmedHost.length > 0);
+        if (!requiresConfig) {
+            return { ok: true };
+        }
+        if (localClickhouseDirty || !localClickhouseAppliedAt) {
+            return applyLocalClickhouseConfig();
+        }
+        return { ok: true };
+    }, [
+        applyLocalClickhouseConfig,
+        localClickhouseMode,
+        localClickhouseUrl,
+        localClickhouseHost,
+        localClickhouseDirty,
+        localClickhouseAppliedAt,
+    ]);
+
+    const handleResetLocalClickhouse = useCallback(async () => {
+        setLocalClickhouseSaving(true);
+        setLocalClickhouseError(null);
+        setLocalClickhouseSuccess(null);
+        try {
+            const response = await fetch(`${LOCAL_ADMIN_API}/config/clickhouse`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ reset: true }),
+            });
+            if (!response.ok) {
+                throw new Error(await parseApiError(response));
+            }
+            const data = (await response.json()) as LocalClickhouseConfigState;
+            setLocalClickhouseStatus(data);
+            setLocalClickhouseBackendReachable(true);
+            setLocalClickhouseSuccess(
+                "Przywrócono domyślną konfigurację ClickHouse."
+            );
+            setLocalClickhouseMode("url");
+            setLocalClickhouseUrl("");
+            setLocalClickhouseHost("");
+            setLocalClickhousePort("");
+            setLocalClickhouseDatabase("");
+            setLocalClickhouseUsername("");
+            setLocalClickhousePassword("");
+            setLocalClickhouseSecure(true);
+            setLocalClickhouseVerify(true);
+            setLocalClickhouseCa("");
+            setLocalClickhouseDirty(false);
+            setLocalClickhouseAppliedAt(Date.now());
+            try {
+                localStorage.removeItem(LOCAL_CLICKHOUSE_STORAGE_KEY);
+            } catch {
+                // Ignorujemy błąd usunięcia.
+            }
+            return true;
+        } catch (error) {
+            const message = resolveErrorMessage(
+                error,
+                "Nie udało się przywrócić domyślnej konfiguracji ClickHouse"
+            );
+            setLocalClickhouseError(message);
+            if (isNetworkError(error)) {
+                setLocalClickhouseBackendReachable(false);
+            }
+            return false;
+        } finally {
+            setLocalClickhouseSaving(false);
+        }
+    }, []);
+
+    const refreshLocalClickhouseStatus = useCallback(async () => {
+        try {
+            const response = await fetch(`${LOCAL_ADMIN_API}/config/clickhouse`, {
+                cache: "no-store",
+            });
+            if (!response.ok) {
+                throw new Error(await parseApiError(response));
+            }
+            const data = (await response.json()) as LocalClickhouseConfigState;
+            setLocalClickhouseStatus(data);
+            setLocalClickhouseBackendReachable(true);
+            setLocalClickhouseSuccess(
+                "Odświeżono konfigurację ClickHouse z backendu lokalnego."
+            );
+            setLocalClickhouseError(null);
+        } catch (error) {
+            const message = resolveErrorMessage(
+                error,
+                "Nie udało się pobrać konfiguracji ClickHouse z backendu lokalnego"
+            );
+            setLocalClickhouseError(message);
+            setLocalClickhouseSuccess(null);
+            if (isNetworkError(error)) {
+                setLocalClickhouseBackendReachable(false);
+            }
+        }
+    }, []);
 
     const formatDate = (value?: string | null) => {
         if (!value) return "—";
@@ -2539,12 +2897,17 @@ const CompanySyncPanel = () => {
     }, [runCompanySync]);
 
     const startLocalSync = useCallback(async () => {
+        const result = await ensureLocalClickhouseConfig();
+        if (!result.ok) {
+            setStatusError(result.error);
+            return;
+        }
         await runCompanySync(
             LOCAL_ADMIN_API,
             setIsStartingLocal,
             "Nie udało się uruchomić lokalnej synchronizacji. Upewnij się, że backend działa na http://localhost:8000."
         );
-    }, [runCompanySync]);
+    }, [ensureLocalClickhouseConfig, runCompanySync]);
 
     const handleSearchSubmit = useCallback(
         (event: React.FormEvent<HTMLFormElement>) => {
@@ -2682,12 +3045,17 @@ const CompanySyncPanel = () => {
         [runOhlcSync]
     );
 
-    const handleOhlcSyncLocal = useCallback(() => {
-        void runOhlcSync(
+    const handleOhlcSyncLocal = useCallback(async () => {
+        const result = await ensureLocalClickhouseConfig();
+        if (!result.ok) {
+            setOhlcError(result.error);
+            return;
+        }
+        await runOhlcSync(
             LOCAL_ADMIN_API,
             "Nie udało się uruchomić lokalnej synchronizacji. Upewnij się, że backend działa na http://localhost:8000."
         );
-    }, [runOhlcSync]);
+    }, [ensureLocalClickhouseConfig, runOhlcSync]);
 
     const handleScheduleOnce = useCallback(
         async (event: React.FormEvent<HTMLFormElement>) => {
@@ -3372,6 +3740,38 @@ const CompanySyncPanel = () => {
     );
     const ohlcHasActiveSchedule =
         ohlcSchedule?.mode === "once" || ohlcSchedule?.mode === "recurring";
+    const localClickhouseStatusDescription = useMemo(() => {
+        if (!localClickhouseStatus) {
+            return null;
+        }
+        const parts: string[] = [];
+        if (localClickhouseStatus.mode === "url") {
+            if (localClickhouseStatus.url) {
+                parts.push(localClickhouseStatus.url);
+            }
+        } else if (localClickhouseStatus.host) {
+            const portLabel = localClickhouseStatus.port
+                ? `:${localClickhouseStatus.port}`
+                : "";
+            parts.push(`${localClickhouseStatus.host}${portLabel}`);
+        }
+        if (localClickhouseStatus.database) {
+            parts.push(`DB: ${localClickhouseStatus.database}`);
+        }
+        if (localClickhouseStatus.username) {
+            parts.push(
+                localClickhouseStatus.has_password
+                    ? `Użytkownik: ${localClickhouseStatus.username} (hasło ustawione)`
+                    : `Użytkownik: ${localClickhouseStatus.username}`
+            );
+        } else if (localClickhouseStatus.has_password) {
+            parts.push("Hasło ustawione");
+        }
+        if (!parts.length && localClickhouseStatus.mode === "manual") {
+            parts.push("Konfiguracja ręczna bez szczegółów");
+        }
+        return parts.join(" • ");
+    }, [localClickhouseStatus]);
 
     return (
         <div className="space-y-16">
@@ -3525,7 +3925,9 @@ const CompanySyncPanel = () => {
                                     </button>
                                     <button
                                         type="button"
-                                        onClick={handleOhlcSyncLocal}
+                                        onClick={() => {
+                                            void handleOhlcSyncLocal();
+                                        }}
                                         disabled={ohlcIsSyncing}
                                         title="Wymaga uruchomionego backendu pod adresem http://localhost:8000"
                                         className="rounded-full bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
@@ -3550,6 +3952,260 @@ const CompanySyncPanel = () => {
                                     Aby zsynchronizować dane lokalnie, uruchom backend na adresie
                                     <code className="mx-1 rounded bg-soft px-1 py-0.5 text-[10px]">http://localhost:8000</code>
                                     i użyj przycisku „Uruchom lokalnie”.
+                                </p>
+                            </form>
+                        </Card>
+                        <Card
+                            title="Konfiguracja lokalnego ClickHouse"
+                            right={
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        void refreshLocalClickhouseStatus();
+                                    }}
+                                    disabled={localClickhouseSaving}
+                                    className="rounded-full border border-soft px-4 py-2 text-sm font-semibold text-primary transition hover:border-primary/40 hover:text-primary disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    Sprawdź backend
+                                </button>
+                            }
+                        >
+                            <form
+                                className="space-y-4"
+                                onSubmit={(event) => {
+                                    event.preventDefault();
+                                    void applyLocalClickhouseConfig();
+                                }}
+                            >
+                                <p className="text-sm text-muted">
+                                    Wprowadź dane połączenia z ClickHouse Cloud, aby przycisk
+                                    „Uruchom lokalnie” mógł od razu zapisać je w backendzie.
+                                    Dane są przechowywane tylko w tej przeglądarce.
+                                </p>
+                                <div className="flex flex-wrap gap-4 text-sm font-medium text-primary">
+                                    <label className="flex items-center gap-2">
+                                        <input
+                                            type="radio"
+                                            value="url"
+                                            checked={localClickhouseMode === "url"}
+                                            onChange={() => {
+                                                setLocalClickhouseMode("url");
+                                                setLocalClickhouseDirty(true);
+                                            }}
+                                            disabled={localClickhouseSaving}
+                                        />
+                                        <span>Adres URL</span>
+                                    </label>
+                                    <label className="flex items-center gap-2">
+                                        <input
+                                            type="radio"
+                                            value="manual"
+                                            checked={localClickhouseMode === "manual"}
+                                            onChange={() => {
+                                                setLocalClickhouseMode("manual");
+                                                setLocalClickhouseDirty(true);
+                                            }}
+                                            disabled={localClickhouseSaving}
+                                        />
+                                        <span>Ręczna konfiguracja</span>
+                                    </label>
+                                </div>
+                                {localClickhouseMode === "url" ? (
+                                    <label className="flex flex-col gap-2 text-sm font-medium text-primary">
+                                        <span>Adres ClickHouse</span>
+                                        <input
+                                            type="text"
+                                            autoComplete="off"
+                                            value={localClickhouseUrl}
+                                            onChange={(event) => {
+                                                setLocalClickhouseUrl(event.target.value);
+                                                setLocalClickhouseDirty(true);
+                                            }}
+                                            placeholder="np. https://abc123.eu-west-1.aws.clickhouse.cloud:8443/default"
+                                            className="rounded-xl border border-soft bg-white/70 px-3 py-2 text-sm text-primary shadow-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/40"
+                                            disabled={localClickhouseSaving}
+                                        />
+                                        <span className="text-xs font-normal text-subtle">
+                                            Możesz podać login i hasło w URL lub w polach poniżej.
+                                        </span>
+                                    </label>
+                                ) : (
+                                    <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+                                        <label className="flex flex-col gap-2 text-sm font-medium text-primary">
+                                            <span>Host ClickHouse</span>
+                                            <input
+                                                type="text"
+                                                autoComplete="off"
+                                                value={localClickhouseHost}
+                                                onChange={(event) => {
+                                                    setLocalClickhouseHost(event.target.value);
+                                                    setLocalClickhouseDirty(true);
+                                                }}
+                                                placeholder="np. abc123.eu-west-1.aws.clickhouse.cloud"
+                                                className="rounded-xl border border-soft bg-white/70 px-3 py-2 text-sm text-primary shadow-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/40"
+                                                disabled={localClickhouseSaving}
+                                            />
+                                        </label>
+                                        <label className="flex flex-col gap-2 text-sm font-medium text-primary">
+                                            <span>Port</span>
+                                            <input
+                                                type="number"
+                                                min={1}
+                                                max={65535}
+                                                value={localClickhousePort}
+                                                onChange={(event) => {
+                                                    setLocalClickhousePort(event.target.value);
+                                                    setLocalClickhouseDirty(true);
+                                                }}
+                                                placeholder="np. 8443"
+                                                className="w-32 rounded-xl border border-soft bg-white/70 px-3 py-2 text-sm text-primary shadow-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/40"
+                                                disabled={localClickhouseSaving}
+                                            />
+                                        </label>
+                                    </div>
+                                )}
+                                <div className="grid gap-3 sm:grid-cols-2">
+                                    <label className="flex flex-col gap-2 text-sm font-medium text-primary">
+                                        <span>Baza danych</span>
+                                        <input
+                                            type="text"
+                                            autoComplete="off"
+                                            value={localClickhouseDatabase}
+                                            onChange={(event) => {
+                                                setLocalClickhouseDatabase(event.target.value);
+                                                setLocalClickhouseDirty(true);
+                                            }}
+                                            placeholder="np. default"
+                                            className="rounded-xl border border-soft bg-white/70 px-3 py-2 text-sm text-primary shadow-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/40"
+                                            disabled={localClickhouseSaving}
+                                        />
+                                    </label>
+                                    <label className="flex flex-col gap-2 text-sm font-medium text-primary">
+                                        <span>Użytkownik</span>
+                                        <input
+                                            type="text"
+                                            autoComplete="off"
+                                            value={localClickhouseUsername}
+                                            onChange={(event) => {
+                                                setLocalClickhouseUsername(event.target.value);
+                                                setLocalClickhouseDirty(true);
+                                            }}
+                                            placeholder="np. default"
+                                            className="rounded-xl border border-soft bg-white/70 px-3 py-2 text-sm text-primary shadow-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/40"
+                                            disabled={localClickhouseSaving}
+                                        />
+                                    </label>
+                                    <label className="flex flex-col gap-2 text-sm font-medium text-primary">
+                                        <span>Hasło</span>
+                                        <input
+                                            type="password"
+                                            autoComplete="new-password"
+                                            value={localClickhousePassword}
+                                            onChange={(event) => {
+                                                setLocalClickhousePassword(event.target.value);
+                                                setLocalClickhouseDirty(true);
+                                            }}
+                                            placeholder="Wpisz hasło użytkownika"
+                                            className="rounded-xl border border-soft bg-white/70 px-3 py-2 text-sm text-primary shadow-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/40"
+                                            disabled={localClickhouseSaving}
+                                        />
+                                    </label>
+                                    <label className="flex flex-col gap-2 text-sm font-medium text-primary">
+                                        <span>Certyfikat CA (opcjonalnie)</span>
+                                        <input
+                                            type="text"
+                                            autoComplete="off"
+                                            value={localClickhouseCa}
+                                            onChange={(event) => {
+                                                setLocalClickhouseCa(event.target.value);
+                                                setLocalClickhouseDirty(true);
+                                            }}
+                                            placeholder="Ścieżka do certyfikatu"
+                                            className="rounded-xl border border-soft bg-white/70 px-3 py-2 text-sm text-primary shadow-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/40"
+                                            disabled={localClickhouseSaving}
+                                        />
+                                    </label>
+                                </div>
+                                <div className="flex flex-wrap gap-4 text-sm text-primary">
+                                    <label className="flex items-center gap-2">
+                                        <input
+                                            type="checkbox"
+                                            checked={localClickhouseSecure}
+                                            onChange={(event) => {
+                                                setLocalClickhouseSecure(event.target.checked);
+                                                setLocalClickhouseDirty(true);
+                                            }}
+                                            disabled={localClickhouseMode === "url" || localClickhouseSaving}
+                                            className="h-4 w-4 rounded border-soft text-primary focus:ring-primary/40"
+                                        />
+                                        <span>Wymuś HTTPS/TLS</span>
+                                    </label>
+                                    <label className="flex items-center gap-2">
+                                        <input
+                                            type="checkbox"
+                                            checked={localClickhouseVerify}
+                                            onChange={(event) => {
+                                                setLocalClickhouseVerify(event.target.checked);
+                                                setLocalClickhouseDirty(true);
+                                            }}
+                                            disabled={localClickhouseSaving}
+                                            className="h-4 w-4 rounded border-soft text-primary focus:ring-primary/40"
+                                        />
+                                        <span>Weryfikuj certyfikat TLS</span>
+                                    </label>
+                                </div>
+                                {localClickhouseStatus && (
+                                    <div className="space-y-1 rounded-xl border border-soft bg-white/60 p-3 text-xs text-subtle">
+                                        <div className="font-semibold text-primary">
+                                            {localClickhouseStatus.source === "override"
+                                                ? "Backend korzysta z konfiguracji zapisanej w panelu."
+                                                : "Backend korzysta z ustawień środowiskowych."}
+                                        </div>
+                                        {localClickhouseStatusDescription && (
+                                            <div>{localClickhouseStatusDescription}</div>
+                                        )}
+                                        {!localClickhouseBackendReachable && (
+                                            <div className="text-negative">
+                                                Brak połączenia z lokalnym backendem. Uruchom skrypt
+                                                <code className="mx-1 rounded bg-soft px-1 py-0.5 text-[10px]">./scripts/local-sync.sh</code>
+                                                i spróbuj ponownie.
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                                {localClickhouseSuccess && (
+                                    <div className="rounded-xl border border-emerald-200/60 bg-emerald-50/70 px-3 py-2 text-xs text-emerald-700">
+                                        {localClickhouseSuccess}
+                                    </div>
+                                )}
+                                {localClickhouseError && (
+                                    <div className="rounded-xl border border-rose-200/60 bg-rose-50/70 px-3 py-2 text-xs text-rose-600">
+                                        {localClickhouseError}
+                                    </div>
+                                )}
+                                <div className="flex flex-wrap gap-3">
+                                    <button
+                                        type="submit"
+                                        className="rounded-full bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
+                                        disabled={localClickhouseSaving}
+                                    >
+                                        {localClickhouseSaving ? "Zapisywanie..." : "Zapisz i zastosuj"}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            void handleResetLocalClickhouse();
+                                        }}
+                                        className="rounded-full border border-soft px-4 py-2 text-sm font-semibold text-primary transition hover:border-primary/40 hover:text-primary disabled:cursor-not-allowed disabled:opacity-60"
+                                        disabled={localClickhouseSaving}
+                                    >
+                                        Przywróć domyślne
+                                    </button>
+                                </div>
+                                <p className="text-xs text-subtle">
+                                    Hasło nie opuszcza tej przeglądarki. W razie potrzeby usuń je
+                                    poprzez przywrócenie ustawień domyślnych lub wyczyszczenie pamięci
+                                    lokalnej.
                                 </p>
                             </form>
                         </Card>
@@ -3920,9 +4576,11 @@ const CompanySyncPanel = () => {
                                 >
                                     {isStarting ? "Uruchamianie..." : "Uruchom synchronizację"}
                                 </button>
-                                <button
-                                    type="button"
-                                    onClick={startLocalSync}
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            void startLocalSync();
+                                        }}
                                     disabled={isStartingLocal}
                                     title="Wymaga uruchomionego backendu pod adresem http://localhost:8000"
                                     className="rounded-full bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
