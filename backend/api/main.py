@@ -36,6 +36,7 @@ from .ohlc_sources import MultiSourceOhlcHarvester
 from .sector_classification_data import GPW_SECTOR_CLASSIFICATION
 from .stooq_ohlc import OhlcSyncProgressEvent, OhlcSyncResult, _parse_float
 from .symbols import DEFAULT_OHLC_SYNC_SYMBOLS, normalize_input_symbol, pretty_symbol
+from .windows_agent import router as windows_agent_router
 
 # =========================
 # Konfiguracja / połączenie
@@ -4074,5 +4075,6 @@ def backtest_portfolio_tooling():
     )
 
 
+api_router.include_router(windows_agent_router)
 app.include_router(api_router)
 app.include_router(api_router, prefix="/api/admin")
