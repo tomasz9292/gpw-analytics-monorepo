@@ -1,6 +1,7 @@
 # api/main.py
 from __future__ import annotations
 
+import csv
 import io
 import json
 import os
@@ -24,12 +25,18 @@ from fastapi.params import Query as QueryParam
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
-from .company_ingestion import CompanyDataHarvester, CompanySyncProgress, CompanySyncResult
+from .company_ingestion import (
+    CompanyDataHarvester,
+    CompanySyncProgress,
+    CompanySyncResult,
+    _normalize_gpw_symbol,
+)
 from .ohlc_progress import OhlcSyncProgress, OhlcSyncProgressTracker
 from .ohlc_sources import MultiSourceOhlcHarvester
 from .sector_classification_data import GPW_SECTOR_CLASSIFICATION
-from .stooq_ohlc import OhlcSyncProgressEvent, OhlcSyncResult
+from .stooq_ohlc import OhlcSyncProgressEvent, OhlcSyncResult, _parse_float
 from .symbols import DEFAULT_OHLC_SYNC_SYMBOLS, normalize_input_symbol, pretty_symbol
+from .windows_agent import router as windows_agent_router
 
 # =========================
 # Konfiguracja / połączenie
@@ -110,6 +117,10 @@ DEFAULT_OHLC_TABLE_DDL = textwrap.dedent(
     ORDER BY (symbol, date)
     """
 )
+
+_OHLC_IMPORT_REQUIRED_COLUMNS = ("symbol", "date", "open", "high", "low", "close")
+_OHLC_IMPORT_OPTIONAL_COLUMNS = ("volume",)
+_MAX_OHLC_IMPORT_ERRORS = 50
 
 ALLOWED_SCORE_METRICS = {"total_return", "volatility", "max_drawdown", "sharpe"}
 
@@ -200,6 +211,29 @@ def _prettify_key(raw_key: str) -> str:
         return ""
     parts = [part.capitalize() for part in cleaned.split(" ") if part]
     return " ".join(parts)
+
+
+def _normalize_import_column(raw_name: str) -> str:
+    normalized = unicodedata.normalize("NFKD", raw_name or "")
+    cleaned = []
+    for char in normalized:
+        if char.isalnum():
+            cleaned.append(char.lower())
+        elif char in {" ", "_", "-"}:
+            cleaned.append("_")
+    joined = "".join(cleaned)
+    while "__" in joined:
+        joined = joined.replace("__", "_")
+    return joined.strip("_")
+
+
+def _decode_uploaded_text(content: bytes) -> str:
+    for encoding in ("utf-8-sig", "utf-8", "cp1250", "iso-8859-2"):
+        try:
+            return content.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    raise ValueError("Nie udało się zdekodować pliku. Użyj kodowania UTF-8.")
 
 
 def _deduplicate_strings(values: Iterable[str], limit: Optional[int] = None) -> List[str]:
@@ -1215,6 +1249,12 @@ class OhlcSyncRequest(BaseModel):
             except ValueError as exc:
                 raise ValueError("Data musi być w formacie YYYY-MM-DD") from exc
         raise ValueError("Niepoprawny format daty")
+
+
+class OhlcImportResponse(BaseModel):
+    inserted: int = Field(0, description="Liczba wierszy zapisanych do ClickHouse")
+    skipped: int = Field(0, description="Liczba wierszy pominiętych (błędy lub duplikaty)")
+    errors: List[str] = Field(default_factory=list, description="Lista komunikatów o błędach")
 
 
 # Aktualizacja modeli zależnych po zdefiniowaniu OhlcSyncRequest
@@ -2362,6 +2402,161 @@ def _http_exception_message(exc: HTTPException) -> str:
     if isinstance(detail, (list, tuple)):
         return "; ".join(str(item) for item in detail if item)
     return str(detail or exc)
+
+
+@api_router.post("/ohlc/import", response_model=OhlcImportResponse)
+async def import_ohlc_file(file: UploadFile = File(...)) -> OhlcImportResponse:
+    try:
+        content = await file.read()
+    finally:
+        await file.close()
+
+    if not content:
+        raise HTTPException(400, "Przesłany plik jest pusty.")
+
+    try:
+        decoded = _decode_uploaded_text(content)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    reader = csv.DictReader(io.StringIO(decoded))
+    if not reader.fieldnames:
+        raise HTTPException(400, "Plik nie zawiera nagłówka.")
+
+    column_map: Dict[str, str] = {}
+    for raw_header in reader.fieldnames:
+        normalized = _normalize_import_column(raw_header)
+        if not normalized:
+            continue
+        column_map.setdefault(normalized, raw_header)
+
+    missing = [name for name in _OHLC_IMPORT_REQUIRED_COLUMNS if name not in column_map]
+    if missing:
+        required = ", ".join(_OHLC_IMPORT_REQUIRED_COLUMNS)
+        optional = ", ".join(_OHLC_IMPORT_OPTIONAL_COLUMNS)
+        raise HTTPException(
+            400,
+            (
+                "Niepoprawny nagłówek pliku. Wymagane kolumny: "
+                f"{required}. Opcjonalnie: {optional}."
+            ),
+        )
+
+    payload: List[List[Any]] = []
+    skipped = 0
+    errors: List[str] = []
+    total_errors = 0
+    seen: set[tuple[str, date]] = set()
+
+    def register_error(message: str) -> None:
+        nonlocal total_errors
+        total_errors += 1
+        if len(errors) < _MAX_OHLC_IMPORT_ERRORS:
+            errors.append(message)
+
+    for index, row in enumerate(reader, start=2):
+        raw_symbol = (row.get(column_map["symbol"]) or "").strip()
+        if not raw_symbol:
+            skipped += 1
+            register_error(f"Wiersz {index}: brak symbolu spółki.")
+            continue
+        try:
+            symbol = _normalize_gpw_symbol(raw_symbol)
+        except Exception as exc:
+            skipped += 1
+            register_error(f"Wiersz {index}: {exc}")
+            continue
+
+        raw_date = (row.get(column_map["date"]) or "").strip()
+        if not raw_date:
+            skipped += 1
+            register_error(f"Wiersz {index}: brak daty notowania.")
+            continue
+        try:
+            parsed_date = date.fromisoformat(raw_date)
+        except ValueError:
+            skipped += 1
+            register_error(f"Wiersz {index}: niepoprawny format daty ({raw_date}).")
+            continue
+
+        open_value = _parse_float(row.get(column_map["open"]))
+        high_value = _parse_float(row.get(column_map["high"]))
+        low_value = _parse_float(row.get(column_map["low"]))
+        close_value = _parse_float(row.get(column_map["close"]))
+        missing_values = [
+            name
+            for name, value in (
+                ("open", open_value),
+                ("high", high_value),
+                ("low", low_value),
+                ("close", close_value),
+            )
+            if value is None
+        ]
+        if missing_values:
+            skipped += 1
+            missing_label = ", ".join(sorted(set(missing_values)))
+            register_error(f"Wiersz {index}: brak danych w kolumnach: {missing_label}.")
+            continue
+
+        volume_value = None
+        if "volume" in column_map:
+            volume_value = _parse_float(row.get(column_map["volume"]))
+
+        key = (symbol, parsed_date)
+        if key in seen:
+            skipped += 1
+            register_error(
+                f"Wiersz {index}: zduplikowany rekord {symbol} {parsed_date.isoformat()}."
+            )
+            continue
+        seen.add(key)
+
+        payload.append(
+            [symbol, parsed_date, open_value, high_value, low_value, close_value, volume_value]
+        )
+
+    if not payload:
+        if errors:
+            raise HTTPException(400, "Brak poprawnych wierszy w pliku – sprawdź komunikaty błędów.")
+        raise HTTPException(400, "Plik nie zawiera poprawnych danych OHLC.")
+
+    if total_errors > len(errors):
+        errors.append(f"… (pominięto {total_errors - len(errors)} kolejnych błędów)")
+
+    try:
+        ch = get_ch()
+    except Exception as exc:
+        raise HTTPException(500, f"Nie udało się nawiązać połączenia z ClickHouse: {exc}") from exc
+
+    try:
+        _create_ohlc_table_if_missing(ch)
+    except Exception as exc:
+        raise HTTPException(500, f"Nie udało się przygotować tabeli notowań: {exc}") from exc
+
+    inserted = 0
+    batch_size = 10_000
+    for start in range(0, len(payload), batch_size):
+        chunk = payload[start : start + batch_size]
+        try:
+            ch.insert(
+                table=TABLE_OHLC,
+                data=chunk,
+                column_names=[
+                    "symbol",
+                    "date",
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                    "volume",
+                ],
+            )
+        except Exception as exc:
+            raise HTTPException(500, f"Nie udało się zapisać danych do ClickHouse: {exc}") from exc
+        inserted += len(chunk)
+
+    return OhlcImportResponse(inserted=inserted, skipped=skipped, errors=errors)
 
 
 def _perform_ohlc_sync(
@@ -3880,5 +4075,6 @@ def backtest_portfolio_tooling():
     )
 
 
+api_router.include_router(windows_agent_router)
 app.include_router(api_router)
 app.include_router(api_router, prefix="/api/admin")

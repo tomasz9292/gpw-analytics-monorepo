@@ -4,3 +4,4 @@ pandas
 clickhouse-connect>=0.7.15
 python-multipart
 duckdb
+requests
