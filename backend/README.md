@@ -20,6 +20,22 @@
 2. W panelu administracyjnym kliknij **„Uruchom lokalnie”**, aby rozpocząć
    synchronizację danych historycznych.
 
+> Domyślnie dane trafiają do lokalnej instancji ClickHouse uruchomionej w
+> kontenerze. Jeżeli chcesz zapisywać rekordy bezpośrednio w istniejącym
+> ClickHouse Cloud, ustaw zmienne połączeniowe i uruchom skrypt w trybie cloud:
+
+```bash
+export LOCAL_SYNC_CLICKHOUSE_URL="https://<twoja-instancja>.aws.clickhouse.cloud:8443/default?secure=1"
+export CLICKHOUSE_USER="<user>"
+export CLICKHOUSE_PASSWORD="<haslo>"
+./scripts/local-sync.sh --cloud
+```
+
+> Możesz użyć także standardowych zmiennych środowiskowych backendu (`CLICKHOUSE_URL`,
+> `CLICKHOUSE_HOST`, `CLICKHOUSE_PORT`, itd.). Skrypt zweryfikuje, czy adres
+> ClickHouse został podany przed startem. W trybie cloud kontener z ClickHouse nie jest
+> uruchamiany — działa tylko backend FastAPI zapisujący dane do chmury.
+
 ### Wariant manualny (bez Dockera)
 
 1. **Zainstaluj zależności Pythona** (najlepiej wirtualne środowisko):

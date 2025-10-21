@@ -18,12 +18,17 @@ services:
     build:
       context: ./backend
     environment:
-      CLICKHOUSE_URL: http://clickhouse:8123/default
+      CLICKHOUSE_URL: ${LOCAL_SYNC_CLICKHOUSE_URL:-http://clickhouse:8123/default}
+      CLICKHOUSE_HOST: ${CLICKHOUSE_HOST:-}
+      CLICKHOUSE_PORT: ${CLICKHOUSE_PORT:-}
+      CLICKHOUSE_DATABASE: ${CLICKHOUSE_DATABASE:-}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
+      CLICKHOUSE_SECURE: ${CLICKHOUSE_SECURE:-}
+      CLICKHOUSE_VERIFY: ${CLICKHOUSE_VERIFY:-}
+      CLICKHOUSE_CA: ${CLICKHOUSE_CA:-}
       TABLE_OHLC: ${TABLE_OHLC:-ohlc}
       TABLE_COMPANIES: ${TABLE_COMPANIES:-companies}
-    depends_on:
-      clickhouse:
-        condition: service_healthy
     ports:
       - "8000:8000"
     command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
