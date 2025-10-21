@@ -68,6 +68,7 @@ class YahooFinanceOhlcSource(OhlcSource):
     )
 
     def __init__(self, session: Optional[Any] = None) -> None:
+        super().__init__()
         if session is None:
             session = SimpleHttpSession(
                 headers={
