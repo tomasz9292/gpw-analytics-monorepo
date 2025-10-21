@@ -19,7 +19,7 @@ from urllib.parse import parse_qs, urlparse
 import clickhouse_connect
 import threading
 from decimal import Decimal
-from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.params import Query as QueryParam
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
@@ -815,6 +815,7 @@ def get_ch():
 # =========================
 
 app = FastAPI(title="GPW Analytics API", version="0.1.0")
+api_router = APIRouter()
 OHLC_SYNC_PROGRESS_TRACKER = OhlcSyncProgressTracker()
 
 app.add_middleware(
@@ -830,7 +831,7 @@ app.add_middleware(
 )
 
 
-@app.get("/ping")
+@api_router.get("/ping")
 def ping() -> str:
     return "pong"
 
@@ -1758,7 +1759,7 @@ def _run_company_sync_job(job_id: str, limit: Optional[int]) -> None:
             _SYNC_THREAD = None
 
 
-@app.post("/companies/sync/background", response_model=CompanySyncJobStatus)
+@api_router.post("/companies/sync/background", response_model=CompanySyncJobStatus)
 def start_company_sync(
     limit: Optional[int] = Query(default=None, ge=1, le=5000),
 ) -> CompanySyncJobStatus:
@@ -1769,17 +1770,17 @@ def start_company_sync(
         return _SYNC_STATE.model_copy(deep=True)
 
 
-@app.get("/companies/sync/status", response_model=CompanySyncJobStatus)
+@api_router.get("/companies/sync/status", response_model=CompanySyncJobStatus)
 def company_sync_status() -> CompanySyncJobStatus:
     return _snapshot_sync_state()
 
 
-@app.get("/companies/sync/schedule", response_model=CompanySyncScheduleStatus)
+@api_router.get("/companies/sync/schedule", response_model=CompanySyncScheduleStatus)
 def company_sync_schedule() -> CompanySyncScheduleStatus:
     return _snapshot_schedule_state()
 
 
-@app.post("/companies/sync/schedule", response_model=CompanySyncScheduleStatus)
+@api_router.post("/companies/sync/schedule", response_model=CompanySyncScheduleStatus)
 def update_company_sync_schedule(payload: CompanySyncScheduleRequest) -> CompanySyncScheduleStatus:
     now = datetime.utcnow()
 
@@ -1824,7 +1825,7 @@ def update_company_sync_schedule(payload: CompanySyncScheduleRequest) -> Company
     return _snapshot_schedule_state()
 
 
-@app.post("/companies/sync", response_model=CompanySyncResult)
+@api_router.post("/companies/sync", response_model=CompanySyncResult)
 def sync_companies(
     limit: Optional[int] = Query(default=None, ge=1, le=5000),
     run_as_admin: bool = Query(
@@ -1849,7 +1850,7 @@ def sync_companies(
     return result
 
 
-@app.get("/companies", response_model=List[CompanyProfile])
+@api_router.get("/companies", response_model=List[CompanyProfile])
 def list_companies(
     q: Optional[str] = Query(
         default=None, description="Fragment symbolu, nazwy, branży lub ISIN spółki."
@@ -1918,7 +1919,7 @@ def list_companies(
     return output
 
 
-@app.get("/companies/{symbol}", response_model=CompanyProfile)
+@api_router.get("/companies/{symbol}", response_model=CompanyProfile)
 def get_company_profile(symbol: str) -> CompanyProfile:
     ch = get_ch()
     columns = _get_company_columns(ch)
@@ -1969,7 +1970,7 @@ def get_company_profile(symbol: str) -> CompanyProfile:
 # /symbols – lista tickerów
 # =========================
 
-@app.get("/symbols")
+@api_router.get("/symbols")
 def symbols(
     q: Optional[str] = Query(default=None, description="fragment symbolu"),
     limit: int = Query(default=200, ge=1, le=2000),
@@ -2141,7 +2142,7 @@ def _perform_ohlc_sync(
     return result
 
 
-@app.post("/ohlc/sync", response_model=OhlcSyncResult)
+@api_router.post("/ohlc/sync", response_model=OhlcSyncResult)
 def sync_ohlc(payload: OhlcSyncRequest) -> OhlcSyncResult:
     return _perform_ohlc_sync(payload)
 
@@ -2158,7 +2159,7 @@ def _run_ohlc_sync_in_background(
         return
 
 
-@app.post("/ohlc/sync/background", status_code=202)
+@api_router.post("/ohlc/sync/background", status_code=202)
 def sync_ohlc_background(payload: OhlcSyncRequest):
     snapshot = OHLC_SYNC_PROGRESS_TRACKER.snapshot()
     if snapshot.status == "running":
@@ -2176,17 +2177,17 @@ def sync_ohlc_background(payload: OhlcSyncRequest):
     return {"status": "accepted"}
 
 
-@app.get("/ohlc/sync/progress", response_model=OhlcSyncProgress)
+@api_router.get("/ohlc/sync/progress", response_model=OhlcSyncProgress)
 def sync_ohlc_progress() -> OhlcSyncProgress:
     return OHLC_SYNC_PROGRESS_TRACKER.snapshot()
 
 
-@app.get("/ohlc/sync/schedule", response_model=OhlcSyncScheduleStatus)
+@api_router.get("/ohlc/sync/schedule", response_model=OhlcSyncScheduleStatus)
 def ohlc_sync_schedule() -> OhlcSyncScheduleStatus:
     return _snapshot_ohlc_schedule_state()
 
 
-@app.post("/ohlc/sync/schedule", response_model=OhlcSyncScheduleStatus)
+@api_router.post("/ohlc/sync/schedule", response_model=OhlcSyncScheduleStatus)
 def update_ohlc_sync_schedule(payload: OhlcSyncScheduleRequest) -> OhlcSyncScheduleStatus:
     now = datetime.utcnow()
 
@@ -2240,7 +2241,7 @@ def update_ohlc_sync_schedule(payload: OhlcSyncScheduleRequest) -> OhlcSyncSched
     return _snapshot_ohlc_schedule_state()
 
 
-@app.get("/quotes", response_model=List[QuoteRow])
+@api_router.get("/quotes", response_model=List[QuoteRow])
 def quotes(symbol: str, start: Optional[str] = None):
     """
     Zwraca notowania OHLC dla symbolu od wskazanej daty.
@@ -2281,7 +2282,7 @@ def quotes(symbol: str, start: Optional[str] = None):
     return out
 
 
-@app.get("/data-collection", response_model=List[DataCollectionItem])
+@api_router.get("/data-collection", response_model=List[DataCollectionItem])
 def collect_data(
     symbols: List[str] = Query(
         ...,
@@ -2335,7 +2336,7 @@ def collect_data(
     return items
 
 
-@app.get("/sectors/classification", response_model=List[SectorClassificationEntry])
+@api_router.get("/sectors/classification", response_model=List[SectorClassificationEntry])
 def list_sector_classification() -> List[SectorClassificationEntry]:
     """Zwraca hierarchiczną klasyfikację sektorową GPW."""
 
@@ -3263,12 +3264,12 @@ def _run_score_preview(req: ScorePreviewRequest) -> ScorePreviewResponse:
     )
 
 
-@app.post("/score/preview", response_model=ScorePreviewResponse)
+@api_router.post("/score/preview", response_model=ScorePreviewResponse)
 def score_preview(req: ScorePreviewRequest):
     return _run_score_preview(req)
 
 
-@app.post("/scores/preview", response_model=ScorePreviewResponse)
+@api_router.post("/scores/preview", response_model=ScorePreviewResponse)
 def scores_preview(req: ScorePreviewRequest):
     return _run_score_preview(req)
 
@@ -3472,7 +3473,7 @@ def _parse_backtest_get(
         raise HTTPException(422, exc.errors()) from exc
 
 
-@app.get("/backtest/portfolio", response_model=PortfolioResp)
+@api_router.get("/backtest/portfolio", response_model=PortfolioResp)
 def backtest_portfolio_get(req: BacktestPortfolioRequest = Depends(_parse_backtest_get)):
     """GET-owy wariant backtestu portfela.
 
@@ -3486,7 +3487,7 @@ def backtest_portfolio_get(req: BacktestPortfolioRequest = Depends(_parse_backte
     return _run_backtest(req)
 
 
-@app.post("/backtest/portfolio", response_model=PortfolioResp)
+@api_router.post("/backtest/portfolio", response_model=PortfolioResp)
 def backtest_portfolio(req: BacktestPortfolioRequest):
     """Backtest portfela na bazie kursów zamknięcia.
 
@@ -3499,14 +3500,14 @@ def backtest_portfolio(req: BacktestPortfolioRequest):
     return _run_backtest(req)
 
 
-@app.post("/backtest/portfolio/score", response_model=List[PortfolioScoreItem])
+@api_router.post("/backtest/portfolio/score", response_model=List[PortfolioScoreItem])
 def backtest_portfolio_score(req: PortfolioScoreRequest):
     """Zwraca ranking spółek na podstawie konfiguracji trybu auto."""
 
     return _compute_portfolio_score(req)
 
 
-@app.get("/backtest/portfolio/tooling", response_model=BacktestPortfolioTooling)
+@api_router.get("/backtest/portfolio/tooling", response_model=BacktestPortfolioTooling)
 def backtest_portfolio_tooling():
     """Zwraca metadane pomagające zbudować formularz do backtestów.
 
@@ -3546,3 +3547,7 @@ def backtest_portfolio_tooling():
             },
         ),
     )
+
+
+app.include_router(api_router)
+app.include_router(api_router, prefix="/api/admin")
