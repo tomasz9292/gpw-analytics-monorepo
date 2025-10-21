@@ -51,6 +51,44 @@ const API = "/api";
 const ADMIN_API = "/api/admin";
 const LOCAL_ADMIN_API = "http://localhost:8000/api/admin";
 
+const NETWORK_ERROR_PATTERNS = [
+    "failed to fetch",
+    "fetch failed",
+    "network request failed",
+];
+
+const extractErrorMessage = (error: unknown): string | null => {
+    if (error instanceof Error && error.message) {
+        return error.message;
+    }
+    if (error && typeof error === "object" && "message" in error) {
+        const message = (error as { message?: unknown }).message;
+        if (typeof message === "string" && message.length > 0) {
+            return message;
+        }
+    }
+    return null;
+};
+
+const isNetworkError = (error: unknown): boolean => {
+    const message = extractErrorMessage(error);
+    if (!message) {
+        return false;
+    }
+    const normalized = message.toLowerCase();
+    return NETWORK_ERROR_PATTERNS.some((pattern) =>
+        normalized.includes(pattern)
+    );
+};
+
+const resolveErrorMessage = (error: unknown, fallback: string): string => {
+    if (isNetworkError(error)) {
+        return fallback;
+    }
+    const message = extractErrorMessage(error);
+    return message ?? fallback;
+};
+
 const removeUndefined = (obj: Record<string, unknown>) =>
     Object.fromEntries(
         Object.entries(obj).filter(([, value]) => value !== undefined && value !== null)
@@ -2458,11 +2496,9 @@ const CompanySyncPanel = () => {
                 setSelectedCompany(null);
             }
         } catch (error) {
-            if (error instanceof Error && error.message) {
-                setCompaniesError(error.message);
-            } else {
-                setCompaniesError("Nie udało się pobrać listy spółek");
-            }
+            setCompaniesError(
+                resolveErrorMessage(error, "Nie udało się pobrać listy spółek")
+            );
         } finally {
             setCompaniesLoading(false);
         }
@@ -2486,11 +2522,7 @@ const CompanySyncPanel = () => {
                 const payload = (await response.json()) as CompanySyncStatusPayload;
                 setStatus(payload);
             } catch (error) {
-                if (error instanceof Error && error.message) {
-                    setStatusError(error.message);
-                } else {
-                    setStatusError(fallbackMessage);
-                }
+                setStatusError(resolveErrorMessage(error, fallbackMessage));
             } finally {
                 setLoading(false);
             }
@@ -2612,10 +2644,7 @@ const CompanySyncPanel = () => {
                     throw new Error(message);
                 }
             } catch (error) {
-                const message =
-                    error instanceof Error && error.message
-                        ? error.message
-                        : defaultMessage;
+                const message = resolveErrorMessage(error, defaultMessage);
                 setOhlcError(message);
                 setOhlcProgress((prev) =>
                     prev
