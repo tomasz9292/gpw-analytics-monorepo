@@ -66,6 +66,8 @@ class YahooFinanceOhlcSource(OhlcSource):
     download_url_template: str = (
         "https://query1.finance.yahoo.com/v7/finance/download/{symbol}"
     )
+    crumb_url: str = "https://query1.finance.yahoo.com/v1/test/getcrumb"
+    _crumb: Optional[str] = PrivateAttr(default=None)
 
     def __init__(self, session: Optional[Any] = None) -> None:
         super().__init__()
@@ -84,6 +86,27 @@ class YahooFinanceOhlcSource(OhlcSource):
     def reset(self) -> None:  # pragma: no cover - behaviour depends on HTTP client
         if hasattr(self._session, "clear_history"):
             self._session.clear_history()
+        self._crumb = None
+
+    def _ensure_crumb(self, *, force_refresh: bool = False) -> str:
+        if force_refresh:
+            self._crumb = None
+        if self._crumb is not None:
+            return self._crumb
+
+        response = self._session.get(self.crumb_url)
+        status_code = getattr(response, "status_code", None)
+        if isinstance(status_code, int) and status_code == 401:
+            raise RuntimeError("Yahoo Finance zwróciło błąd autoryzacji przy pobieraniu tokenu")
+        if hasattr(response, "raise_for_status"):
+            response.raise_for_status()
+
+        crumb = (response.text() or "").strip()
+        if not crumb:
+            raise RuntimeError("Nie udało się pobrać tokenu uwierzytelniającego z Yahoo Finance")
+
+        self._crumb = crumb
+        return crumb
 
     def _resolve_symbol(self, symbol: str) -> str:
         alias = ALIASES_RAW_TO_WA.get(symbol)
@@ -102,10 +125,23 @@ class YahooFinanceOhlcSource(OhlcSource):
             "events": "history",
             "includeAdjustedClose": "true",
         }
+        crumb = self._ensure_crumb()
+        params["crumb"] = crumb
+
+        retry_with_fresh_crumb = True
         response = self._session.get(
             self.download_url_template.format(symbol=resolved),
             params=params,
         )
+        status_code = getattr(response, "status_code", None)
+        if isinstance(status_code, int) and status_code == 401 and retry_with_fresh_crumb:
+            crumb = self._ensure_crumb(force_refresh=True)
+            params["crumb"] = crumb
+            retry_with_fresh_crumb = False
+            response = self._session.get(
+                self.download_url_template.format(symbol=resolved),
+                params=params,
+            )
         if hasattr(response, "raise_for_status"):
             response.raise_for_status()
         text = response.text()
