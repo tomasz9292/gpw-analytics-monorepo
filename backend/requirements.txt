@@ -5,3 +5,4 @@ clickhouse-connect>=0.7.15
 python-multipart
 duckdb
 requests
+keyring>=24.3.0
