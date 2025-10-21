@@ -95,6 +95,12 @@ const removeUndefined = (obj: Record<string, unknown>) =>
         Object.entries(obj).filter(([, value]) => value !== undefined && value !== null)
     );
 
+const parseSymbolInput = (value: string): string[] =>
+    value
+        .split(/[\s,;]+/)
+        .map((item) => item.trim().toUpperCase())
+        .filter((item) => item.length > 0);
+
 const findScoreMetric = (value: string): ScoreMetricOption | undefined =>
     SCORE_METRIC_OPTIONS.find((option) => option.value === value);
 
@@ -134,6 +140,35 @@ type LocalClickhousePersistedConfig = {
 };
 
 type LocalClickhouseEnsureResult = { ok: true } | { ok: false; error: string };
+
+type WindowsAgentTaskKind = "ohlc_history" | "company_profiles" | "company_news";
+
+type WindowsAgentTaskRequest = {
+    kind: WindowsAgentTaskKind;
+    symbols?: string[];
+    start_date?: string | null;
+    end_date?: string | null;
+    limit?: number | null;
+};
+
+type WindowsAgentJob = {
+    id: string;
+    name?: string | null;
+    description?: string | null;
+    status: "pending" | "assigned" | "running" | "completed" | "failed";
+    created_at: string;
+    assigned_at?: string | null;
+    started_at?: string | null;
+    finished_at?: string | null;
+    progress_message?: string | null;
+    result_details?: Record<string, unknown> | null;
+    error_message?: string | null;
+    tasks: WindowsAgentTaskRequest[];
+};
+
+type WindowsAgentJobListResponse = {
+    jobs: WindowsAgentJob[];
+};
 
 const buildScoreComponents = (rules: ScoreBuilderRule[]): ScoreComponentRequest[] =>
     rules.reduce<ScoreComponentRequest[]>((acc, rule) => {
@@ -2202,6 +2237,19 @@ const CompanySyncPanel = () => {
     const [ohlcImportError, setOhlcImportError] = useState<string | null>(null);
     const [ohlcImportSuccess, setOhlcImportSuccess] = useState<string | null>(null);
     const ohlcImportInputRef = useRef<HTMLInputElement | null>(null);
+    const [windowsAgentJobs, setWindowsAgentJobs] = useState<WindowsAgentJob[]>([]);
+    const [windowsAgentLoading, setWindowsAgentLoading] = useState(false);
+    const [windowsAgentError, setWindowsAgentError] = useState<string | null>(null);
+    const [windowsAgentSuccess, setWindowsAgentSuccess] = useState<string | null>(null);
+    const [windowsAgentSubmitting, setWindowsAgentSubmitting] = useState(false);
+    const [windowsAgentSymbols, setWindowsAgentSymbols] = useState("");
+    const [windowsAgentStartDate, setWindowsAgentStartDate] = useState("");
+    const [windowsAgentEndDate, setWindowsAgentEndDate] = useState("");
+    const [windowsAgentIncludeHistory, setWindowsAgentIncludeHistory] = useState(true);
+    const [windowsAgentIncludeCompanies, setWindowsAgentIncludeCompanies] = useState(false);
+    const [windowsAgentIncludeNews, setWindowsAgentIncludeNews] = useState(false);
+    const [windowsAgentNewsLimit, setWindowsAgentNewsLimit] = useState(20);
+    const [windowsAgentJobName, setWindowsAgentJobName] = useState("");
     const [localClickhouseMode, setLocalClickhouseMode] = useState<"url" | "manual">(
         "url"
     );
@@ -3228,6 +3276,152 @@ const CompanySyncPanel = () => {
         setOhlcImportSuccess(null);
     }, []);
 
+    const refreshWindowsAgentJobs = useCallback(async () => {
+        setWindowsAgentLoading(true);
+        try {
+            const response = await fetch(`${ADMIN_API}/windows-agent/jobs`, {
+                cache: "no-store",
+            });
+            if (!response.ok) {
+                const text = await response.text();
+                if (text) {
+                    throw new Error(text);
+                }
+                throw new Error(`HTTP ${response.status}`);
+            }
+            const payload = (await response.json()) as WindowsAgentJobListResponse;
+            setWindowsAgentJobs(payload.jobs ?? []);
+            setWindowsAgentError(null);
+        } catch (error) {
+            setWindowsAgentError(resolveErrorMessage(error, "Nie udało się pobrać listy zleceń"));
+        } finally {
+            setWindowsAgentLoading(false);
+        }
+    }, []);
+
+    const buildWindowsAgentTasks = useCallback(() => {
+        const parsedSymbols = parseSymbolInput(windowsAgentSymbols);
+        const baseSymbols = parsedSymbols.length ? parsedSymbols : undefined;
+        const tasks: WindowsAgentTaskRequest[] = [];
+        if (windowsAgentIncludeHistory) {
+            tasks.push(
+                removeUndefined({
+                    kind: "ohlc_history",
+                    symbols: baseSymbols,
+                    start_date: windowsAgentStartDate || undefined,
+                    end_date: windowsAgentEndDate || undefined,
+                }) as WindowsAgentTaskRequest
+            );
+        }
+        if (windowsAgentIncludeCompanies) {
+            tasks.push(
+                removeUndefined({
+                    kind: "company_profiles",
+                    symbols: baseSymbols,
+                }) as WindowsAgentTaskRequest
+            );
+        }
+        if (windowsAgentIncludeNews) {
+            tasks.push(
+                removeUndefined({
+                    kind: "company_news",
+                    symbols: baseSymbols,
+                    limit: Math.max(1, Number(windowsAgentNewsLimit) || 20),
+                }) as WindowsAgentTaskRequest
+            );
+        }
+        return tasks;
+    }, [
+        windowsAgentSymbols,
+        windowsAgentIncludeHistory,
+        windowsAgentIncludeCompanies,
+        windowsAgentIncludeNews,
+        windowsAgentStartDate,
+        windowsAgentEndDate,
+        windowsAgentNewsLimit,
+    ]);
+
+    const submitWindowsAgentJob = useCallback(
+        async (baseUrl: string) => {
+            const tasks = buildWindowsAgentTasks();
+            if (!tasks.length) {
+                setWindowsAgentError("Wybierz co najmniej jeden typ danych dla agenta Windows.");
+                return;
+            }
+            setWindowsAgentSubmitting(true);
+            setWindowsAgentError(null);
+            setWindowsAgentSuccess(null);
+            try {
+                const payload = removeUndefined({
+                    name: windowsAgentJobName.trim() || undefined,
+                    tasks,
+                });
+                const response = await fetch(`${baseUrl}/windows-agent/jobs`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload),
+                });
+                if (!response.ok) {
+                    const text = await response.text();
+                    if (text) {
+                        try {
+                            const parsed = JSON.parse(text) as { detail?: unknown };
+                            if (parsed && typeof parsed.detail === "string") {
+                                throw new Error(parsed.detail);
+                            }
+                        } catch {
+                            throw new Error(text);
+                        }
+                    }
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                const created = (await response.json()) as WindowsAgentJob;
+                setWindowsAgentSuccess(
+                    created.name
+                        ? `Zlecenie „${created.name}” zostało dodane do kolejki.`
+                        : `Dodano zlecenie ${created.id}.`
+                );
+                await refreshWindowsAgentJobs();
+            } catch (error) {
+                setWindowsAgentError(resolveErrorMessage(error, "Nie udało się zapisać zlecenia"));
+            } finally {
+                setWindowsAgentSubmitting(false);
+            }
+        },
+        [buildWindowsAgentTasks, refreshWindowsAgentJobs, windowsAgentJobName]
+    );
+
+    const handleWindowsAgentJobSubmitCloud = useCallback(async () => {
+        await submitWindowsAgentJob(ADMIN_API);
+    }, [submitWindowsAgentJob]);
+
+    const handleWindowsAgentJobSubmitLocal = useCallback(async () => {
+        await submitWindowsAgentJob(LOCAL_ADMIN_API);
+    }, [submitWindowsAgentJob]);
+
+    const handleWindowsAgentReset = useCallback(() => {
+        setWindowsAgentJobName("");
+        setWindowsAgentSymbols("");
+        setWindowsAgentStartDate("");
+        setWindowsAgentEndDate("");
+        setWindowsAgentIncludeHistory(true);
+        setWindowsAgentIncludeCompanies(false);
+        setWindowsAgentIncludeNews(false);
+        setWindowsAgentNewsLimit(20);
+        setWindowsAgentError(null);
+        setWindowsAgentSuccess(null);
+    }, []);
+
+    useEffect(() => {
+        void refreshWindowsAgentJobs();
+        const interval = window.setInterval(() => {
+            void refreshWindowsAgentJobs();
+        }, 20000);
+        return () => {
+            window.clearInterval(interval);
+        };
+    }, [refreshWindowsAgentJobs]);
+
     const handleScheduleOnce = useCallback(
         async (event: React.FormEvent<HTMLFormElement>) => {
             event.preventDefault();
@@ -4125,6 +4319,226 @@ const CompanySyncPanel = () => {
                                     i użyj przycisku „Uruchom lokalnie”.
                                 </p>
                             </form>
+                        </Card>
+                        <Card title="Agent Windows – zlecenia">
+                            <form
+                                onSubmit={(event) => {
+                                    event.preventDefault();
+                                    void handleWindowsAgentJobSubmitCloud();
+                                }}
+                                className="space-y-4"
+                            >
+                                <p className="text-sm text-muted">
+                                    Skonfiguruj zadania dla agenta Windows pobierającego dane lokalnie.
+                                    Zlecenia są wykonywane na komputerze operatora i raportowane do panelu.
+                                </p>
+                                <label className="flex flex-col gap-2 text-sm font-medium text-primary">
+                                    <span>Nazwa zlecenia (opcjonalnie)</span>
+                                    <input
+                                        type="text"
+                                        autoComplete="off"
+                                        value={windowsAgentJobName}
+                                        onChange={(event) => setWindowsAgentJobName(event.target.value)}
+                                        placeholder="np. Synchronizacja poranna"
+                                        className="rounded-xl border border-soft bg-white/70 px-3 py-2 text-sm text-primary shadow-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/40"
+                                        disabled={windowsAgentSubmitting}
+                                    />
+                                </label>
+                                <label className="flex flex-col gap-2 text-sm font-medium text-primary">
+                                    <span>Tickery do przetworzenia (opcjonalnie)</span>
+                                    <textarea
+                                        value={windowsAgentSymbols}
+                                        onChange={(event) => setWindowsAgentSymbols(event.target.value)}
+                                        rows={3}
+                                        placeholder="np. CDR.WA, PKO, PGE"
+                                        className="rounded-xl border border-soft bg-white/70 px-3 py-2 text-sm text-primary shadow-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/40"
+                                        disabled={windowsAgentSubmitting}
+                                    />
+                                    <span className="text-xs font-normal text-subtle">
+                                        Pozostaw puste, aby agent użył domyślnej listy tickerów z backendu.
+                                    </span>
+                                </label>
+                                <div className="flex flex-wrap gap-4 text-sm font-medium text-primary">
+                                    <label className="flex items-center gap-2">
+                                        <input
+                                            type="checkbox"
+                                            checked={windowsAgentIncludeHistory}
+                                            onChange={(event) => setWindowsAgentIncludeHistory(event.target.checked)}
+                                            disabled={windowsAgentSubmitting}
+                                        />
+                                        <span>Notowania historyczne</span>
+                                    </label>
+                                    <label className="flex items-center gap-2">
+                                        <input
+                                            type="checkbox"
+                                            checked={windowsAgentIncludeCompanies}
+                                            onChange={(event) => setWindowsAgentIncludeCompanies(event.target.checked)}
+                                            disabled={windowsAgentSubmitting}
+                                        />
+                                        <span>Profile spółek</span>
+                                    </label>
+                                    <label className="flex items-center gap-2">
+                                        <input
+                                            type="checkbox"
+                                            checked={windowsAgentIncludeNews}
+                                            onChange={(event) => setWindowsAgentIncludeNews(event.target.checked)}
+                                            disabled={windowsAgentSubmitting}
+                                        />
+                                        <span>Wiadomości o spółkach</span>
+                                    </label>
+                                </div>
+                                <div className="grid gap-3 sm:grid-cols-2">
+                                    <label className="flex flex-col gap-2 text-sm font-medium text-primary">
+                                        <span>Data początkowa (opcjonalnie)</span>
+                                        <input
+                                            type="date"
+                                            value={windowsAgentStartDate}
+                                            onChange={(event) => setWindowsAgentStartDate(event.target.value)}
+                                            className="rounded-xl border border-soft bg-white/70 px-3 py-2 text-sm text-primary shadow-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/40"
+                                            disabled={windowsAgentSubmitting}
+                                        />
+                                    </label>
+                                    <label className="flex flex-col gap-2 text-sm font-medium text-primary">
+                                        <span>Data końcowa (opcjonalnie)</span>
+                                        <input
+                                            type="date"
+                                            value={windowsAgentEndDate}
+                                            onChange={(event) => setWindowsAgentEndDate(event.target.value)}
+                                            className="rounded-xl border border-soft bg-white/70 px-3 py-2 text-sm text-primary shadow-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/40"
+                                            disabled={windowsAgentSubmitting}
+                                        />
+                                    </label>
+                                </div>
+                                {windowsAgentIncludeNews && (
+                                    <label className="flex flex-col gap-2 text-sm font-medium text-primary">
+                                        <span>Limit wiadomości na spółkę</span>
+                                        <input
+                                            type="number"
+                                            min={1}
+                                            max={100}
+                                            value={windowsAgentNewsLimit}
+                                            onChange={(event) =>
+                                                setWindowsAgentNewsLimit(
+                                                    Math.max(1, Number(event.target.value) || 1)
+                                                )
+                                            }
+                                            className="w-32 rounded-xl border border-soft bg-white/70 px-3 py-2 text-sm text-primary shadow-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/40"
+                                            disabled={windowsAgentSubmitting}
+                                        />
+                                    </label>
+                                )}
+                                {windowsAgentError && (
+                                    <div className="rounded-xl border border-rose-200/60 bg-rose-50/70 px-3 py-2 text-sm text-rose-600">
+                                        {windowsAgentError}
+                                    </div>
+                                )}
+                                {windowsAgentSuccess && (
+                                    <div className="rounded-xl border border-emerald-200/60 bg-emerald-50/70 px-3 py-2 text-sm text-emerald-700">
+                                        {windowsAgentSuccess}
+                                    </div>
+                                )}
+                                <div className="flex flex-wrap gap-3">
+                                    <button
+                                        type="submit"
+                                        disabled={windowsAgentSubmitting}
+                                        className="rounded-full bg-primary px-4 py-2 text-sm font-semibold text-white shadow hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                        {windowsAgentSubmitting ? "Zapisywanie..." : "Wyślij na backend chmurowy"}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            void handleWindowsAgentJobSubmitLocal();
+                                        }}
+                                        disabled={windowsAgentSubmitting}
+                                        title="Wymaga uruchomionego backendu pod adresem http://localhost:8000"
+                                        className="rounded-full bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                        {windowsAgentSubmitting ? "Zapisywanie..." : "Wyślij na backend lokalny"}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={handleWindowsAgentReset}
+                                        disabled={windowsAgentSubmitting}
+                                        className="rounded-full border border-soft px-4 py-2 text-sm font-semibold text-primary transition hover:border-primary/40 hover:text-primary disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                        Wyczyść formularz
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            void refreshWindowsAgentJobs();
+                                        }}
+                                        className="rounded-full border border-soft px-4 py-2 text-sm font-semibold text-primary transition hover:border-primary/40 hover:text-primary"
+                                    >
+                                        Odśwież listę
+                                    </button>
+                                </div>
+                            </form>
+                            <div className="mt-6 space-y-3">
+                                <div className="flex items-center justify-between gap-2">
+                                    <h4 className="text-sm font-semibold text-primary">Ostatnie zlecenia</h4>
+                                    {windowsAgentLoading && (
+                                        <span className="text-xs text-subtle">Ładowanie…</span>
+                                    )}
+                                </div>
+                                {windowsAgentJobs.length === 0 ? (
+                                    <p className="text-xs text-subtle">Brak zleceń w kolejce.</p>
+                                ) : (
+                                    <div className="overflow-x-auto">
+                                        <table className="min-w-full divide-y divide-soft text-sm">
+                                            <thead className="bg-soft/60 text-xs uppercase tracking-wide text-muted">
+                                                <tr>
+                                                    <th className="px-3 py-2 text-left font-semibold">Zlecenie</th>
+                                                    <th className="px-3 py-2 text-left font-semibold">Status</th>
+                                                    <th className="px-3 py-2 text-left font-semibold">Czasy</th>
+                                                    <th className="px-3 py-2 text-left font-semibold">Postęp</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-soft/70 bg-white/80">
+                                                {windowsAgentJobs.map((job) => (
+                                                    <tr key={job.id}>
+                                                        <td className="px-3 py-2 align-top">
+                                                            <div className="font-medium text-primary">{job.name ?? job.id}</div>
+                                                            <div className="text-xs text-subtle">Zadań: {job.tasks.length}</div>
+                                                        </td>
+                                                        <td className="px-3 py-2 align-top">
+                                                            <span className="text-xs font-semibold uppercase tracking-wide text-primary">
+                                                                {job.status}
+                                                            </span>
+                                                            {job.error_message && (
+                                                                <div className="mt-1 text-xs text-negative">{job.error_message}</div>
+                                                            )}
+                                                        </td>
+                                                        <td className="px-3 py-2 align-top text-xs text-subtle">
+                                                            <div>Utworzono: {formatDateTime(job.created_at)}</div>
+                                                            {job.started_at && (
+                                                                <div>Start: {formatDateTime(job.started_at)}</div>
+                                                            )}
+                                                            {job.finished_at && (
+                                                                <div>Zakończono: {formatDateTime(job.finished_at)}</div>
+                                                            )}
+                                                        </td>
+                                                        <td className="px-3 py-2 align-top text-xs text-subtle">
+                                                            {job.progress_message ? (
+                                                                <div>{job.progress_message}</div>
+                                                            ) : (
+                                                                <div>—</div>
+                                                            )}
+                                                            {job.result_details &&
+                                                                Object.keys(job.result_details).length > 0 && (
+                                                                    <pre className="mt-2 max-h-36 overflow-auto rounded-lg bg-soft/80 p-2 text-[11px] text-neutral-700">
+                                                                        {JSON.stringify(job.result_details, null, 2)}
+                                                                    </pre>
+                                                                )}
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                )}
+                            </div>
                         </Card>
                         <Card title="Import notowań z pliku">
                             <form onSubmit={handleOhlcImport} className="space-y-4">
