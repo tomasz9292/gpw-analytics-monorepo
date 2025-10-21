@@ -479,6 +479,10 @@ def test_harvester_sync_inserts_expected_rows():
 
     columns = [
         "symbol",
+        "symbol_gpw",
+        "symbol_stooq",
+        "symbol_yahoo",
+        "symbol_google",
         "name",
         "short_name",
         "isin",
@@ -528,11 +532,13 @@ def test_harvester_sync_inserts_expected_rows():
     assert insert_call["table"] == "companies"
     used_columns = insert_call["columns"]
     assert "symbol" in used_columns
+    assert "symbol_gpw" in used_columns
     assert "market_cap" not in used_columns
 
     rows = [dict(zip(used_columns, row)) for row in insert_call["data"]]
     first = rows[0]
     assert first["symbol"] == "CDR"
+    assert first["symbol_gpw"] == "CDR"
     assert first["website"] == "https://www.cdprojekt.com"
     assert first["logo_url"] == "https://logo.clearbit.com/cdprojekt.com"
     assert first.get("market_cap") is None
@@ -544,6 +550,7 @@ def test_harvester_sync_inserts_expected_rows():
 
     second = rows[1]
     assert second["symbol"] == "PKN"
+    assert second["symbol_gpw"] == "PKN"
     assert second["website"] == "https://www.orlen.pl"
     assert second["description"].startswith("PKN Orlen")
     assert second.get("dividend_yield") is None
@@ -596,6 +603,24 @@ def test_build_row_computes_market_cap_and_ratios_from_share_data():
     assert row["pe_ratio"] == pytest.approx(10.0 / 2.5)
 
 
+def test_build_row_assigns_source_specific_symbols():
+    harvester = CompanyDataHarvester(session=FakeSession([]))
+    base = {"stockTicker": "XYZ", "companyName": "XYZ"}
+    fundamentals = {
+        "symbol": "xyz.wa",
+        "price": {"symbol": "xyz.wa"},
+    }
+    google = {"symbol": "XYZ:WSE"}
+    stooq = {"stockTicker": "xyz"}
+
+    row = harvester.build_row(base, fundamentals, google=google, stooq=stooq)
+
+    assert row["symbol_gpw"] == "XYZ"
+    assert row["symbol_stooq"] == "XYZ"
+    assert row["symbol_yahoo"] == "XYZ.WA"
+    assert row["symbol_google"] == "XYZ:WSE"
+
+
 def test_harvester_sync_merges_existing_records_and_removes_duplicates():
     session = FakeSession([FakeResponse(GPW_FIXTURE)])
     harvester = CompanyDataHarvester(session=session, stooq_profile_url_template=None)
@@ -617,6 +642,7 @@ def test_harvester_sync_merges_existing_records_and_removes_duplicates():
 
     columns = [
         "symbol",
+        "symbol_gpw",
         "name",
         "short_name",
         "website",
@@ -641,6 +667,7 @@ def test_harvester_sync_merges_existing_records_and_removes_duplicates():
     used_columns = insert_call["columns"]
     rows = [dict(zip(used_columns, row)) for row in insert_call["data"]]
     cdr_row = next(row for row in rows if row["symbol"] == "CDR")
+    assert cdr_row["symbol_gpw"] == "CDR"
     assert cdr_row["employees"] == 1500
     assert cdr_row["logo_url"] == "https://logo.clearbit.com/cdprojekt.com"
     assert cdr_row["website"] == "https://www.cdprojekt.com"
@@ -680,6 +707,8 @@ def test_harvester_sync_uses_stooq_profile_data():
 
     columns = [
         "symbol",
+        "symbol_gpw",
+        "symbol_stooq",
         "name",
         "website",
         "description",
@@ -701,6 +730,8 @@ def test_harvester_sync_uses_stooq_profile_data():
     used_columns = insert_call["columns"]
     rows = [dict(zip(used_columns, row)) for row in insert_call["data"]]
     row = rows[0]
+    assert row["symbol_gpw"] == "AAA"
+    assert row["symbol_stooq"] == "AAA"
     assert row["website"] == "https://aaa.example"
     assert row["description"] == "Opis AAA"
     assert row["employees"] == 45
@@ -975,6 +1006,7 @@ def test_get_company_profile_endpoint(monkeypatch):
     profile = main.get_company_profile("CDR")
     assert profile.symbol.startswith("CDR")
     assert profile.raw_symbol == "CDR"
+    assert profile.symbol_gpw == "CDR"
     assert profile.fundamentals.market_cap == 123.0
 
 
