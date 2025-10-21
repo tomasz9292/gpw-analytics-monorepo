@@ -135,6 +135,7 @@ type LocalClickhousePersistedConfig = {
 
 type LocalClickhouseEnsureResult = { ok: true } | { ok: false; error: string };
 
+
 const buildScoreComponents = (rules: ScoreBuilderRule[]): ScoreComponentRequest[] =>
     rules.reduce<ScoreComponentRequest[]>((acc, rule) => {
         const option = findScoreMetric(rule.metric);
@@ -1149,6 +1150,12 @@ type OhlcSyncResultPayload = {
     request_log: HttpRequestLogEntry[];
     requested_as_admin: boolean;
     sync_type: "historical_prices";
+};
+
+type OhlcImportResponsePayload = {
+    inserted: number;
+    skipped: number;
+    errors: string[];
 };
 
 type OhlcSyncProgressPayload = {
@@ -2192,6 +2199,10 @@ const CompanySyncPanel = () => {
     const [ohlcScheduleStartInput, setOhlcScheduleStartInput] = useState("");
     const [ohlcScheduleTruncate, setOhlcScheduleTruncate] = useState(false);
     const [ohlcScheduleRunAsAdmin, setOhlcScheduleRunAsAdmin] = useState(true);
+    const [ohlcImporting, setOhlcImporting] = useState(false);
+    const [ohlcImportError, setOhlcImportError] = useState<string | null>(null);
+    const [ohlcImportSuccess, setOhlcImportSuccess] = useState<string | null>(null);
+    const ohlcImportInputRef = useRef<HTMLInputElement | null>(null);
     const [localClickhouseMode, setLocalClickhouseMode] = useState<"url" | "manual">(
         "url"
     );
@@ -3056,6 +3067,167 @@ const CompanySyncPanel = () => {
             "Nie udało się uruchomić lokalnej synchronizacji. Upewnij się, że backend działa na http://localhost:8000."
         );
     }, [ensureLocalClickhouseConfig, runOhlcSync]);
+
+    const runOhlcImport = useCallback(
+        async (
+            baseUrl: string,
+            file: File,
+            fallbackMessage: string
+        ): Promise<OhlcImportResponsePayload> => {
+            const defaultMessage =
+                fallbackMessage || "Nie udało się zaimportować pliku z notowaniami";
+            const formData = new FormData();
+            formData.append("file", file);
+            const response = await fetch(`${baseUrl}/ohlc/import`, {
+                method: "POST",
+                body: formData,
+            });
+            let data: unknown = null;
+            try {
+                data = await response.json();
+            } catch {
+                data = null;
+            }
+            if (!response.ok) {
+                const message =
+                    data &&
+                    typeof data === "object" &&
+                    data !== null &&
+                    "error" in data &&
+                    typeof (data as { error?: unknown }).error === "string"
+                        ? ((data as { error?: string }).error || defaultMessage)
+                        : defaultMessage;
+                throw new Error(message);
+            }
+            if (!data || typeof data !== "object") {
+                throw new Error(defaultMessage);
+            }
+            const payload = data as Partial<OhlcImportResponsePayload>;
+            return {
+                inserted:
+                    typeof payload.inserted === "number" && Number.isFinite(payload.inserted)
+                        ? payload.inserted
+                        : 0,
+                skipped:
+                    typeof payload.skipped === "number" && Number.isFinite(payload.skipped)
+                        ? payload.skipped
+                        : 0,
+                errors: Array.isArray(payload.errors)
+                    ? payload.errors.filter(
+                          (value): value is string => typeof value === "string"
+                      )
+                    : [],
+            };
+        },
+        []
+    );
+
+    const formatOhlcImportSummary = useCallback(
+        (result: OhlcImportResponsePayload): string => {
+            const parts = [
+                `Zapisano ${integerFormatter.format(result.inserted)} rekordów.`,
+            ];
+            if (result.skipped > 0) {
+                parts.push(
+                    `Pominięto ${integerFormatter.format(result.skipped)} rekordów.`
+                );
+            }
+            if (result.errors.length > 0) {
+                const preview = result.errors.slice(0, 3).join(" • ");
+                const suffix = result.errors.length > 3 ? " …" : "";
+                parts.push(`Błędy: ${preview}${suffix}`);
+            }
+            return parts.join(" ");
+        },
+        [integerFormatter]
+    );
+
+    const handleOhlcImport = useCallback(
+        async (event: React.FormEvent<HTMLFormElement>) => {
+            event.preventDefault();
+            setOhlcImportError(null);
+            setOhlcImportSuccess(null);
+            const input = ohlcImportInputRef.current;
+            const file = input?.files?.[0];
+            if (!file) {
+                setOhlcImportError("Wybierz plik z danymi notowań (CSV).");
+                return;
+            }
+            setOhlcImporting(true);
+            try {
+                const result = await runOhlcImport(
+                    ADMIN_API,
+                    file,
+                    "Nie udało się zaimportować pliku z notowaniami"
+                );
+                setOhlcImportSuccess(formatOhlcImportSummary(result));
+                if (input) {
+                    input.value = "";
+                }
+            } catch (error) {
+                setOhlcImportError(
+                    resolveErrorMessage(
+                        error,
+                        "Nie udało się zaimportować pliku z notowaniami"
+                    )
+                );
+            } finally {
+                setOhlcImporting(false);
+            }
+        },
+        [formatOhlcImportSummary, runOhlcImport]
+    );
+
+    const handleOhlcImportLocal = useCallback(async () => {
+        const input = ohlcImportInputRef.current;
+        const file = input?.files?.[0];
+        setOhlcImportError(null);
+        setOhlcImportSuccess(null);
+        if (!file) {
+            setOhlcImportError("Wybierz plik z danymi notowań (CSV).");
+            return;
+        }
+        setOhlcImporting(true);
+        const ensured = await ensureLocalClickhouseConfig();
+        if (!ensured.ok) {
+            setOhlcImporting(false);
+            setOhlcImportError(ensured.error);
+            return;
+        }
+        try {
+            const result = await runOhlcImport(
+                LOCAL_ADMIN_API,
+                file,
+                "Nie udało się zaimportować pliku na lokalny backend. Upewnij się, że działa na http://localhost:8000."
+            );
+            setOhlcImportSuccess(formatOhlcImportSummary(result));
+            if (input) {
+                input.value = "";
+            }
+        } catch (error) {
+            setOhlcImportError(
+                resolveErrorMessage(
+                    error,
+                    "Nie udało się zaimportować pliku na lokalny backend. Upewnij się, że działa na http://localhost:8000."
+                )
+            );
+        } finally {
+            setOhlcImporting(false);
+        }
+    }, [
+        ensureLocalClickhouseConfig,
+        formatOhlcImportSummary,
+        runOhlcImport,
+    ]);
+
+    const handleOhlcImportReset = useCallback(() => {
+        const input = ohlcImportInputRef.current;
+        if (input) {
+            input.value = "";
+        }
+        setOhlcImportError(null);
+        setOhlcImportSuccess(null);
+    }, []);
 
     const handleScheduleOnce = useCallback(
         async (event: React.FormEvent<HTMLFormElement>) => {
@@ -3952,6 +4124,107 @@ const CompanySyncPanel = () => {
                                     Aby zsynchronizować dane lokalnie, uruchom backend na adresie
                                     <code className="mx-1 rounded bg-soft px-1 py-0.5 text-[10px]">http://localhost:8000</code>
                                     i użyj przycisku „Uruchom lokalnie”.
+                                </p>
+                            </form>
+                        </Card>
+                        <Card title="Agent Windows – aplikacja desktopowa">
+                            <div className="space-y-4 text-sm text-muted">
+                                <p>
+                                    Aplikacja Tkinter działa poza przeglądarką. Uruchom ją poleceniem
+                                    <code className="mx-1 rounded bg-soft px-1 py-0.5 text-[10px]">
+                                        python backend\windows_agent\app.py
+                                    </code>
+                                    , a następnie przypnij skrót do pulpitu lub paska zadań.
+                                </p>
+                                <ol className="list-decimal space-y-2 pl-5">
+                                    <li>
+                                        W zakładce „Pobieranie danych” wybierz spółki, zakres dat i rodzaje
+                                        danych (notowania, profile, wiadomości). Wyniki zapisywane są w
+                                        katalogu Dokumenty\GPW Analytics.
+                                    </li>
+                                    <li>
+                                        W zakładce „Połączenie z bazą danych” wpisz parametry ClickHouse.
+                                        Hasło trafia do Menedżera poświadczeń systemu Windows dzięki
+                                        bibliotece <code>keyring</code>.
+                                    </li>
+                                    <li>
+                                        Po pobraniu danych użyj przycisku „Eksportuj ostatnie dane”, aby
+                                        wysłać je do swojej instancji ClickHouse (lokalnej lub w chmurze).
+                                    </li>
+                                </ol>
+                                <p>
+                                    Panel pozostaje miejscem do podglądu synchronizacji, a agent desktopowy
+                                    przejmuje pracę offline – bez kolejki zadań i dodatkowych endpointów.
+                                </p>
+                            </div>
+                        </Card>
+                        <Card title="Import notowań z pliku">
+                            <form onSubmit={handleOhlcImport} className="space-y-4">
+                                <p className="text-sm text-muted">
+                                    Wgraj plik CSV wygenerowany lokalnie i zapisz dane w ClickHouse
+                                    Cloud lub działającym lokalnie backendzie.
+                                </p>
+                                <label className="flex flex-col gap-2 text-sm font-medium text-primary">
+                                    <span>Plik z notowaniami (CSV)</span>
+                                    <input
+                                        type="file"
+                                        accept=".csv,text/csv"
+                                        ref={ohlcImportInputRef}
+                                        onChange={() => {
+                                            setOhlcImportError(null);
+                                            setOhlcImportSuccess(null);
+                                        }}
+                                        className="rounded-xl border border-soft bg-white/70 px-3 py-2 text-sm text-primary shadow-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/40"
+                                        disabled={ohlcImporting}
+                                    />
+                                    <span className="text-xs font-normal text-subtle">
+                                        Kolumny: symbol, date, open, high, low, close, volume (opcjonalnie).
+                                    </span>
+                                </label>
+                                {ohlcImportError && (
+                                    <div className="rounded-xl border border-rose-200/60 bg-rose-50/70 px-3 py-2 text-sm text-rose-600">
+                                        {ohlcImportError}
+                                    </div>
+                                )}
+                                {ohlcImportSuccess && (
+                                    <div className="rounded-xl border border-emerald-200/60 bg-emerald-50/70 px-3 py-2 text-sm text-emerald-700">
+                                        {ohlcImportSuccess}
+                                    </div>
+                                )}
+                                <div className="flex flex-wrap gap-3">
+                                    <button
+                                        type="submit"
+                                        disabled={ohlcImporting}
+                                        className="rounded-full bg-primary px-4 py-2 text-sm font-semibold text-white shadow hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                        {ohlcImporting ? "Wgrywanie..." : "Wyślij do ClickHouse"}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            void handleOhlcImportLocal();
+                                        }}
+                                        disabled={ohlcImporting}
+                                        title="Wymaga uruchomionego backendu pod adresem http://localhost:8000"
+                                        className="rounded-full bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                        {ohlcImporting ? "Wgrywanie..." : "Wyślij na backend lokalny"}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={handleOhlcImportReset}
+                                        disabled={ohlcImporting}
+                                        className="rounded-full border border-soft px-4 py-2 text-sm font-semibold text-primary transition hover:border-primary/40 hover:text-primary disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                        Wyczyść formularz
+                                    </button>
+                                </div>
+                                <p className="text-xs text-subtle">
+                                    Plik możesz przygotować lokalnie poleceniem
+                                    <code className="mx-1 rounded bg-soft px-1 py-0.5 text-[10px]">
+                                        python -m api.offline_export --output ohlc.csv
+                                    </code>
+                                    .
                                 </p>
                             </form>
                         </Card>
