@@ -84,4 +84,10 @@ export CLICKHOUSE_PASSWORD="<haslo>"
   `http://localhost:8000/api/admin/...`. Backend udostępnia teraz wszystkie
   endpointy również pod tym prefiksem, więc wystarczy uruchomić go jak wyżej i
   zalogować się w panelu jako administrator.
+- Panel udostępnia kartę **„Konfiguracja lokalnego ClickHouse”**, w której
+  można podać adres URL lub ręczne parametry połączenia z ClickHouse Cloud.
+  Formularz wysyła dane do endpointu `POST /api/admin/config/clickhouse`, a
+  po zapisaniu kolejne kliknięcia „Uruchom lokalnie” automatycznie korzystają z
+  przekazanej konfiguracji. Aktualne ustawienia można podejrzeć i zresetować
+  do wartości środowiskowych tym samym panelem.
 

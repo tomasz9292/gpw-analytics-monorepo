@@ -14,7 +14,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from typing import Literal
 from uuid import uuid4
 
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import clickhouse_connect
 import threading
@@ -436,6 +436,24 @@ CLICKHOUSE_SECURE = _env_bool("CLICKHOUSE_SECURE", default=True)
 CLICKHOUSE_VERIFY = _env_bool("CLICKHOUSE_VERIFY", default=True)
 CLICKHOUSE_CA = os.getenv("CLICKHOUSE_CA", "").strip()  # ścieżka do dodatkowego certyfikatu, opcjonalna
 
+_INITIAL_CLICKHOUSE_SETTINGS = {
+    "CLICKHOUSE_URL": CLICKHOUSE_URL,
+    "CLICKHOUSE_HOST": CLICKHOUSE_HOST,
+    "CLICKHOUSE_PORT": CLICKHOUSE_PORT,
+    "CLICKHOUSE_DATABASE": CLICKHOUSE_DATABASE,
+    "CLICKHOUSE_USER": CLICKHOUSE_USER,
+    "CLICKHOUSE_PASSWORD": CLICKHOUSE_PASSWORD,
+    "CLICKHOUSE_SECURE": CLICKHOUSE_SECURE,
+    "CLICKHOUSE_VERIFY": CLICKHOUSE_VERIFY,
+    "CLICKHOUSE_CA": CLICKHOUSE_CA,
+}
+
+_INITIAL_CLICKHOUSE_MODE: Literal["url", "manual"] = (
+    "url" if CLICKHOUSE_URL else "manual"
+)
+_CLICKHOUSE_CONFIG_SOURCE: Literal["env", "override"] = "env"
+_CLICKHOUSE_CONFIG_MODE: Literal["url", "manual"] = _INITIAL_CLICKHOUSE_MODE
+
 # CORS – domyślnie pozwalamy wszystkim, ale można podać np. domenę z Vercel.
 _cors_origins = os.getenv("CORS_ALLOW_ORIGINS", "*").strip()
 if _cors_origins == "*":
@@ -740,6 +758,93 @@ def _parse_clickhouse_url():
     }
 
 
+def _mask_clickhouse_url(url: str) -> str:
+    parsed = urlparse(url)
+    username = parsed.username or ""
+    password = parsed.password or ""
+    hostname = parsed.hostname or ""
+    port = parsed.port
+
+    if username:
+        userinfo = username
+        if password:
+            userinfo = f"{userinfo}:***"
+        netloc = f"{userinfo}@{hostname}"
+    else:
+        netloc = hostname
+    if port:
+        netloc = f"{netloc}:{port}"
+
+    sanitized = parsed._replace(netloc=netloc)
+    if password:
+        sanitized = sanitized._replace(path=parsed.path or "/")
+    if parsed.query:
+        query_params = parse_qs(parsed.query, keep_blank_values=True)
+        masked_items = []
+        for key, values in query_params.items():
+            lowered = key.lower()
+            if lowered in {"password", "pass"}:
+                masked_items.append((key, "***"))
+            else:
+                for value in values:
+                    masked_items.append((key, value))
+        sanitized = sanitized._replace(query=urlencode(masked_items, doseq=True))
+    return urlunparse(sanitized)
+
+
+def _snapshot_clickhouse_settings() -> Dict[str, Any]:
+    return {
+        "CLICKHOUSE_URL": CLICKHOUSE_URL,
+        "CLICKHOUSE_HOST": CLICKHOUSE_HOST,
+        "CLICKHOUSE_PORT": CLICKHOUSE_PORT,
+        "CLICKHOUSE_DATABASE": CLICKHOUSE_DATABASE,
+        "CLICKHOUSE_USER": CLICKHOUSE_USER,
+        "CLICKHOUSE_PASSWORD": CLICKHOUSE_PASSWORD,
+        "CLICKHOUSE_SECURE": CLICKHOUSE_SECURE,
+        "CLICKHOUSE_VERIFY": CLICKHOUSE_VERIFY,
+        "CLICKHOUSE_CA": CLICKHOUSE_CA,
+        "source": _CLICKHOUSE_CONFIG_SOURCE,
+        "mode": _CLICKHOUSE_CONFIG_MODE,
+    }
+
+
+def _apply_clickhouse_settings(
+    settings: Dict[str, Any],
+    *,
+    source: Literal["env", "override"],
+    mode: Literal["url", "manual"],
+) -> None:
+    global CLICKHOUSE_URL, CLICKHOUSE_HOST, CLICKHOUSE_PORT, CLICKHOUSE_DATABASE
+    global CLICKHOUSE_USER, CLICKHOUSE_PASSWORD, CLICKHOUSE_SECURE, CLICKHOUSE_VERIFY
+    global CLICKHOUSE_CA, _CLICKHOUSE_CONFIG_SOURCE, _CLICKHOUSE_CONFIG_MODE
+
+    CLICKHOUSE_URL = str(settings.get("CLICKHOUSE_URL", "") or "").strip()
+    CLICKHOUSE_HOST = str(settings.get("CLICKHOUSE_HOST", "") or "").strip()
+    CLICKHOUSE_PORT = str(settings.get("CLICKHOUSE_PORT", "") or "").strip()
+    CLICKHOUSE_DATABASE = str(
+        settings.get("CLICKHOUSE_DATABASE", "default") or "default"
+    ).strip()
+    CLICKHOUSE_USER = str(settings.get("CLICKHOUSE_USER", "default") or "default").strip()
+    CLICKHOUSE_PASSWORD = str(settings.get("CLICKHOUSE_PASSWORD", "") or "")
+    CLICKHOUSE_SECURE = bool(settings.get("CLICKHOUSE_SECURE", True))
+    CLICKHOUSE_VERIFY = bool(settings.get("CLICKHOUSE_VERIFY", True))
+    CLICKHOUSE_CA = str(settings.get("CLICKHOUSE_CA", "") or "").strip()
+    _CLICKHOUSE_CONFIG_SOURCE = source
+    _CLICKHOUSE_CONFIG_MODE = mode
+
+
+def _reset_clickhouse_client_cache() -> None:
+    global _THREAD_LOCAL, _CH_CLIENT_KWARGS
+    _CH_CLIENT_KWARGS = None
+    client = getattr(_THREAD_LOCAL, "ch_client", None)
+    if client is not None:
+        try:
+            client.close()
+        except Exception:  # pragma: no cover - zależy od środowiska
+            pass
+    _THREAD_LOCAL = threading.local()
+
+
 def _get_ch_client_kwargs():
     global _CH_CLIENT_KWARGS
     if _CH_CLIENT_KWARGS is not None:
@@ -834,6 +939,232 @@ app.add_middleware(
 @api_router.get("/ping")
 def ping() -> str:
     return "pong"
+
+
+class ClickHouseConfigRequest(BaseModel):
+    reset: bool = Field(
+        default=False,
+        description="Czy przywrócić ustawienia środowiskowe ClickHouse",
+    )
+    mode: Literal["url", "manual"] = Field(
+        default="url",
+        description="Tryb konfiguracji: pełny adres URL lub ręczne parametry",
+    )
+    url: Optional[str] = Field(
+        default=None,
+        description="Adres połączenia ClickHouse (np. https://example:8443/db)",
+    )
+    host: Optional[str] = Field(
+        default=None,
+        description="Host ClickHouse w trybie ręcznym (np. srv.clickhouse.tech)",
+    )
+    port: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=65535,
+        description="Port ClickHouse w trybie ręcznym",
+    )
+    database: Optional[str] = Field(
+        default=None,
+        description="Nazwa bazy danych ClickHouse",
+    )
+    username: Optional[str] = Field(
+        default=None,
+        description="Login użytkownika ClickHouse",
+    )
+    password: Optional[str] = Field(
+        default=None,
+        description="Hasło użytkownika ClickHouse",
+    )
+    secure: Optional[bool] = Field(
+        default=None,
+        description="Czy użyć połączenia TLS/HTTPS w trybie ręcznym",
+    )
+    verify: Optional[bool] = Field(
+        default=None,
+        description="Czy weryfikować certyfikat TLS (ręczny tryb)",
+    )
+    ca: Optional[str] = Field(
+        default=None,
+        description="Ścieżka do dodatkowego certyfikatu CA (opcjonalnie)",
+    )
+
+    @model_validator(mode="after")
+    def _normalize(cls, values: "ClickHouseConfigRequest") -> "ClickHouseConfigRequest":
+        if values.reset:
+            return values
+
+        if values.url is not None:
+            cleaned = values.url.strip()
+            values.url = cleaned or None
+        if values.host is not None:
+            cleaned = values.host.strip()
+            values.host = cleaned or None
+        if values.database is not None:
+            cleaned = values.database.strip()
+            values.database = cleaned or None
+        if values.username is not None:
+            cleaned = values.username.strip()
+            values.username = cleaned or None
+        if values.ca is not None:
+            cleaned = values.ca.strip()
+            values.ca = cleaned or None
+
+        if values.mode not in {"url", "manual"}:
+            values.mode = "url"
+
+        if values.mode == "url":
+            if not values.url:
+                raise ValueError("W trybie URL należy podać adres ClickHouse")
+        else:
+            if not values.host:
+                raise ValueError("W trybie ręcznym należy podać hosta ClickHouse")
+
+        return values
+
+
+class ClickHouseConfigResponse(BaseModel):
+    source: Literal["env", "override"] = Field(
+        description="Źródło konfiguracji backendu: zmienne środowiskowe lub nadpisanie"
+    )
+    mode: Literal["url", "manual"] = Field(
+        description="Tryb konfiguracji używany aktualnie przez backend"
+    )
+    url: Optional[str] = Field(
+        default=None,
+        description="Zanonimizowany adres URL ClickHouse (bez hasła)",
+    )
+    host: Optional[str] = Field(
+        default=None,
+        description="Host ClickHouse ustawiony w backendzie",
+    )
+    port: Optional[int] = Field(
+        default=None,
+        description="Port ClickHouse ustawiony w backendzie",
+    )
+    secure: bool = Field(description="Czy backend używa szyfrowanego połączenia")
+    verify: Optional[bool] = Field(
+        default=None,
+        description="Czy backend weryfikuje certyfikat TLS (None = domyślnie)",
+    )
+    database: Optional[str] = Field(
+        default=None,
+        description="Nazwa bazy danych używanej przez backend",
+    )
+    username: Optional[str] = Field(
+        default=None,
+        description="Użytkownik ClickHouse ustawiony w backendzie",
+    )
+    has_password: bool = Field(
+        description="Czy backend posiada skonfigurowane hasło do ClickHouse"
+    )
+    ca: Optional[str] = Field(
+        default=None,
+        description="Skonfigurowany dodatkowy certyfikat CA",
+    )
+
+
+def _build_clickhouse_config_response() -> ClickHouseConfigResponse:
+    client_kwargs = _get_ch_client_kwargs()
+    host = str(client_kwargs.get("host") or "").strip()
+    port_value = client_kwargs.get("port")
+    try:
+        port = int(port_value) if port_value is not None else None
+    except (TypeError, ValueError):
+        port = None
+    secure = bool(client_kwargs.get("secure", True))
+    verify_value = client_kwargs.get("verify")
+    verify = None if verify_value is None else bool(verify_value)
+    username = client_kwargs.get("username") or None
+    database = client_kwargs.get("database") or None
+    password = client_kwargs.get("password") or None
+    ca_cert = client_kwargs.get("ca_cert") or (CLICKHOUSE_CA or None)
+
+    url_display = CLICKHOUSE_URL.strip() or None
+    if url_display:
+        url_display = _mask_clickhouse_url(url_display)
+
+    return ClickHouseConfigResponse(
+        source=_CLICKHOUSE_CONFIG_SOURCE,
+        mode=_CLICKHOUSE_CONFIG_MODE,
+        url=url_display,
+        host=host or None,
+        port=port,
+        secure=secure,
+        verify=verify,
+        database=database,
+        username=username,
+        has_password=bool(password),
+        ca=ca_cert,
+    )
+
+
+@api_router.get("/config/clickhouse", response_model=ClickHouseConfigResponse)
+def get_clickhouse_config() -> ClickHouseConfigResponse:
+    try:
+        return _build_clickhouse_config_response()
+    except Exception as exc:  # pragma: no cover - zależy od środowiska
+        raise HTTPException(500, str(exc)) from exc
+
+
+@api_router.post("/config/clickhouse", response_model=ClickHouseConfigResponse)
+def update_clickhouse_config(payload: ClickHouseConfigRequest) -> ClickHouseConfigResponse:
+    previous = _snapshot_clickhouse_settings()
+    previous_settings = {
+        key: previous[key]
+        for key in _INITIAL_CLICKHOUSE_SETTINGS.keys()
+    }
+    previous_source: Literal["env", "override"] = previous["source"]
+    previous_mode: Literal["url", "manual"] = previous["mode"]
+
+    if payload.reset:
+        settings = dict(_INITIAL_CLICKHOUSE_SETTINGS)
+        target_source: Literal["env", "override"] = "env"
+        target_mode: Literal["url", "manual"] = _INITIAL_CLICKHOUSE_MODE
+    else:
+        settings = dict(previous_settings)
+        target_source = "override"
+        target_mode = payload.mode
+        if payload.mode == "url":
+            settings["CLICKHOUSE_URL"] = payload.url or ""
+            settings["CLICKHOUSE_HOST"] = payload.host or ""
+            settings["CLICKHOUSE_PORT"] = (
+                str(payload.port) if payload.port is not None else ""
+            )
+        else:
+            settings["CLICKHOUSE_URL"] = ""
+            settings["CLICKHOUSE_HOST"] = payload.host or ""
+            settings["CLICKHOUSE_PORT"] = (
+                str(payload.port) if payload.port is not None else ""
+            )
+
+        if payload.database is not None:
+            settings["CLICKHOUSE_DATABASE"] = payload.database or ""
+        if payload.username is not None:
+            settings["CLICKHOUSE_USER"] = payload.username or ""
+        if payload.password is not None:
+            settings["CLICKHOUSE_PASSWORD"] = payload.password or ""
+        if payload.secure is not None:
+            settings["CLICKHOUSE_SECURE"] = bool(payload.secure)
+        if payload.verify is not None:
+            settings["CLICKHOUSE_VERIFY"] = bool(payload.verify)
+        if payload.ca is not None:
+            settings["CLICKHOUSE_CA"] = payload.ca or ""
+
+    try:
+        _apply_clickhouse_settings(settings, source=target_source, mode=target_mode)
+        _reset_clickhouse_client_cache()
+        _get_ch_client_kwargs()
+    except Exception as exc:
+        _apply_clickhouse_settings(
+            previous_settings,
+            source=previous_source,
+            mode=previous_mode,
+        )
+        _reset_clickhouse_client_cache()
+        raise HTTPException(400, str(exc)) from exc
+
+    return _build_clickhouse_config_response()
 
 
 class OhlcSyncRequest(BaseModel):
