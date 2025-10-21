@@ -44,6 +44,10 @@ DEFAULT_COMPANIES_TABLE_DDL = textwrap.dedent(
         symbol String,
         ticker String,
         code String,
+        symbol_gpw LowCardinality(String),
+        symbol_stooq LowCardinality(Nullable(String)),
+        symbol_yahoo LowCardinality(Nullable(String)),
+        symbol_google LowCardinality(Nullable(String)),
         isin LowCardinality(Nullable(String)),
         name LowCardinality(Nullable(String)),
         company_name LowCardinality(Nullable(String)),
@@ -894,8 +898,12 @@ _OHLC_SCHEDULE_STATE = OhlcSyncScheduleStatus()
 
 COMPANY_SYMBOL_CANDIDATES = [
     "symbol",
+    "symbol_gpw",
     "ticker",
     "code",
+    "symbol_stooq",
+    "symbol_yahoo",
+    "symbol_google",
     "company_symbol",
     "company_code",
 ]
@@ -915,6 +923,10 @@ COMPANY_COLUMN_MAP: Dict[str, CompanyFieldTarget] = {
     "symbol": ("company", "raw_symbol", "text"),
     "ticker": ("company", "raw_symbol", "text"),
     "code": ("company", "raw_symbol", "text"),
+    "symbol_gpw": ("company", "symbol_gpw", "text"),
+    "symbol_stooq": ("company", "symbol_stooq", "text"),
+    "symbol_yahoo": ("company", "symbol_yahoo", "text"),
+    "symbol_google": ("company", "symbol_google", "text"),
     "isin": ("company", "isin", "text"),
     "name": ("company", "name", "text"),
     "company_name": ("company", "name", "text"),
@@ -1139,6 +1151,10 @@ def _find_company_symbol_column(columns: Sequence[str]) -> Optional[str]:
 def _normalize_company_row(row: Dict[str, Any], symbol_column: str) -> Optional[Dict[str, Any]]:
     canonical: Dict[str, Any] = {
         "raw_symbol": None,
+        "symbol_gpw": None,
+        "symbol_stooq": None,
+        "symbol_yahoo": None,
+        "symbol_google": None,
         "name": None,
         "short_name": None,
         "isin": None,
@@ -1195,6 +1211,8 @@ def _normalize_company_row(row: Dict[str, Any], symbol_column: str) -> Optional[
         canonical["raw_symbol"] = raw_symbol_value
 
     canonical["symbol"] = pretty_symbol(str(raw_symbol_value))
+    if not canonical.get("symbol_gpw"):
+        canonical["symbol_gpw"] = canonical["raw_symbol"]
     canonical["fundamentals"] = fundamentals
 
     insights = _extract_stooq_insights(extra.get("raw_payload"))
@@ -1417,6 +1435,10 @@ class CompanyFundamentals(BaseModel):
 class CompanyProfile(BaseModel):
     symbol: str
     raw_symbol: str
+    symbol_gpw: Optional[str] = None
+    symbol_stooq: Optional[str] = None
+    symbol_yahoo: Optional[str] = None
+    symbol_google: Optional[str] = None
     name: Optional[str] = None
     short_name: Optional[str] = None
     isin: Optional[str] = None

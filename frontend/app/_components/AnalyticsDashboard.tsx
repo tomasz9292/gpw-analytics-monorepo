@@ -49,6 +49,7 @@ declare global {
  *  ========================= */
 const API = "/api";
 const ADMIN_API = "/api/admin";
+const LOCAL_ADMIN_API = "http://localhost:8000/api/admin";
 
 const removeUndefined = (obj: Record<string, unknown>) =>
     Object.fromEntries(
@@ -988,6 +989,10 @@ type CompanyFundamentalsResponse = Record<string, number | null>;
 type CompanyProfileResponse = {
     symbol: string;
     raw_symbol: string;
+    symbol_gpw?: string | null;
+    symbol_stooq?: string | null;
+    symbol_yahoo?: string | null;
+    symbol_google?: string | null;
     name?: string | null;
     short_name?: string | null;
     isin?: string | null;
@@ -2082,6 +2087,7 @@ const CompanySyncPanel = () => {
     const [detailsError, setDetailsError] = useState<string | null>(null);
     const [detailsLoading, setDetailsLoading] = useState(false);
     const [isStarting, setIsStarting] = useState(false);
+    const [isStartingLocal, setIsStartingLocal] = useState(false);
     const [search, setSearch] = useState("");
     const [activeQuery, setActiveQuery] = useState<string | undefined>(undefined);
     const [schedule, setSchedule] = useState<CompanySyncScheduleStatusPayload | null>(null);
@@ -2462,28 +2468,51 @@ const CompanySyncPanel = () => {
         }
     }, []);
 
+    const runCompanySync = useCallback(
+        async (
+            baseUrl: string,
+            setLoading: React.Dispatch<React.SetStateAction<boolean>>,
+            fallbackMessage: string
+        ) => {
+            setLoading(true);
+            setStatusError(null);
+            try {
+                const response = await fetch(`${baseUrl}/companies/sync/background`, {
+                    method: "POST",
+                });
+                if (!response.ok) {
+                    throw new Error(await parseApiError(response));
+                }
+                const payload = (await response.json()) as CompanySyncStatusPayload;
+                setStatus(payload);
+            } catch (error) {
+                if (error instanceof Error && error.message) {
+                    setStatusError(error.message);
+                } else {
+                    setStatusError(fallbackMessage);
+                }
+            } finally {
+                setLoading(false);
+            }
+        },
+        [setStatus, setStatusError]
+    );
+
     const startSync = useCallback(async () => {
-        setIsStarting(true);
-        setStatusError(null);
-        try {
-            const response = await fetch(`${ADMIN_API}/companies/sync/background`, {
-                method: "POST",
-            });
-            if (!response.ok) {
-                throw new Error(await parseApiError(response));
-            }
-            const payload = (await response.json()) as CompanySyncStatusPayload;
-            setStatus(payload);
-        } catch (error) {
-            if (error instanceof Error && error.message) {
-                setStatusError(error.message);
-            } else {
-                setStatusError("Nie udało się uruchomić synchronizacji");
-            }
-        } finally {
-            setIsStarting(false);
-        }
-    }, []);
+        await runCompanySync(
+            ADMIN_API,
+            setIsStarting,
+            "Nie udało się uruchomić synchronizacji"
+        );
+    }, [runCompanySync]);
+
+    const startLocalSync = useCallback(async () => {
+        await runCompanySync(
+            LOCAL_ADMIN_API,
+            setIsStartingLocal,
+            "Nie udało się uruchomić lokalnej synchronizacji. Upewnij się, że backend działa na http://localhost:8000."
+        );
+    }, [runCompanySync]);
 
     const handleSearchSubmit = useCallback(
         (event: React.FormEvent<HTMLFormElement>) => {
@@ -3091,6 +3120,21 @@ const CompanySyncPanel = () => {
         selectedCompany?.employees !== undefined && selectedCompany?.employees !== null
             ? integerFormatter.format(selectedCompany.employees)
             : "—";
+    const symbolMappings = useMemo(
+        () =>
+            selectedCompany
+                ? [
+                      {
+                          label: "GPW",
+                          value: selectedCompany.symbol_gpw ?? selectedCompany.raw_symbol,
+                      },
+                      { label: "Stooq", value: selectedCompany.symbol_stooq ?? null },
+                      { label: "Yahoo Finance", value: selectedCompany.symbol_yahoo ?? null },
+                      { label: "Google Finance", value: selectedCompany.symbol_google ?? null },
+                  ]
+                : [],
+        [selectedCompany]
+    );
     const rawInsights = useMemo<CompanyRawInsights>(() => {
         if (!selectedCompany) {
             return { shareholding: [], companySize: null, facts: [] };
@@ -3817,6 +3861,15 @@ const CompanySyncPanel = () => {
                                 </button>
                                 <button
                                     type="button"
+                                    onClick={startLocalSync}
+                                    disabled={isStartingLocal}
+                                    title="Wymaga uruchomionego backendu pod adresem http://localhost:8000"
+                                    className="rounded-full bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    {isStartingLocal ? "Uruchamianie..." : "Uruchom lokalnie"}
+                                </button>
+                                <button
+                                    type="button"
                                     onClick={fetchStatus}
                                     className="rounded-full border border-soft px-4 py-2 text-sm font-semibold text-primary transition hover:border-primary/40 hover:text-primary"
                                 >
@@ -3851,6 +3904,11 @@ const CompanySyncPanel = () => {
                                         style={{ width: `${progressPercent}%` }}
                                     />
                                 </div>
+                                <p className="mt-4 text-xs text-subtle">
+                                    Aby zsynchronizować dane lokalnie, uruchom backend na adresie
+                                    <code className="mx-1 rounded bg-soft px-1 py-0.5 text-[10px]">http://localhost:8000</code>
+                                    i użyj przycisku „Uruchom lokalnie”.
+                                </p>
                                 <div className="mt-3 grid grid-cols-2 gap-3 text-xs text-subtle sm:grid-cols-4">
                                     <div>
                                         <span className="block text-[10px] uppercase tracking-wide text-subtle">
@@ -4338,6 +4396,25 @@ const CompanySyncPanel = () => {
                                     </span>
                                 </div>
                             </div>
+                            {symbolMappings.length > 0 && (
+                                <div className="rounded-lg border border-soft p-4">
+                                    <p className="text-[10px] uppercase tracking-wide text-subtle">
+                                        Symbole na platformach
+                                    </p>
+                                    <div className="mt-2 grid gap-3 text-sm text-subtle sm:grid-cols-2">
+                                        {symbolMappings.map(({ label, value }) => (
+                                            <div key={label}>
+                                                <span className="block text-[10px] uppercase tracking-wide text-subtle">
+                                                    {label}
+                                                </span>
+                                                <span className="text-base font-semibold text-primary">
+                                                    {value ?? "—"}
+                                                </span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
                             <div className="grid gap-3 sm:grid-cols-2">
                                 {HIGHLIGHT_FUNDAMENTALS.map(({ key, label }) => {
                                     const rawValue = selectedCompany.fundamentals?.[key] ?? null;

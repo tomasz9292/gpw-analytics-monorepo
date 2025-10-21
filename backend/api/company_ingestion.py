@@ -148,6 +148,13 @@ def _clean_string(value: Any) -> Optional[str]:
     return str(value)
 
 
+def _clean_symbol_value(value: Any) -> Optional[str]:
+    cleaned = _clean_string(value)
+    if cleaned is None:
+        return None
+    return cleaned.upper()
+
+
 def _is_blank(value: Any) -> bool:
     if value is None:
         return True
@@ -1283,6 +1290,31 @@ class CompanyDataHarvester:
         financial_data = fundamentals.get("financialData") if fundamentals else None
         stooq_data = stooq or {}
 
+        def _first_symbol_candidate(*candidates: Any) -> Optional[str]:
+            for candidate in candidates:
+                cleaned = _clean_symbol_value(candidate)
+                if cleaned:
+                    return cleaned
+            return None
+
+        raw_stooq_fields = (
+            stooq_data.get("raw_fields") if isinstance(stooq_data, dict) else None
+        )
+        stooq_symbol = _first_symbol_candidate(
+            stooq_data.get("stockTicker") if isinstance(stooq_data, dict) else None,
+            stooq_data.get("symbol") if isinstance(stooq_data, dict) else None,
+            raw_stooq_fields.get("Symbol") if isinstance(raw_stooq_fields, dict) else None,
+        )
+
+        yahoo_symbol = _first_symbol_candidate(
+            price_info.get("symbol") if isinstance(price_info, dict) else None,
+            fundamentals.get("symbol") if isinstance(fundamentals, dict) else None,
+        )
+
+        google_symbol = _first_symbol_candidate(
+            (google or {}).get("symbol") if isinstance(google, dict) else None,
+        )
+
         company_name = (
             _clean_string(base.get("companyName"))
             or _clean_string(price_info.get("longName") if price_info else None)
@@ -1372,6 +1404,10 @@ class CompanyDataHarvester:
             "symbol": raw_symbol,
             "ticker": raw_symbol,
             "code": raw_symbol,
+            "symbol_gpw": raw_symbol,
+            "symbol_stooq": stooq_symbol,
+            "symbol_yahoo": yahoo_symbol,
+            "symbol_google": google_symbol,
             "isin": _clean_string(base.get("isin"))
             or _clean_string(stooq_data.get("isin")),
             "name": company_name,
