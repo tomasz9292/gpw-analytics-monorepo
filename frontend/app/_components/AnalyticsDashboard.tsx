@@ -2531,9 +2531,10 @@ const CompanySyncPanel = () => {
         fetchCompanies();
     }, [fetchCompanies]);
 
-    const handleOhlcSync = useCallback(
-        async (event: React.FormEvent<HTMLFormElement>) => {
-            event.preventDefault();
+    const runOhlcSync = useCallback(
+        async (baseUrl: string, fallbackMessage: string) => {
+            const defaultMessage =
+                fallbackMessage || "Nie udało się uruchomić synchronizacji notowań";
             setOhlcIsSyncing(true);
             setOhlcError(null);
             setOhlcResult(null);
@@ -2587,7 +2588,7 @@ const CompanySyncPanel = () => {
                 if (trimmedStart) {
                     payload.start = trimmedStart;
                 }
-                const response = await fetch(`/api/admin/ohlc/sync/background`, {
+                const response = await fetch(`${baseUrl}/ohlc/sync/background`, {
                     method: "POST",
                     cache: "no-store",
                     headers: { "Content-Type": "application/json" },
@@ -2606,16 +2607,15 @@ const CompanySyncPanel = () => {
                         "error" in data &&
                         data.error &&
                         typeof (data as { error: unknown }).error === "string"
-                            ? ((data as { error: string }).error ||
-                              "Nie udało się uruchomić synchronizacji notowań")
-                            : "Nie udało się uruchomić synchronizacji notowań";
+                            ? ((data as { error: string }).error || defaultMessage)
+                            : defaultMessage;
                     throw new Error(message);
                 }
             } catch (error) {
                 const message =
                     error instanceof Error && error.message
                         ? error.message
-                        : "Nie udało się uruchomić synchronizacji notowań";
+                        : defaultMessage;
                 setOhlcError(message);
                 setOhlcProgress((prev) =>
                     prev
@@ -2641,6 +2641,24 @@ const CompanySyncPanel = () => {
             fetchOhlcProgress,
         ]
     );
+
+    const handleOhlcSync = useCallback(
+        (event: React.FormEvent<HTMLFormElement>) => {
+            event.preventDefault();
+            void runOhlcSync(
+                ADMIN_API,
+                "Nie udało się uruchomić synchronizacji notowań"
+            );
+        },
+        [runOhlcSync]
+    );
+
+    const handleOhlcSyncLocal = useCallback(() => {
+        void runOhlcSync(
+            LOCAL_ADMIN_API,
+            "Nie udało się uruchomić lokalnej synchronizacji. Upewnij się, że backend działa na http://localhost:8000."
+        );
+    }, [runOhlcSync]);
 
     const handleScheduleOnce = useCallback(
         async (event: React.FormEvent<HTMLFormElement>) => {
@@ -3478,6 +3496,15 @@ const CompanySyncPanel = () => {
                                     </button>
                                     <button
                                         type="button"
+                                        onClick={handleOhlcSyncLocal}
+                                        disabled={ohlcIsSyncing}
+                                        title="Wymaga uruchomionego backendu pod adresem http://localhost:8000"
+                                        className="rounded-full bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                        {ohlcIsSyncing ? "Synchronizowanie..." : "Uruchom lokalnie"}
+                                    </button>
+                                    <button
+                                        type="button"
                                         onClick={() => {
                                             setOhlcSymbolsInput("");
                                             setOhlcStartInput("");
@@ -3490,6 +3517,11 @@ const CompanySyncPanel = () => {
                                         Wyczyść formularz
                                     </button>
                                 </div>
+                                <p className="text-xs text-subtle">
+                                    Aby zsynchronizować dane lokalnie, uruchom backend na adresie
+                                    <code className="mx-1 rounded bg-soft px-1 py-0.5 text-[10px]">http://localhost:8000</code>
+                                    i użyj przycisku „Uruchom lokalnie”.
+                                </p>
                             </form>
                         </Card>
                         <Card
