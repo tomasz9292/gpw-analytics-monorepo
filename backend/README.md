@@ -2,6 +2,26 @@
 
 ## Szybki start (środowisko lokalne)
 
+### Wariant automatyczny (Docker Compose)
+
+> Wymagania: Docker + Docker Compose.
+
+1. Uruchom z katalogu głównego repozytorium:
+
+   ```bash
+   ./scripts/local-sync.sh
+   ```
+
+   Skrypt zbuduje obrazy, wystartuje ClickHouse i backend oraz poczeka aż
+   `http://localhost:8000/api/admin/ping` zacznie odpowiadać. W trakcie działania
+   pokaże logi backendu. Zakończ pracę kombinacją <kbd>Ctrl</kbd> + <kbd>C</kbd> —
+   środowisko zostanie automatycznie zatrzymane i wyczyszczone.
+
+2. W panelu administracyjnym kliknij **„Uruchom lokalnie”**, aby rozpocząć
+   synchronizację danych historycznych.
+
+### Wariant manualny (bez Dockera)
+
 1. **Zainstaluj zależności Pythona** (najlepiej wirtualne środowisko):
 
    ```bash

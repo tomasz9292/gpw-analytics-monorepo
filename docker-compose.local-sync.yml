@@ -1,0 +1,30 @@
+version: "3.9"
+
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:23
+    restart: unless-stopped
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client --query 'SELECT 1'"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  backend:
+    build:
+      context: ./backend
+    environment:
+      CLICKHOUSE_URL: http://clickhouse:8123/default
+      TABLE_OHLC: ${TABLE_OHLC:-ohlc}
+      TABLE_COMPANIES: ${TABLE_COMPANIES:-companies}
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    restart: unless-stopped
