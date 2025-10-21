@@ -133,6 +133,8 @@ type LocalClickhousePersistedConfig = {
     ca?: string;
 };
 
+type LocalClickhouseEnsureResult = { ok: true } | { ok: false; error: string };
+
 const buildScoreComponents = (rules: ScoreBuilderRule[]): ScoreComponentRequest[] =>
     rules.reduce<ScoreComponentRequest[]>((acc, rule) => {
         const option = findScoreMetric(rule.metric);
@@ -2306,7 +2308,7 @@ const CompanySyncPanel = () => {
         return parsed.toLocaleString("pl-PL", { hour12: false });
     };
 
-    const applyLocalClickhouseConfig = useCallback(async () => {
+    const applyLocalClickhouseConfig = useCallback(async (): Promise<LocalClickhouseEnsureResult> => {
         const trimmedUrl = localClickhouseUrl.trim();
         const trimmedHost = localClickhouseHost.trim();
         const trimmedPort = localClickhousePort.trim();
@@ -2320,11 +2322,11 @@ const CompanySyncPanel = () => {
             (localClickhouseMode === "manual" && trimmedHost.length > 0);
 
         if (!requiresConfig) {
-            setLocalClickhouseError(
-                "Podaj konfigurację ClickHouse lub przywróć ustawienia domyślne."
-            );
+            const error =
+                "Podaj konfigurację ClickHouse lub przywróć ustawienia domyślne.";
+            setLocalClickhouseError(error);
             setLocalClickhouseSuccess(null);
-            return false;
+            return { ok: false, error };
         }
 
         if (trimmedPort.length > 0) {
@@ -2334,11 +2336,10 @@ const CompanySyncPanel = () => {
                 portNumber <= 0 ||
                 portNumber > 65535
             ) {
-                setLocalClickhouseError(
-                    "Port ClickHouse musi być liczbą z zakresu 1-65535."
-                );
+                const error = "Port ClickHouse musi być liczbą z zakresu 1-65535.";
+                setLocalClickhouseError(error);
                 setLocalClickhouseSuccess(null);
-                return false;
+                return { ok: false, error };
             }
         }
 
@@ -2417,7 +2418,7 @@ const CompanySyncPanel = () => {
             } catch {
                 // Ignorujemy błąd zapisu w localStorage.
             }
-            return true;
+            return { ok: true };
         } catch (error) {
             const message = resolveErrorMessage(
                 error,
@@ -2428,7 +2429,7 @@ const CompanySyncPanel = () => {
             if (isNetworkError(error)) {
                 setLocalClickhouseBackendReachable(false);
             }
-            return false;
+            return { ok: false, error: message };
         } finally {
             setLocalClickhouseSaving(false);
         }
@@ -2445,19 +2446,19 @@ const CompanySyncPanel = () => {
         localClickhouseCa,
     ]);
 
-    const ensureLocalClickhouseConfig = useCallback(async () => {
+    const ensureLocalClickhouseConfig = useCallback(async (): Promise<LocalClickhouseEnsureResult> => {
         const trimmedUrl = localClickhouseUrl.trim();
         const trimmedHost = localClickhouseHost.trim();
         const requiresConfig =
             (localClickhouseMode === "url" && trimmedUrl.length > 0) ||
             (localClickhouseMode === "manual" && trimmedHost.length > 0);
         if (!requiresConfig) {
-            return true;
+            return { ok: true };
         }
         if (localClickhouseDirty || !localClickhouseAppliedAt) {
             return applyLocalClickhouseConfig();
         }
-        return true;
+        return { ok: true };
     }, [
         applyLocalClickhouseConfig,
         localClickhouseMode,
@@ -2896,12 +2897,9 @@ const CompanySyncPanel = () => {
     }, [runCompanySync]);
 
     const startLocalSync = useCallback(async () => {
-        const ok = await ensureLocalClickhouseConfig();
-        if (!ok) {
-            setStatusError(
-                localClickhouseError ||
-                    "Nie udało się przygotować konfiguracji ClickHouse dla lokalnej synchronizacji."
-            );
+        const result = await ensureLocalClickhouseConfig();
+        if (!result.ok) {
+            setStatusError(result.error);
             return;
         }
         await runCompanySync(
@@ -2909,11 +2907,7 @@ const CompanySyncPanel = () => {
             setIsStartingLocal,
             "Nie udało się uruchomić lokalnej synchronizacji. Upewnij się, że backend działa na http://localhost:8000."
         );
-    }, [
-        ensureLocalClickhouseConfig,
-        runCompanySync,
-        localClickhouseError,
-    ]);
+    }, [ensureLocalClickhouseConfig, runCompanySync]);
 
     const handleSearchSubmit = useCallback(
         (event: React.FormEvent<HTMLFormElement>) => {
@@ -3052,23 +3046,16 @@ const CompanySyncPanel = () => {
     );
 
     const handleOhlcSyncLocal = useCallback(async () => {
-        const ok = await ensureLocalClickhouseConfig();
-        if (!ok) {
-            setOhlcError(
-                localClickhouseError ||
-                    "Nie udało się przygotować konfiguracji ClickHouse dla lokalnej synchronizacji."
-            );
+        const result = await ensureLocalClickhouseConfig();
+        if (!result.ok) {
+            setOhlcError(result.error);
             return;
         }
         await runOhlcSync(
             LOCAL_ADMIN_API,
             "Nie udało się uruchomić lokalnej synchronizacji. Upewnij się, że backend działa na http://localhost:8000."
         );
-    }, [
-        ensureLocalClickhouseConfig,
-        runOhlcSync,
-        localClickhouseError,
-    ]);
+    }, [ensureLocalClickhouseConfig, runOhlcSync]);
 
     const handleScheduleOnce = useCallback(
         async (event: React.FormEvent<HTMLFormElement>) => {
