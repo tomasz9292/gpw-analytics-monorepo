@@ -16,7 +16,7 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 import clickhouse_connect
 import keyring
@@ -27,6 +27,7 @@ from tkinter import (
     BooleanVar,
     END,
     IntVar,
+    Listbox,
     StringVar,
     Tk,
     filedialog,
@@ -110,10 +111,6 @@ class DownloadResults:
         self.output_files.clear()
 
 
-class DownloadError(RuntimeError):
-    """Raised when download fails."""
-
-
 class App:
     def __init__(self) -> None:
         self.root = Tk()
@@ -154,6 +151,21 @@ class App:
         self.db_password_cache: Optional[str] = None
 
         self.results = DownloadResults()
+        self.progress_status_var = StringVar(value="Brak aktywnej synchronizacji")
+        self.progress_percent_var = IntVar(value=0)
+        self.progress_percent_text_var = StringVar(value="0%")
+        self.progress_processed_var = IntVar(value=0)
+        self.progress_total_var = IntVar(value=0)
+        self.progress_remaining_var = IntVar(value=0)
+        self.progress_saved_records_var = IntVar(value=0)
+        self.progress_downloaded_records_var = IntVar(value=0)
+        self.progress_errors_var = IntVar(value=0)
+        self.progress_files_var = IntVar(value=0)
+        self.progress_start_time_var = StringVar(value="–")
+        self.progress_end_time_var = StringVar(value="–")
+        self.progress_error_messages: List[str] = []
+        self.progress_bar: Optional[ttk.Progressbar] = None
+        self.progress_errors_listbox: Optional[Listbox] = None
 
         self._load_config()
         self._build_ui()
@@ -351,6 +363,78 @@ class App:
         ttk.Button(actions, text="Pobierz dane", command=self._start_download, style="Accent.TButton").pack(side="left")
         ttk.Button(actions, text="Otwórz katalog", command=self._open_output_dir).pack(side="left", padx=(8, 0))
 
+        progress = ttk.LabelFrame(container, text="Panel synchronizacji", style="Card.TLabelframe")
+        progress.pack(fill="both", expand=True, padx=4, pady=(0, 8))
+
+        header = ttk.Frame(progress, style="Inline.TFrame")
+        header.pack(fill="x")
+        ttk.Label(
+            header,
+            textvariable=self.progress_status_var,
+            font=("Segoe UI Semibold", 11),
+        ).pack(side="left", anchor="w")
+        ttk.Label(
+            header,
+            textvariable=self.progress_percent_text_var,
+            font=("Segoe UI Semibold", 11),
+        ).pack(side="right", anchor="e")
+
+        self.progress_bar = ttk.Progressbar(progress, mode="determinate", maximum=100)
+        self.progress_bar.pack(fill="x", pady=(8, 4))
+
+        stats_grid = ttk.Frame(progress, style="Inline.TFrame")
+        stats_grid.pack(fill="x", pady=(4, 8))
+
+        metrics = [
+            ("PRZETWORZONO", self.progress_processed_var, 0, 0),
+            ("ZAPISANO", self.progress_saved_records_var, 0, 1),
+            ("DO POBRANIA", self.progress_remaining_var, 0, 2),
+            ("BŁĘDY", self.progress_errors_var, 0, 3),
+            ("START", self.progress_start_time_var, 1, 0),
+            ("KONIEC", self.progress_end_time_var, 1, 1),
+            ("POBRANO", self.progress_downloaded_records_var, 1, 2),
+            ("PLIKI", self.progress_files_var, 1, 3),
+        ]
+
+        for label_text, variable, row, column in metrics:
+            container_frame = ttk.Frame(stats_grid, style="Inline.TFrame")
+            container_frame.grid(row=row, column=column, sticky="nsew", padx=6, pady=4)
+            ttk.Label(
+                container_frame,
+                text=label_text,
+                style="SectionHeader.TLabel",
+            ).pack(anchor="w")
+            ttk.Label(
+                container_frame,
+                textvariable=variable,
+                font=("Segoe UI Semibold", 16),
+            ).pack(anchor="w", pady=(2, 0))
+
+        for index in range(4):
+            stats_grid.columnconfigure(index, weight=1)
+
+        ttk.Label(
+            progress,
+            text="Aby zsynchronizować dane, wybierz zakres oraz spółki, a następnie kliknij 'Pobierz dane'.",
+            wraplength=560,
+            font=("Segoe UI", 9),
+        ).pack(anchor="w", padx=4)
+
+        errors_frame = ttk.Frame(progress, style="Inline.TFrame")
+        errors_frame.pack(fill="both", expand=True, pady=(12, 0))
+        ttk.Label(errors_frame, text="Ostatnie błędy", style="SectionHeader.TLabel").pack(anchor="w")
+        self.progress_errors_listbox = Listbox(errors_frame, height=5, activestyle="none")
+        self.progress_errors_listbox.pack(fill="both", expand=True, pady=(4, 0))
+        self.progress_errors_listbox.configure(
+            bg="#ffffff",
+            fg="#b91c1c",
+            bd=0,
+            highlightthickness=0,
+            selectbackground="#fee2e2",
+            selectforeground="#b91c1c",
+        )
+        self.progress_errors_listbox.insert(END, "Brak błędów podczas synchronizacji.")
+
     def _build_db_tab(self, parent: ttk.Frame) -> None:
         container = ttk.Frame(parent, style="Content.TFrame")
         container.pack(fill="both", expand=True)
@@ -385,6 +469,110 @@ class App:
 
     # ------------------------------------------------------------------
     # Helpers
+    def _safe_update(self, callback: Callable[[], None]) -> None:
+        try:
+            self.root.after(0, callback)
+        except RuntimeError:
+            pass
+
+    def _refresh_error_listbox(self) -> None:
+        if not self.progress_errors_listbox:
+            return
+        self.progress_errors_listbox.delete(0, END)
+        if not self.progress_error_messages:
+            self.progress_errors_listbox.insert(END, "Brak błędów podczas synchronizacji.")
+        else:
+            for message in self.progress_error_messages[-8:]:
+                self.progress_errors_listbox.insert(END, message)
+
+    def _reset_progress(self, total_tasks: int) -> None:
+        timestamp = datetime.now().strftime("%d.%m.%Y %H:%M")
+
+        def reset() -> None:
+            total = max(total_tasks, 0)
+            self.progress_total_var.set(total)
+            self.progress_processed_var.set(0)
+            self.progress_remaining_var.set(total)
+            self.progress_downloaded_records_var.set(0)
+            self.progress_saved_records_var.set(0)
+            self.progress_errors_var.set(0)
+            self.progress_files_var.set(len(self.results.output_files))
+            self.progress_percent_var.set(0)
+            self.progress_percent_text_var.set("0%")
+            self.progress_status_var.set(
+                "Trwa synchronizacja danych" if total > 0 else "Brak aktywnej synchronizacji"
+            )
+            self.progress_start_time_var.set(timestamp if total > 0 else "–")
+            self.progress_end_time_var.set("–")
+            if self.progress_bar:
+                self.progress_bar["value"] = 0
+            self.progress_error_messages.clear()
+            self._refresh_error_listbox()
+
+        self._safe_update(reset)
+
+    def _increment_progress(self, processed_delta: int = 0, records_delta: int = 0) -> None:
+
+        def update() -> None:
+            total = max(self.progress_total_var.get(), 0)
+            processed = max(self.progress_processed_var.get() + processed_delta, 0)
+            if processed > total:
+                total = processed
+                self.progress_total_var.set(total)
+            self.progress_processed_var.set(processed)
+            remaining = max(total - processed, 0)
+            self.progress_remaining_var.set(remaining)
+
+            records = max(self.progress_downloaded_records_var.get() + records_delta, 0)
+            self.progress_downloaded_records_var.set(records)
+            self.progress_saved_records_var.set(records)
+
+            percent = int(round((processed / total) * 100)) if total else 0
+            self.progress_percent_var.set(percent)
+            self.progress_percent_text_var.set(f"{percent}%")
+            if self.progress_bar:
+                self.progress_bar["value"] = percent
+
+        self._safe_update(update)
+
+    def _set_status(self, message: str) -> None:
+        self._safe_update(lambda: self.progress_status_var.set(message))
+
+    def _append_error_message(self, message: str) -> None:
+
+        def update() -> None:
+            self.progress_error_messages.append(message)
+            self.progress_errors_var.set(len(self.progress_error_messages))
+            self._refresh_error_listbox()
+
+        self._safe_update(update)
+
+    def _register_output_file(self) -> None:
+        self._safe_update(lambda: self.progress_files_var.set(len(self.results.output_files)))
+
+    def _complete_progress(self, success: bool) -> None:
+        finished = datetime.now().strftime("%d.%m.%Y %H:%M")
+
+        def update() -> None:
+            total = max(self.progress_total_var.get(), 0)
+            processed = max(self.progress_processed_var.get(), 0)
+            if total and self.progress_percent_var.get() == 0 and processed:
+                percent = int(round((processed / total) * 100))
+                self.progress_percent_var.set(percent)
+                self.progress_percent_text_var.set(f"{percent}%")
+                if self.progress_bar:
+                    self.progress_bar["value"] = percent
+            if success and not self.progress_error_messages:
+                status = "Synchronizacja zakończona powodzeniem"
+            elif success:
+                status = "Zakończono z ostrzeżeniami"
+            else:
+                status = "Synchronizacja przerwana"
+            self.progress_status_var.set(status)
+            self.progress_end_time_var.set(finished)
+
+        self._safe_update(update)
+
     def _choose_output_dir(self) -> None:
         directory = filedialog.askdirectory(initialdir=self.output_dir_var.get())
         if directory:
@@ -532,40 +720,95 @@ class App:
     def _download_worker(self) -> None:
         self.results.clear()
         symbols = self._collect_symbols()
-        self._log(f"Rozpoczynam pobieranie dla: {', '.join(symbols)}")
+        if not symbols:
+            self._log("Brak spółek do pobrania. Uzupełnij listę symboli.")
+            messagebox.showinfo("Pobieranie", "Brak spółek do pobrania. Uzupełnij listę symboli.")
+            self._reset_progress(0)
+            return
+
         start_date = self._parse_date(self.start_date_var.get())
         end_date = self._parse_date(self.end_date_var.get())
         output_dir = Path(self.output_dir_var.get())
         output_dir.mkdir(parents=True, exist_ok=True)
 
+        selected_flags = [
+            self.fetch_history_var.get(),
+            self.fetch_companies_var.get(),
+            self.fetch_news_var.get(),
+        ]
+        total_tasks = len(symbols) * sum(1 for flag in selected_flags if flag)
+        self._reset_progress(total_tasks)
+        if total_tasks == 0:
+            self._log("Nie wybrano żadnych danych do pobrania.")
+            messagebox.showinfo("Pobieranie", "Zaznacz co najmniej jeden rodzaj danych do pobrania.")
+            return
+
+        self._log("Rozpoczynam pobieranie danych dla: " + ", ".join(symbols))
+
+        success_any = False
+        unexpected_error: Optional[Exception] = None
+
         try:
             if self.fetch_history_var.get():
-                self._download_ohlc(symbols, start_date, end_date, output_dir)
+                self._set_status("Synchronizacja notowań historycznych")
+                success_any = self._download_ohlc(symbols, start_date, end_date, output_dir) or success_any
             if self.fetch_companies_var.get():
-                self._download_companies(symbols, output_dir)
+                self._set_status("Synchronizacja profili spółek")
+                success_any = self._download_companies(symbols, output_dir) or success_any
             if self.fetch_news_var.get():
-                self._download_news(symbols, output_dir)
-            self._log("Pobieranie zakończone powodzeniem.")
-        except DownloadError as exc:
-            self._log(str(exc))
-            messagebox.showerror("Błąd", str(exc))
+                self._set_status("Synchronizacja wiadomości spółek")
+                success_any = self._download_news(symbols, output_dir) or success_any
+        except Exception as exc:
+            unexpected_error = exc
+            error_message = f"Nieoczekiwany błąd pobierania: {exc}"
+            self._log(error_message)
+            self._append_error_message(error_message)
+            messagebox.showerror("Pobieranie", error_message)
+        finally:
+            self._complete_progress(success_any and unexpected_error is None)
+            if unexpected_error is None:
+                if success_any:
+                    self._log("Pobieranie zakończono. Pliki zapisano w katalogu wynikowym.")
+                else:
+                    self._log("Pobieranie zakończone – brak zapisanych danych.")
 
     def _download_ohlc(
         self, symbols: List[str], start: Optional[date], end: Optional[date], output_dir: Path
-    ) -> None:
+    ) -> bool:
         harvester = StooqOhlcHarvester()
         rows: List[OhlcRow] = []
-        for symbol in symbols:
+        success = False
+        for index, symbol in enumerate(symbols):
             self._log(f"Pobieram notowania {symbol}")
+            processed_rows = 0
             try:
                 history = harvester.fetch_history(symbol)
+                filtered = [row for row in history if self._is_in_range(row.date, start, end)]
+                processed_rows = len(filtered)
+                if processed_rows == 0:
+                    warning = f"Brak notowań {symbol} w podanym zakresie."
+                    self._log(warning)
+                    self._append_error_message(warning)
+                else:
+                    rows.extend(filtered)
+                    success = True
+                    self._log(f"Pobrano {processed_rows} wierszy notowań {symbol}.")
             except requests.HTTPError as exc:
-                raise DownloadError(f"Błąd pobierania notowań {symbol}: {exc}") from exc
-            filtered = [row for row in history if self._is_in_range(row.date, start, end)]
-            rows.extend(filtered)
-            self._maybe_sleep()
-        if not rows:
-            raise DownloadError("Brak danych notowań w podanym zakresie.")
+                error_message = f"Błąd pobierania notowań {symbol}: {exc}"
+                self._log(error_message)
+                self._append_error_message(error_message)
+            except Exception as exc:
+                error_message = f"Nieoczekiwany błąd notowań {symbol}: {exc}"
+                self._log(error_message)
+                self._append_error_message(error_message)
+            finally:
+                self._increment_progress(1, processed_rows)
+                if index < len(symbols) - 1:
+                    self._maybe_sleep()
+        if not success:
+            self._log("Nie pobrano żadnych notowań dla wybranych spółek.")
+            messagebox.showwarning("Notowania", "Nie udało się pobrać notowań w wybranym zakresie.")
+            return False
         rows.sort(key=lambda row: (row.symbol, row.date))
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         csv_path = output_dir / f"ohlc_{timestamp}.csv"
@@ -584,75 +827,111 @@ class App:
                         row.volume or "",
                     ]
                 )
-        self._log(f"Zapisano notowania do pliku {csv_path}")
         self.results.ohlc = rows
         self.results.output_files.append(csv_path)
+        self._register_output_file()
+        self._log(f"Zapisano notowania do pliku {csv_path}")
+        return True
 
-    def _download_companies(self, symbols: List[str], output_dir: Path) -> None:
+    def _download_companies(self, symbols: List[str], output_dir: Path) -> bool:
         harvester = CompanyDataHarvester()
         rows: List[Dict[str, object]] = []
-        for symbol in symbols:
+        success = False
+        for index, symbol in enumerate(symbols):
             self._log(f"Pobieram profil spółki {symbol}")
+            saved = False
             try:
                 profile = harvester.fetch_stooq_profile(symbol)
             except Exception as exc:
-                raise DownloadError(f"Błąd pobierania profilu {symbol}: {exc}") from exc
-            founded = profile.get("founded")
-            employees = profile.get("employees")
-            rows.append(
-                {
-                    "symbol": symbol,
-                    "company_name": profile.get("companyName"),
-                    "short_name": profile.get("shortName"),
-                    "isin": profile.get("isin"),
-                    "website": profile.get("website"),
-                    "listing_date": profile.get("listing_date"),
-                    "founded": self._to_int(founded),
-                    "employees": self._to_int(employees),
-                    "profile": profile.get("profile"),
-                    "source_url": profile.get("url"),
-                    "retrieved_at": datetime.utcnow().isoformat(),
-                }
-            )
-            self._maybe_sleep()
-        if not rows:
-            raise DownloadError("Nie udało się pobrać profili spółek.")
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        json_path = output_dir / f"companies_{timestamp}.json"
-        json_path.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
-        self._log(f"Zapisano profile spółek do pliku {json_path}")
-        self.results.companies = rows
-        self.results.output_files.append(json_path)
-
-    def _download_news(self, symbols: List[str], output_dir: Path) -> None:
-        harvester = StooqCompanyNewsHarvester()
-        rows: List[Dict[str, object]] = []
-        limit = max(1, int(self.news_limit_var.get()))
-        for symbol in symbols:
-            self._log(f"Pobieram wiadomości {symbol}")
-            try:
-                news_items = harvester.fetch_news(symbol, limit=limit)
-            except Exception as exc:
-                raise DownloadError(f"Błąd pobierania wiadomości {symbol}: {exc}") from exc
-            for item in news_items:
+                error_message = f"Błąd pobierania profilu {symbol}: {exc}"
+                self._log(error_message)
+                self._append_error_message(error_message)
+            else:
+                founded = profile.get("founded")
+                employees = profile.get("employees")
                 rows.append(
                     {
                         "symbol": symbol,
-                        "title": item.title,
-                        "url": item.url,
-                        "published_at": item.published_at,
-                        "source": "Stooq",
+                        "company_name": profile.get("companyName"),
+                        "short_name": profile.get("shortName"),
+                        "isin": profile.get("isin"),
+                        "website": profile.get("website"),
+                        "listing_date": profile.get("listing_date"),
+                        "founded": self._to_int(founded),
+                        "employees": self._to_int(employees),
+                        "profile": profile.get("profile"),
+                        "source_url": profile.get("url"),
+                        "retrieved_at": datetime.utcnow().isoformat(),
                     }
                 )
-            self._maybe_sleep()
-        if not rows:
-            raise DownloadError("Nie znaleziono wiadomości dla wybranych spółek.")
+                saved = True
+                success = True
+                self._log(f"Pobrano profil spółki {symbol}")
+            finally:
+                self._increment_progress(1, 1 if saved else 0)
+                if index < len(symbols) - 1:
+                    self._maybe_sleep()
+        if not success:
+            self._log("Nie pobrano żadnych profili spółek.")
+            messagebox.showwarning("Profile spółek", "Nie udało się pobrać profili spółek.")
+            return False
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        json_path = output_dir / f"companies_{timestamp}.json"
+        json_path.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.results.companies = rows
+        self.results.output_files.append(json_path)
+        self._register_output_file()
+        self._log(f"Zapisano profile spółek do pliku {json_path}")
+        return True
+
+    def _download_news(self, symbols: List[str], output_dir: Path) -> bool:
+        harvester = StooqCompanyNewsHarvester()
+        rows: List[Dict[str, object]] = []
+        limit = max(1, int(self.news_limit_var.get()))
+        success = False
+        for index, symbol in enumerate(symbols):
+            self._log(f"Pobieram wiadomości {symbol}")
+            processed_rows = 0
+            try:
+                news_items = harvester.fetch_news(symbol, limit=limit)
+                processed_rows = len(news_items)
+                if processed_rows == 0:
+                    info = f"Brak wiadomości dla {symbol}."
+                    self._log(info)
+                    self._append_error_message(info)
+                else:
+                    for item in news_items:
+                        rows.append(
+                            {
+                                "symbol": symbol,
+                                "title": item.title,
+                                "url": item.url,
+                                "published_at": item.published_at,
+                                "source": "Stooq",
+                            }
+                        )
+                    success = True
+                    self._log(f"Pobrano {processed_rows} wiadomości dla {symbol}.")
+            except Exception as exc:
+                error_message = f"Błąd pobierania wiadomości {symbol}: {exc}"
+                self._log(error_message)
+                self._append_error_message(error_message)
+            finally:
+                self._increment_progress(1, processed_rows)
+                if index < len(symbols) - 1:
+                    self._maybe_sleep()
+        if not success:
+            self._log("Nie znaleziono wiadomości dla wybranych spółek.")
+            messagebox.showwarning("Wiadomości", "Nie znaleziono wiadomości dla wybranych spółek.")
+            return False
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         json_path = output_dir / f"news_{timestamp}.json"
         json_path.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
-        self._log(f"Zapisano wiadomości do pliku {json_path}")
         self.results.news = rows
         self.results.output_files.append(json_path)
+        self._register_output_file()
+        self._log(f"Zapisano wiadomości do pliku {json_path}")
+        return True
 
     def _maybe_sleep(self) -> None:
         if self.random_delay_var.get():
