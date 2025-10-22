@@ -1360,6 +1360,72 @@ async function fetchQuotes(symbol: string, start = "2015-01-01"): Promise<Row[]>
     return r.json();
 }
 
+class PortfolioApiError extends Error {
+    status: number;
+
+    constructor(status: number, message: string) {
+        super(message);
+        this.name = "PortfolioApiError";
+        this.status = status;
+    }
+}
+
+const postPortfolioEndpoint = async (
+    endpoint: string,
+    payload: Record<string, unknown>
+): Promise<PortfolioResp> => {
+    let response: Response;
+    try {
+        response = await fetch(endpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+        });
+    } catch (error) {
+        throw new PortfolioApiError(
+            0,
+            resolveErrorMessage(
+                error,
+                "Nie udało się połączyć z serwerem symulatora portfela."
+            )
+        );
+    }
+
+    if (!response.ok) {
+        let message = "";
+        try {
+            message = await response.text();
+        } catch {
+            // ignore
+        }
+        throw new PortfolioApiError(
+            response.status,
+            message || `API ${endpoint} ${response.status}`
+        );
+    }
+
+    const json = await response.json();
+    return normalizePortfolioResponse(json);
+};
+
+const requestPortfolioSimulation = async (
+    payload: Record<string, unknown>
+): Promise<PortfolioResp> => {
+    try {
+        return await postPortfolioEndpoint("/api/portfolio/simulate", payload);
+    } catch (error) {
+        if (
+            error instanceof PortfolioApiError &&
+            error.status !== 0 &&
+            error.status !== 404
+        ) {
+            throw error;
+        }
+    }
+
+    return postPortfolioEndpoint("/api/backtest/portfolio", payload);
+};
+
 async function backtestPortfolio(
     symbols: string[],
     weightsPct: number[],
@@ -1404,24 +1470,7 @@ async function backtestPortfolio(
         manual: manualPayload,
     });
 
-    const response = await fetch(`/api/backtest/portfolio`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-    });
-
-    if (!response.ok) {
-        let message = "";
-        try {
-            message = await response.text();
-        } catch {
-            // ignore
-        }
-        throw new Error(message || `API /backtest/portfolio ${response.status}`);
-    }
-
-    const json = await response.json();
-    return normalizePortfolioResponse(json);
+    return requestPortfolioSimulation(payload);
 }
 
 
@@ -1608,7 +1657,14 @@ function normalizePortfolioResponse(raw: unknown): PortfolioResp {
     const maxDrawdown =
         pickNumber(statsSources, ["max_drawdown", "max_dd", "max_drawdown_pct", "worst_drawdown"]) ?? 0;
     const volatility =
-        pickNumber(statsSources, ["volatility", "stdev", "std_dev", "std", "annualized_volatility"]) ?? 0;
+        pickNumber(statsSources, [
+            "volatility",
+            "stdev",
+            "std_dev",
+            "std",
+            "annualized_volatility",
+            "volatility_pct",
+        ]) ?? 0;
     const sharpe = pickNumber(statsSources, ["sharpe", "sharpe_ratio"]) ?? 0;
     const lastValue =
         pickNumber(statsSources, ["last_value", "final_value", "ending_value", "last_equity"]) ??
@@ -1620,7 +1676,13 @@ function normalizePortfolioResponse(raw: unknown): PortfolioResp {
         volatility,
         sharpe,
         last_value: lastValue,
-        total_return: pickNumber(statsSources, ["total_return", "return", "cumulative_return", "total_pct"]),
+        total_return: pickNumber(statsSources, [
+            "total_return",
+            "return",
+            "cumulative_return",
+            "total_pct",
+            "total_return_pct",
+        ]),
         best_year: pickNumber(statsSources, ["best_year", "best_year_return", "best_annual_return"]),
         worst_year: pickNumber(statsSources, ["worst_year", "worst_year_return", "worst_annual_return"]),
         turnover: pickNumber(statsSources, ["turnover", "turnover_pct", "turnover_ratio"]),
