@@ -8,7 +8,30 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $backendRoot = Split-Path -Parent $scriptDir
 $distDir = if ($OutputDir) { $OutputDir } else { Join-Path $scriptDir "dist" }
 $buildVenv = Join-Path $scriptDir ".venv-build"
-$python = "python"
+$pythonCandidates = @("python", "py")
+$pythonCommand = $null
+$pythonArgs = @()
+
+foreach ($candidate in $pythonCandidates) {
+    $commandInfo = Get-Command $candidate -ErrorAction SilentlyContinue
+    if ($commandInfo) {
+        $pythonCommand = $commandInfo.Source
+        if ($candidate -eq "py") {
+            $pythonArgs = @("-3")
+        }
+        break
+    }
+}
+
+if (-not $pythonCommand) {
+    throw "Python 3 is required but was not found on PATH. Please install it and try again."
+}
+
+$pythonDisplay = $pythonCommand
+if ($pythonArgs.Count -gt 0) {
+    $pythonDisplay = "$pythonDisplay $($pythonArgs -join ' ')"
+}
+Write-Host "Using Python interpreter: $pythonDisplay"
 $iconBase64Path = Join-Path $scriptDir "resources\gpw_agent_icon.b64"
 $iconPath = Join-Path $scriptDir "resources\gpw-agent.ico"
 
@@ -22,7 +45,7 @@ if (Test-Path $iconBase64Path) {
 
 if (-not (Test-Path $buildVenv)) {
     Write-Host "Creating virtual environment..."
-    & $python -m venv $buildVenv
+    & $pythonCommand @pythonArgs -m venv $buildVenv
 }
 
 $venvPython = Join-Path $buildVenv "Scripts\python.exe"
