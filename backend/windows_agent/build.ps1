@@ -14,13 +14,21 @@ $pythonArgs = @()
 
 foreach ($candidate in $pythonCandidates) {
     $commandInfo = Get-Command $candidate -ErrorAction SilentlyContinue
-    if ($commandInfo) {
-        $pythonCommand = $commandInfo.Source
-        if ($candidate -eq "py") {
-            $pythonArgs = @("-3")
-        }
-        break
+    if (-not $commandInfo) {
+        continue
     }
+
+    $commandPath = $commandInfo.Source
+    if ($commandPath -like "*Microsoft\\WindowsApps*") {
+        Write-Host "Ignoring Windows Store Python alias at $commandPath"
+        continue
+    }
+
+    $pythonCommand = $commandPath
+    if ($candidate -eq "py") {
+        $pythonArgs = @("-3")
+    }
+    break
 }
 
 if (-not $pythonCommand) {
