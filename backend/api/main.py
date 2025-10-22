@@ -11,15 +11,17 @@ import textwrap
 import unicodedata
 from datetime import date, datetime, timedelta, timezone
 from math import sqrt
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 from typing import Literal
 from uuid import uuid4
 
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
+from bisect import bisect_right
 
 import clickhouse_connect
 import threading
 from decimal import Decimal
+from collections import OrderedDict
 from fastapi import APIRouter, Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.params import Query as QueryParam
 from fastapi.middleware.cors import CORSMiddleware
@@ -1961,6 +1963,7 @@ class AutoSelectionConfig(BaseModel):
     weighting: str = Field("equal", pattern="^(equal|score)$")
     direction: str = Field("desc", pattern="^(asc|desc)$")
     min_score: Optional[float] = Field(default=None)
+    max_score: Optional[float] = Field(default=None)
 
 
 class BacktestPortfolioRequest(BaseModel):
@@ -3090,19 +3093,11 @@ def _compute_metric_value(
     return None
 
 
-def _calculate_symbol_score(
-    ch_client,
-    raw_symbol: str,
+def _calculate_score_from_prepared(
+    closes: Sequence[Tuple[date, float]],
     components: List[ScoreComponent],
     include_metrics: bool = False,
-    *,
-    preloaded_closes: Optional[List[Tuple[str, float]]] = None,
 ) -> Optional[Tuple[float, Dict[str, float]] | float]:
-    if preloaded_closes is not None:
-        closes_raw = preloaded_closes
-    else:
-        closes_raw = _fetch_close_history(ch_client, raw_symbol)
-    closes = _prepare_metric_series(closes_raw)
     if not closes:
         return None
 
@@ -3129,6 +3124,27 @@ def _calculate_symbol_score(
     if include_metrics:
         return score, metrics
     return score
+
+
+def _calculate_symbol_score(
+    ch_client,
+    raw_symbol: str,
+    components: List[ScoreComponent],
+    include_metrics: bool = False,
+    *,
+    preloaded_closes: Optional[List[Tuple[str, float]]] = None,
+) -> Optional[Tuple[float, Dict[str, float]] | float]:
+    if preloaded_closes is not None:
+        closes_raw = preloaded_closes
+    else:
+        closes_raw = _fetch_close_history(ch_client, raw_symbol)
+    closes = _prepare_metric_series(closes_raw)
+    if not closes:
+        return None
+
+    return _calculate_score_from_prepared(
+        closes, components, include_metrics=include_metrics
+    )
 
 
 def _collect_all_company_symbols(ch_client) -> Optional[List[str]]:
@@ -3368,6 +3384,9 @@ def _compute_backtest(
     fee_pct: float = 0.0,
     threshold_pct: float = 0.0,
     cash_weight: float = 0.0,
+    dynamic_allocator: Optional[
+        Callable[[str, List[str]], Tuple[Dict[str, float], float, Optional[str]]]
+    ] = None,
 ) -> Tuple[List[PortfolioPoint], PortfolioStats, List[PortfolioRebalanceEvent]]:
     """
     Prosty backtest na dziennych close'ach z rebalancingiem.
@@ -3401,8 +3420,8 @@ def _compute_backtest(
     for sym, weight in zip(closes_map.keys(), weights_pct):
         base_weights[sym] = max(float(weight or 0.0), 0.0)
 
-    cash_weight = min(max(float(cash_weight), 0.0), 1.0)
-    investable_limit = max(0.0, 1.0 - cash_weight)
+    default_cash_weight = min(max(float(cash_weight), 0.0), 1.0)
+    investable_limit = max(0.0, 1.0 - default_cash_weight)
     investable_total = sum(base_weights.values())
     if investable_limit <= 0:
         for sym in base_weights:
@@ -3413,6 +3432,8 @@ def _compute_backtest(
         for sym in base_weights:
             base_weights[sym] *= scale
         investable_total = investable_limit
+
+    active_cash_weight = default_cash_weight
 
     rebal_dates = set(_rebalance_dates(all_dates, rebalance))
 
@@ -3476,10 +3497,26 @@ def _compute_backtest(
         scale_factor = 1.0
         trade_records: List[Tuple[str, PortfolioTrade]] = []
         target_cash_value = cash_value
+        cash_trade_note: Optional[str] = None
 
         if should_rebalance:
             # symbole, które mogą uczestniczyć w rebalansingu
             available_syms = list(prices_today.keys())
+
+            prev_cash_weight = (
+                cash_value / portfolio_value_before if portfolio_value_before > 0 else active_cash_weight
+            )
+
+            if dynamic_allocator is not None:
+                weights_update, cash_candidate, note = dynamic_allocator(ds, available_syms)
+                cash_trade_note = note
+                for sym in base_weights.keys():
+                    base_weights[sym] = max(float(weights_update.get(sym, 0.0)), 0.0)
+                active_cash_weight = min(max(float(cash_candidate), 0.0), 1.0)
+            else:
+                active_cash_weight = default_cash_weight
+                cash_trade_note = None
+
             symbols_with_weight = [sym for sym in available_syms if base_weights.get(sym, 0.0) > 0]
             if not symbols_with_weight:
                 symbols_with_weight = available_syms
@@ -3503,7 +3540,7 @@ def _compute_backtest(
             for sym in available_syms:
                 targets.setdefault(sym, 0.0)
 
-            target_cash_value = portfolio_value_before * cash_weight
+            target_cash_value = portfolio_value_before * active_cash_weight
 
             for sym in available_syms:
                 price = prices_today[sym]
@@ -3546,6 +3583,24 @@ def _compute_backtest(
                     if price > 0:
                         shares[sym] = current_value / price
 
+            cash_delta = target_cash_value - cash_value
+            cash_weight_change = active_cash_weight - prev_cash_weight
+            if (
+                cash_trade_note is not None
+                or abs(cash_delta) > 1e-9
+                or abs(cash_weight_change) > 1e-9
+            ):
+                trades.append(
+                    PortfolioTrade(
+                        symbol="Wolne środki",
+                        action="hold" if abs(cash_delta) <= 1e-9 else ("buy" if cash_delta > 0 else "sell"),
+                        value_change=cash_delta if abs(cash_delta) > 1e-9 else None,
+                        target_weight=active_cash_weight,
+                        weight_change=cash_weight_change,
+                        note=cash_trade_note,
+                    )
+                )
+
             if trades:
                 reasons: List[str] = []
                 if is_first_point:
@@ -3587,9 +3642,9 @@ def _compute_backtest(
                         date=ds,
                         reason=" • ".join(reasons) if reasons else None,
                         turnover=turnover,
-                        trades=trades,
+                            trades=trades,
+                        )
                     )
-                )
 
             cash_value = target_cash_value
 
@@ -3690,6 +3745,9 @@ def _run_backtest(req: BacktestPortfolioRequest) -> PortfolioResp:
 
     allocations: List[PortfolioAllocation] = []
     cash_weight = 0.0
+    dynamic_allocator: Optional[
+        Callable[[str, List[str]], Tuple[Dict[str, float], float, Optional[str]]]
+    ] = None
 
     if req.manual:
         raw_syms: List[str] = []
@@ -3723,61 +3781,119 @@ def _run_backtest(req: BacktestPortfolioRequest) -> PortfolioResp:
         if not candidates:
             raise HTTPException(404, "Brak symboli do oceny")
 
-        ranked = _rank_symbols_by_score(ch, candidates, req.auto.components)
-        if req.auto.direction == "asc":
-            ranked = list(reversed(ranked))
-        if not ranked:
-            raise HTTPException(404, "Brak symboli ze wszystkimi wymaganymi danymi")
+        components = req.auto.components
+        max_lookback = max(comp.lookback_days for comp in components)
+        buffer_days = max_lookback + 30
+        fetch_start = dt_start - timedelta(days=buffer_days)
 
+        prepared_series: Dict[str, List[Tuple[date, float]]] = {}
+        prepared_dates: Dict[str, List[date]] = {}
+        closes_ordered: "OrderedDict[str, List[Tuple[str, float]]]" = OrderedDict()
+
+        for sym in candidates:
+            series_full = _fetch_close_series(ch, sym, fetch_start, req.end)
+            if not series_full:
+                continue
+            prepared = _prepare_metric_series(series_full)
+            if not prepared:
+                continue
+            prepared_series[sym] = prepared
+            prepared_dates[sym] = [dt for (dt, _) in prepared]
+
+            trimmed = [(d, c) for (d, c) in series_full if d >= dt_start.isoformat()]
+            if trimmed:
+                closes_ordered[sym] = trimmed
+
+        if not closes_ordered:
+            raise HTTPException(404, "Brak danych historycznych po filtrach score")
+
+        all_symbols = list(closes_ordered.keys())
+        investable_ratio = 0.5
         min_score = req.auto.min_score
-        if min_score is not None:
-            ranked = [item for item in ranked if item[1] >= min_score]
+        max_score = req.auto.max_score
+        direction_desc = req.auto.direction != "asc"
 
-        selected = ranked[: req.auto.top_n]
-        raw_syms = [sym for sym, _ in selected]
-        if not raw_syms:
-            raise HTTPException(404, "Brak symboli po filtrach score")
+        def _allocate_for_date(
+            ds: str, available_syms: List[str]
+        ) -> Tuple[Dict[str, float], float, Optional[str]]:
+            dt_current = date.fromisoformat(ds)
+            scored: List[Tuple[str, float]] = []
+            for sym in available_syms:
+                prepared = prepared_series.get(sym)
+                if not prepared:
+                    continue
+                dates_cache = prepared_dates[sym]
+                idx = bisect_right(dates_cache, dt_current)
+                if idx == 0:
+                    continue
+                subset = prepared[:idx]
+                score_value = _calculate_score_from_prepared(subset, components)
+                if score_value is None:
+                    continue
+                if isinstance(score_value, tuple):
+                    score_number = float(score_value[0])
+                else:
+                    score_number = float(score_value)
+                scored.append((sym, score_number))
 
-        missing_slots = max(req.auto.top_n - len(selected), 0)
-        if missing_slots > 0:
-            cash_weight = missing_slots / req.auto.top_n
-        investable_ratio = max(0.0, 1.0 - cash_weight)
+            if not scored:
+                weights = {sym: 0.0 for sym in all_symbols}
+                return weights, 1.0, "Wolne środki do transakcji"
 
-        if req.auto.weighting == "score":
-            raw_weights = [score for _, score in selected]
-            total_raw = sum(raw_weights)
-            if total_raw <= 0:
-                weights_list = [investable_ratio / len(selected)] * len(selected)
+            scored.sort(key=lambda item: item[1], reverse=direction_desc)
+
+            if min_score is not None:
+                scored = [item for item in scored if item[1] >= min_score]
+            if max_score is not None:
+                scored = [item for item in scored if item[1] <= max_score]
+
+            if not scored:
+                weights = {sym: 0.0 for sym in all_symbols}
+                return weights, 1.0, "Wolne środki do transakcji"
+
+            selected = scored[: req.auto.top_n]
+            if not selected:
+                weights = {sym: 0.0 for sym in all_symbols}
+                return weights, 1.0, "Wolne środki do transakcji"
+
+            weights = {sym: 0.0 for sym in all_symbols}
+            if req.auto.weighting == "score":
+                raw_values = [score for _, score in selected]
+                total_raw = sum(raw_values)
+                if total_raw > 0:
+                    for sym, score in selected:
+                        weights[sym] = investable_ratio * (score / total_raw)
+                else:
+                    equal = investable_ratio / len(selected)
+                    for sym, _ in selected:
+                        weights[sym] = equal
             else:
-                weights_list = [investable_ratio * (value / total_raw) for value in raw_weights]
-        else:
-            equal_weight = investable_ratio / len(selected) if selected else 0.0
-            weights_list = [equal_weight] * len(selected)
+                equal = investable_ratio / len(selected)
+                for sym, _ in selected:
+                    weights[sym] = equal
 
-        for (sym, _), weight in zip(selected, weights_list):
-            allocations.append(
-                PortfolioAllocation(
-                    symbol=pretty_symbol(sym),
-                    raw=sym,
-                    target_weight=weight,
-                )
-            )
+            cash_weight_local = max(0.0, 1.0 - investable_ratio)
+            note = "Wolne środki do transakcji" if cash_weight_local > 0 else None
+            return weights, cash_weight_local, note
 
-        if cash_weight > 0:
-            allocations.append(
-                PortfolioAllocation(
-                    symbol="Środki niezainwestowane",
-                    raw=None,
-                    target_weight=cash_weight,
-                )
-            )
+        weights_list = [0.0] * len(closes_ordered)
+        raw_syms = list(closes_ordered.keys())
+
+        dynamic_allocator = _allocate_for_date
 
     closes_map: Dict[str, List[Tuple[str, float]]] = {}
     for rs in raw_syms:
-        series = _fetch_close_series(ch, rs, dt_start, req.end)
-        if not series:
-            raise HTTPException(404, f"Brak danych historycznych dla {rs}")
-        closes_map[rs] = series
+        if req.manual:
+            series = _fetch_close_series(ch, rs, dt_start, req.end)
+            if not series:
+                raise HTTPException(404, f"Brak danych historycznych dla {rs}")
+            closes_map[rs] = series
+        else:
+            assert req.auto is not None
+            series = closes_ordered.get(rs)
+            if not series:
+                series = []
+            closes_map[rs] = series
 
     equity, stats, rebalances = _compute_backtest(
         closes_map,
@@ -3789,6 +3905,7 @@ def _run_backtest(req: BacktestPortfolioRequest) -> PortfolioResp:
         fee_pct=req.fee_pct,
         threshold_pct=req.threshold_pct,
         cash_weight=cash_weight,
+        dynamic_allocator=dynamic_allocator,
     )
     return PortfolioResp(
         equity=equity,
@@ -3816,6 +3933,9 @@ def _compute_portfolio_score(req: PortfolioScoreRequest) -> List[PortfolioScoreI
     min_score = req.auto.min_score
     if min_score is not None:
         ranked = [item for item in ranked if item[1] >= min_score]
+    max_score = req.auto.max_score
+    if max_score is not None:
+        ranked = [item for item in ranked if item[1] <= max_score]
 
     top = ranked[: req.auto.top_n]
     return [
@@ -3924,6 +4044,10 @@ def _parse_backtest_get(
         default=None,
         description="Minimalna wartość score wymagana, aby spółka trafiła do portfela.",
     ),
+    max_score: Optional[float] = Query(
+        default=None,
+        description="Maksymalna wartość score dla spółek w portfelu.",
+    ),
     weighting: str = Query(
         default="equal",
         description="Strategia wag w trybie auto: equal lub score.",
@@ -4020,6 +4144,8 @@ def _parse_backtest_get(
 
     if not isinstance(min_score, (type(None), int, float)):
         min_score = getattr(min_score, "default", min_score)
+    if not isinstance(max_score, (type(None), int, float)):
+        max_score = getattr(max_score, "default", max_score)
 
     if mode_normalized == "manual":
         parsed_symbols = _split_csv(symbols)
@@ -4049,6 +4175,8 @@ def _parse_backtest_get(
 
         if min_score is not None:
             auto_payload["min_score"] = float(min_score)
+        if max_score is not None:
+            auto_payload["max_score"] = float(max_score)
 
         if filters_include or filters_exclude or filters_prefixes:
             filters_payload: Dict[str, List[str]] = {}
@@ -4085,6 +4213,8 @@ def _parse_backtest_get(
 
         if min_score is not None:
             auto_payload["min_score"] = float(min_score)
+        if max_score is not None:
+            auto_payload["max_score"] = float(max_score)
 
         if filters_include or filters_exclude or filters_prefixes:
             filters_payload = {}
