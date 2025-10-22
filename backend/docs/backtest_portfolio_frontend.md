@@ -57,6 +57,7 @@ Payload jest walidowany przez model [`BacktestPortfolioRequest`](../api/main.py)
 ```
 
 * `top_n` – ile najlepszych spółek (po score) wej­dzie do portfela (`1-100`).
+* `min_score` – opcjonalny próg; spółki z wynikiem poniżej tej wartości zostaną pominięte, a odpowiadająca im część portfela pozostanie w gotówce.
 * `weighting` – `"equal"` (wszystkie spółki z równą wagą) lub `"score"` (waga proporcjonalna do wyniku rankingu).
 * `components` – lista elementów oceny. Aktualnie dostępna metryka to `total_return`, która bazuje na stopie zwrotu z kursów **zamknięcia**.
   * `lookback_days` – ile dni wstecz szukamy bazowej ceny (zakres `1-3650`).
@@ -120,6 +121,7 @@ Endpoint zwraca obiekt [`PortfolioResp`](../api/main.py) zawierający:
 
 * `equity` – listę punktów `{ "date": "YYYY-MM-DD", "value": <float> }`, gdzie wartość jest zbudowana z kursów zamknięcia i wag portfela.
 * `stats` – agregaty (`cagr`, `max_drawdown`, `volatility`, `sharpe`, `last_value`). Wartość `last_value` odpowiada ostatniemu punktowi equity.
+* `allocations` – podsumowanie docelowych wag składników; jeśli mniej spółek spełni próg `min_score` niż `top_n`, w tabeli pojawi się dodatkowa pozycja „Środki niezainwestowane” pokazująca udział gotówki.
 
 ## Wskazówki implementacyjne dla frontendu
 

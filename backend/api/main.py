@@ -1867,9 +1867,20 @@ class PortfolioRebalanceEvent(BaseModel):
     trades: Optional[List[PortfolioTrade]] = None
 
 
+class PortfolioAllocation(BaseModel):
+    symbol: str
+    target_weight: float
+    raw: Optional[str] = None
+    realized_weight: Optional[float] = None
+    return_pct: Optional[float] = None
+    contribution_pct: Optional[float] = None
+    value: Optional[float] = None
+
+
 class PortfolioResp(BaseModel):
     equity: List[PortfolioPoint]
     stats: PortfolioStats
+    allocations: Optional[List[PortfolioAllocation]] = None
     rebalances: Optional[List[PortfolioRebalanceEvent]] = None
 
 
@@ -1949,6 +1960,7 @@ class AutoSelectionConfig(BaseModel):
     filters: Optional[UniverseFilters] = None
     weighting: str = Field("equal", pattern="^(equal|score)$")
     direction: str = Field("desc", pattern="^(asc|desc)$")
+    min_score: Optional[float] = Field(default=None)
 
 
 class BacktestPortfolioRequest(BaseModel):
@@ -3355,6 +3367,7 @@ def _compute_backtest(
     initial_capital: float = 10000.0,
     fee_pct: float = 0.0,
     threshold_pct: float = 0.0,
+    cash_weight: float = 0.0,
 ) -> Tuple[List[PortfolioPoint], PortfolioStats, List[PortfolioRebalanceEvent]]:
     """
     Prosty backtest na dziennych close'ach z rebalancingiem.
@@ -3384,10 +3397,22 @@ def _compute_backtest(
     first_dates: Dict[str, str] = {sym: series[0][0] for sym, series in closes_map.items() if series}
     last_prices: Dict[str, Optional[float]] = {sym: None for sym in closes_map.keys()}
 
-    tot = sum(weights_pct) or 1.0
     base_weights: Dict[str, float] = {}
     for sym, weight in zip(closes_map.keys(), weights_pct):
-        base_weights[sym] = (weight or 0.0) / tot
+        base_weights[sym] = max(float(weight or 0.0), 0.0)
+
+    cash_weight = min(max(float(cash_weight), 0.0), 1.0)
+    investable_limit = max(0.0, 1.0 - cash_weight)
+    investable_total = sum(base_weights.values())
+    if investable_limit <= 0:
+        for sym in base_weights:
+            base_weights[sym] = 0.0
+        investable_total = 0.0
+    elif investable_total > investable_limit and investable_total > 0:
+        scale = investable_limit / investable_total
+        for sym in base_weights:
+            base_weights[sym] *= scale
+        investable_total = investable_limit
 
     rebal_dates = set(_rebalance_dates(all_dates, rebalance))
 
@@ -3400,6 +3425,7 @@ def _compute_backtest(
 
     portfolio_initial = initial_capital if initial_capital > 0 else 1.0
     portfolio_value = portfolio_initial
+    cash_value = portfolio_initial
     threshold_ratio = max(_to_ratio(threshold_pct), 0.0)
     fee_ratio = max(_to_ratio(fee_pct), 0.0)
     total_turnover_ratio = 0.0
@@ -3425,7 +3451,7 @@ def _compute_backtest(
 
         # wartość portfela przed ewentualnym rebalancingiem
         if equity:
-            portfolio_value = 0.0
+            portfolio_value = cash_value
             for sym, qty in shares.items():
                 if qty <= 0:
                     continue
@@ -3440,7 +3466,6 @@ def _compute_backtest(
 
         portfolio_value_before = portfolio_value
         prev_shares = dict(shares)
-
         is_first_point = not equity
         scheduled_rebalance = ds in rebal_dates
         should_rebalance = is_first_point or scheduled_rebalance or bool(newly_available)
@@ -3450,6 +3475,7 @@ def _compute_backtest(
         portfolio_value_after_fees: Optional[float] = None
         scale_factor = 1.0
         trade_records: List[Tuple[str, PortfolioTrade]] = []
+        target_cash_value = cash_value
 
         if should_rebalance:
             # symbole, które mogą uczestniczyć w rebalansingu
@@ -3458,18 +3484,26 @@ def _compute_backtest(
             if not symbols_with_weight:
                 symbols_with_weight = available_syms
 
+            investable_target = sum(base_weights.values())
             weight_sum = sum(base_weights.get(sym, 0.0) for sym in symbols_with_weight)
             targets: Dict[str, float] = {}
-            if weight_sum > 0:
+            if weight_sum > 0 and investable_target > 0:
+                scale = investable_target / weight_sum
                 for sym in symbols_with_weight:
-                    targets[sym] = base_weights.get(sym, 0.0) / weight_sum
+                    targets[sym] = base_weights.get(sym, 0.0) * scale
             else:
-                equal = 1.0 / len(symbols_with_weight) if symbols_with_weight else 0.0
+                equal = (
+                    investable_target / len(symbols_with_weight)
+                    if symbols_with_weight
+                    else 0.0
+                )
                 for sym in symbols_with_weight:
                     targets[sym] = equal
 
             for sym in available_syms:
                 targets.setdefault(sym, 0.0)
+
+            target_cash_value = portfolio_value_before * cash_weight
 
             for sym in available_syms:
                 price = prices_today[sym]
@@ -3534,6 +3568,8 @@ def _compute_backtest(
                         if scale_factor < 1.0:
                             for sym_key in list(shares.keys()):
                                 shares[sym_key] *= scale_factor
+                            cash_value *= scale_factor
+                            target_cash_value *= scale_factor
                             for raw_sym, trade in trade_records:
                                 prev_qty = prev_shares.get(raw_sym, 0.0)
                                 actual_after = shares.get(raw_sym, 0.0)
@@ -3555,8 +3591,10 @@ def _compute_backtest(
                     )
                 )
 
+            cash_value = target_cash_value
+
         # aktualizacja wartości portfela po ewentualnym rebalansingu
-        portfolio_value = 0.0
+        portfolio_value = cash_value
         for sym, qty in shares.items():
             if qty <= 0:
                 continue
@@ -3650,6 +3688,9 @@ def _run_backtest(req: BacktestPortfolioRequest) -> PortfolioResp:
     dt_start = req.start
     ch = get_ch()
 
+    allocations: List[PortfolioAllocation] = []
+    cash_weight = 0.0
+
     if req.manual:
         raw_syms: List[str] = []
         for s in req.manual.symbols:
@@ -3658,7 +3699,24 @@ def _run_backtest(req: BacktestPortfolioRequest) -> PortfolioResp:
                 raise HTTPException(400, "Symbol nie może być pusty")
             raw_syms.append(raw)
 
-        weights_list = list(req.manual.weights) if req.manual.weights else [1.0] * len(raw_syms)
+        raw_weights = list(req.manual.weights) if req.manual.weights else [1.0] * len(raw_syms)
+        total_raw_weights = sum(raw_weights)
+        if total_raw_weights > 0:
+            weights_list = [weight / total_raw_weights for weight in raw_weights]
+        elif raw_syms:
+            equal = 1.0 / len(raw_syms)
+            weights_list = [equal] * len(raw_syms)
+        else:
+            weights_list = []
+
+        for raw_sym, weight in zip(raw_syms, weights_list):
+            allocations.append(
+                PortfolioAllocation(
+                    symbol=pretty_symbol(raw_sym),
+                    raw=raw_sym,
+                    target_weight=weight,
+                )
+            )
     else:
         assert req.auto is not None
         candidates = _list_candidate_symbols(ch, req.auto.filters)
@@ -3671,17 +3729,48 @@ def _run_backtest(req: BacktestPortfolioRequest) -> PortfolioResp:
         if not ranked:
             raise HTTPException(404, "Brak symboli ze wszystkimi wymaganymi danymi")
 
-        top = ranked[: req.auto.top_n]
-        raw_syms = [sym for sym, _ in top]
+        min_score = req.auto.min_score
+        if min_score is not None:
+            ranked = [item for item in ranked if item[1] >= min_score]
+
+        selected = ranked[: req.auto.top_n]
+        raw_syms = [sym for sym, _ in selected]
         if not raw_syms:
-            raise HTTPException(404, "Brak symboli po filtrach")
+            raise HTTPException(404, "Brak symboli po filtrach score")
+
+        missing_slots = max(req.auto.top_n - len(selected), 0)
+        if missing_slots > 0:
+            cash_weight = missing_slots / req.auto.top_n
+        investable_ratio = max(0.0, 1.0 - cash_weight)
 
         if req.auto.weighting == "score":
-            weights_list = [score for _, score in top]
-            if not any(weights_list):
-                weights_list = [1.0] * len(top)
+            raw_weights = [score for _, score in selected]
+            total_raw = sum(raw_weights)
+            if total_raw <= 0:
+                weights_list = [investable_ratio / len(selected)] * len(selected)
+            else:
+                weights_list = [investable_ratio * (value / total_raw) for value in raw_weights]
         else:
-            weights_list = [1.0] * len(top)
+            equal_weight = investable_ratio / len(selected) if selected else 0.0
+            weights_list = [equal_weight] * len(selected)
+
+        for (sym, _), weight in zip(selected, weights_list):
+            allocations.append(
+                PortfolioAllocation(
+                    symbol=pretty_symbol(sym),
+                    raw=sym,
+                    target_weight=weight,
+                )
+            )
+
+        if cash_weight > 0:
+            allocations.append(
+                PortfolioAllocation(
+                    symbol="Środki niezainwestowane",
+                    raw=None,
+                    target_weight=cash_weight,
+                )
+            )
 
     closes_map: Dict[str, List[Tuple[str, float]]] = {}
     for rs in raw_syms:
@@ -3699,10 +3788,12 @@ def _run_backtest(req: BacktestPortfolioRequest) -> PortfolioResp:
         initial_capital=req.initial_capital,
         fee_pct=req.fee_pct,
         threshold_pct=req.threshold_pct,
+        cash_weight=cash_weight,
     )
     return PortfolioResp(
         equity=equity,
         stats=stats,
+        allocations=allocations or None,
         rebalances=rebalances or None,
     )
 
@@ -3721,6 +3812,10 @@ def _compute_portfolio_score(req: PortfolioScoreRequest) -> List[PortfolioScoreI
         ranked = list(reversed(ranked))
     if not ranked:
         raise HTTPException(404, "Brak symboli ze wszystkimi wymaganymi danymi")
+
+    min_score = req.auto.min_score
+    if min_score is not None:
+        ranked = [item for item in ranked if item[1] >= min_score]
 
     top = ranked[: req.auto.top_n]
     return [
@@ -3825,6 +3920,10 @@ def _parse_backtest_get(
         default=None,
         description="Liczba spółek do wyboru w trybie auto.",
     ),
+    min_score: Optional[float] = Query(
+        default=None,
+        description="Minimalna wartość score wymagana, aby spółka trafiła do portfela.",
+    ),
     weighting: str = Query(
         default="equal",
         description="Strategia wag w trybie auto: equal lub score.",
@@ -3918,6 +4017,10 @@ def _parse_backtest_get(
     direction_normalized = direction.strip().lower()
     if direction_normalized not in {"asc", "desc"}:
         raise HTTPException(400, "Parametr direction musi przyjmować wartości asc lub desc")
+
+    if not isinstance(min_score, (type(None), int, float)):
+        min_score = getattr(min_score, "default", min_score)
+
     if mode_normalized == "manual":
         parsed_symbols = _split_csv(symbols)
         if not parsed_symbols:
@@ -3943,6 +4046,9 @@ def _parse_backtest_get(
             "components": parsed_components,
             "direction": direction_normalized,
         }
+
+        if min_score is not None:
+            auto_payload["min_score"] = float(min_score)
 
         if filters_include or filters_exclude or filters_prefixes:
             filters_payload: Dict[str, List[str]] = {}
@@ -3976,6 +4082,9 @@ def _parse_backtest_get(
             "components": parsed_components,
             "direction": direction_normalized,
         }
+
+        if min_score is not None:
+            auto_payload["min_score"] = float(min_score)
 
         if filters_include or filters_exclude or filters_prefixes:
             filters_payload = {}
