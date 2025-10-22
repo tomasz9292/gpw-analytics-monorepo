@@ -8,7 +8,7 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $backendRoot = Split-Path -Parent $scriptDir
 $distDir = if ($OutputDir) { $OutputDir } else { Join-Path $scriptDir "dist" }
 $buildVenv = Join-Path $scriptDir ".venv-build"
-$pythonCandidates = @("python", "py")
+$pythonCandidates = @("py", "python")
 $pythonCommand = $null
 $pythonArgs = @()
 
@@ -27,12 +27,44 @@ foreach ($candidate in $pythonCandidates) {
     $pythonCommand = $commandPath
     if ($candidate -eq "py") {
         $pythonArgs = @("-3")
+    } else {
+        $pythonArgs = @()
     }
     break
 }
 
 if (-not $pythonCommand) {
-    throw "Python 3 is required but was not found on PATH. Please install it and try again."
+    $fallbackSearchRoots = @()
+    if ($env:LOCALAPPDATA) {
+        $fallbackSearchRoots += Join-Path $env:LOCALAPPDATA "Programs\Python"
+    }
+    if ($env:ProgramFiles) {
+        $fallbackSearchRoots += Join-Path $env:ProgramFiles "Python"
+    }
+    if ($env:"ProgramFiles(x86)") {
+        $fallbackSearchRoots += Join-Path $env:"ProgramFiles(x86)" "Python"
+    }
+
+    $foundInterpreters = @()
+    foreach ($root in $fallbackSearchRoots) {
+        if (-not (Test-Path $root)) {
+            continue
+        }
+
+        $foundInterpreters += Get-ChildItem -Path $root -Filter "python.exe" -Recurse -ErrorAction SilentlyContinue
+    }
+
+    $foundInterpreters = $foundInterpreters | Where-Object { $_.FullName -notlike "*Microsoft\\WindowsApps*" }
+
+    if ($foundInterpreters.Count -gt 0) {
+        $pythonExecutable = $foundInterpreters | Sort-Object -Property LastWriteTime -Descending | Select-Object -First 1
+        $pythonCommand = $pythonExecutable.FullName
+        $pythonArgs = @()
+    }
+
+    if (-not $pythonCommand) {
+        throw "Python 3 is required but was not found on PATH. Please install it and try again."
+    }
 }
 
 $pythonDisplay = $pythonCommand
