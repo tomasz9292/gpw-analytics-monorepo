@@ -5,7 +5,22 @@ from pathlib import Path
 
 block_cipher = None
 
-base_path = Path(__file__).resolve().parent
+# ``__file__`` is not defined when the spec is executed via ``runpy`` on
+# Windows PowerShell (see build.ps1).  Fall back to ``__spec__.origin`` or the
+# current working directory so the build can succeed regardless of the entry
+# point PyInstaller uses.
+def _resolve_base_path() -> Path:
+    if "__file__" in globals():
+        return Path(__file__).resolve().parent
+
+    spec = globals().get("__spec__")
+    if spec and getattr(spec, "origin", None):
+        return Path(spec.origin).resolve().parent
+
+    return Path.cwd()
+
+
+base_path = _resolve_base_path()
 app_path = base_path / "app.py"
 resources_path = base_path / "resources"
 icon_base64_path = resources_path / "gpw_agent_icon.b64"
