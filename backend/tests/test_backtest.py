@@ -83,9 +83,13 @@ class FakeClickHouse:
                 columns=["date", "open", "high", "low", "close", "volume"],
             )
 
-        if "WHERE symbol = %(sym)s AND date >= %(dt)s" in normalized_sql:
+        if "WHERE symbol = %(sym)s AND date >= %(dt_start)s" in normalized_sql or (
+            "WHERE symbol = %(sym)s AND date >= %(dt)s" in normalized_sql
+        ):
             symbol = parameters.get("sym")
-            start = parameters.get("dt")
+            start = parameters.get("dt_start")
+            if start is None:
+                start = parameters.get("dt")
             if isinstance(start, date):
                 start_str = start.isoformat()
             else:
@@ -145,93 +149,111 @@ def test_rank_symbols_with_multiple_components():
     assert all("WHERE symbol = %(sym)s" not in q for q in fake.queries)
 
 
-def test_backtest_portfolio_auto_handles_missing_history(monkeypatch):
-    data = {
-        "AAA": [
-            ("2023-01-01", 100.0),
-            ("2023-01-02", 102.0),
-            ("2023-01-03", 105.0),
-            ("2023-01-04", 110.0),
-            ("2023-01-05", 130.0),
-        ],
-        "DDD": [
-            ("2023-01-04", 50.0),
-            ("2023-01-05", 52.0),
-        ],
-    }
-    fake = FakeClickHouse(data)
-    monkeypatch.setattr(main, "get_ch", lambda: fake)
-
-    request = main.BacktestPortfolioRequest(
-        start=date(2023, 1, 1),
-        rebalance="none",
-        auto=main.AutoSelectionConfig(
-            top_n=2,
-            components=[
-                main.ScoreComponent(lookback_days=4, metric="total_return", weight=5)
-            ],
-            filters=main.UniverseFilters(include=["AAA", "DDD"]),
-            weighting="equal",
-        ),
-    )
-
-    result = main.backtest_portfolio(request)
-
-    assert result.stats.last_value == pytest.approx(1.15, rel=1e-5)
-    assert len(result.equity) == len(data["AAA"])
-    assert result.allocations is not None
-    weights = {allocation.symbol: allocation.target_weight for allocation in result.allocations}
-    assert weights["Środki niezainwestowane"] == pytest.approx(0.5, rel=1e-6)
-
-
-def test_backtest_portfolio_auto_min_score_adds_cash_allocation(monkeypatch):
+def test_backtest_portfolio_auto_uses_dynamic_scores(monkeypatch):
     data = {
         "AAA": [
             ("2023-01-02", 100.0),
             ("2023-01-03", 101.0),
             ("2023-01-04", 102.0),
+            ("2023-01-31", 110.0),
+            ("2023-02-01", 109.0),
+            ("2023-02-02", 108.0),
+            ("2023-02-28", 107.0),
+            ("2023-03-01", 105.0),
         ],
         "BBB": [
-            ("2023-01-02", 50.0),
-            ("2023-01-03", 50.5),
-            ("2023-01-04", 51.0),
-        ],
-        "CCC": [
-            ("2023-01-02", 40.0),
-            ("2023-01-03", 40.1),
-            ("2023-01-04", 40.2),
+            ("2023-01-02", 100.0),
+            ("2023-01-03", 99.0),
+            ("2023-01-04", 98.0),
+            ("2023-01-31", 97.0),
+            ("2023-02-01", 100.0),
+            ("2023-02-02", 105.0),
+            ("2023-02-28", 108.0),
+            ("2023-03-01", 112.0),
         ],
     }
     fake = FakeClickHouse(data)
     monkeypatch.setattr(main, "get_ch", lambda: fake)
 
-    monkeypatch.setattr(
-        main,
-        "_rank_symbols_by_score",
-        lambda *args, **kwargs: [("AAA", 1.0), ("BBB", 0.4), ("CCC", 0.2)],
-    )
-
     request = main.BacktestPortfolioRequest(
-        start=date(2023, 1, 2),
-        rebalance="none",
+        start=date(2023, 1, 3),
+        rebalance="monthly",
         auto=main.AutoSelectionConfig(
-            top_n=3,
+            top_n=1,
             components=[
-                main.ScoreComponent(lookback_days=2, metric="total_return", weight=1)
+                main.ScoreComponent(lookback_days=1, metric="total_return", weight=1)
             ],
             weighting="equal",
-            min_score=0.5,
+            filters=main.UniverseFilters(include=["AAA", "BBB"]),
         ),
     )
 
     result = main.backtest_portfolio(request)
 
-    assert result.allocations is not None
-    assert len(result.allocations) == 2
+    assert result.allocations is None
+    assert result.rebalances is not None
+    dates = [event.date for event in result.rebalances]
+    assert dates[:2] == ["2023-01-03", "2023-02-01"]
 
-    weights = {allocation.symbol: allocation.target_weight for allocation in result.allocations}
-    assert weights["AAA"] == pytest.approx(1.0 / 3.0, rel=1e-6)
-    assert weights["Środki niezainwestowane"] == pytest.approx(2.0 / 3.0, rel=1e-6)
+    first_event = result.rebalances[0]
+    assert first_event.trades is not None
+    trade_symbols = [trade.symbol for trade in first_event.trades]
+    assert any(symbol.startswith("AAA") for symbol in trade_symbols)
+    cash_trade = [trade for trade in first_event.trades if trade.symbol == "Wolne środki"][0]
+    assert cash_trade.target_weight == pytest.approx(0.5, rel=1e-6)
+    assert cash_trade.note == "Wolne środki do transakcji"
+
+    second_event = result.rebalances[1]
+    assert second_event.trades is not None
+    actions = {
+        trade.symbol: trade.action
+        for trade in second_event.trades
+        if trade.symbol != "Wolne środki"
+    }
+    assert any(sym.startswith("AAA") and action == "sell" for sym, action in actions.items())
+    assert any(sym.startswith("BBB") and action == "buy" for sym, action in actions.items())
+
+
+def test_backtest_portfolio_auto_thresholds_leave_cash(monkeypatch):
+    data = {
+        "AAA": [
+            ("2023-01-02", 100.0),
+            ("2023-01-03", 100.5),
+            ("2023-01-04", 101.0),
+        ],
+        "BBB": [
+            ("2023-01-02", 80.0),
+            ("2023-01-03", 80.1),
+            ("2023-01-04", 80.2),
+        ],
+    }
+    fake = FakeClickHouse(data)
+    monkeypatch.setattr(main, "get_ch", lambda: fake)
+
+    request = main.BacktestPortfolioRequest(
+        start=date(2023, 1, 3),
+        rebalance="none",
+        auto=main.AutoSelectionConfig(
+            top_n=2,
+            components=[
+                main.ScoreComponent(lookback_days=1, metric="total_return", weight=1)
+            ],
+            weighting="equal",
+            min_score=0.02,
+            max_score=0.5,
+            filters=main.UniverseFilters(include=["AAA", "BBB"]),
+        ),
+    )
+
+    result = main.backtest_portfolio(request)
+
+    assert result.allocations is None
+    assert result.rebalances is not None
+    event = result.rebalances[0]
+    assert event.trades is not None
+    # only cash trade should be present because thresholds filtered out all symbols
+    assert [trade.symbol for trade in event.trades] == ["Wolne środki"]
+    assert event.trades[0].note == "Wolne środki do transakcji"
 
 
 def test_portfolio_score_returns_top_n(monkeypatch):
@@ -296,6 +318,29 @@ def test_portfolio_score_respects_min_score(monkeypatch):
     result = main.backtest_portfolio_score(request)
 
     assert [item.raw for item in result] == ["AAA"]
+
+
+def test_portfolio_score_respects_max_score(monkeypatch):
+    monkeypatch.setattr(main, "get_ch", lambda: object())
+    monkeypatch.setattr(main, "_list_candidate_symbols", lambda ch, filters: ["AAA", "BBB", "CCC"])
+    monkeypatch.setattr(
+        main,
+        "_rank_symbols_by_score",
+        lambda *args, **kwargs: [("AAA", 1.0), ("BBB", 0.6), ("CCC", 0.2)],
+    )
+
+    request = main.PortfolioScoreRequest(
+        auto=main.AutoSelectionConfig(
+            top_n=3,
+            components=[main.ScoreComponent(lookback_days=2, metric="total_return", weight=5)],
+            weighting="equal",
+            max_score=0.5,
+        )
+    )
+
+    result = main.backtest_portfolio_score(request)
+
+    assert [item.raw for item in result] == ["CCC"]
 
 
 def test_score_preview_returns_metrics(monkeypatch):
