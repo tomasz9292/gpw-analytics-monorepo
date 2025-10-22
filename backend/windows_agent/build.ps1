@@ -21,7 +21,7 @@ if (Test-Path $iconBase64Path) {
 }
 
 if (-not (Test-Path $buildVenv)) {
-    Write-Host "Tworzenie wirtualnego środowiska..."
+    Write-Host "Creating virtual environment..."
     & $python -m venv $buildVenv
 }
 
@@ -29,17 +29,17 @@ $venvPython = Join-Path $buildVenv "Scripts\python.exe"
 $venvPip = Join-Path $buildVenv "Scripts\pip.exe"
 $pyinstallerExe = Join-Path $buildVenv "Scripts\pyinstaller.exe"
 
-Write-Host "Aktualizacja pip..."
+Write-Host "Updating pip..."
 & $venvPython -m pip install --upgrade pip > $null
 
-Write-Host "Instalacja zależności..."
+Write-Host "Installing dependencies..."
 & $venvPip install -r (Join-Path $backendRoot "requirements.txt") pyinstaller > $null
 
-Write-Host "Budowanie aplikacji (PyInstaller)..."
+Write-Host "Building application (PyInstaller)..."
 & $pyinstallerExe --noconfirm --clean (Join-Path $scriptDir "gpw_agent.spec")
 
 if ($OutputDir) {
-    Write-Host "Przenoszenie wyników do $distDir"
+    Write-Host "Moving build outputs to $distDir"
     if (-not (Test-Path $distDir)) {
         New-Item -ItemType Directory -Path $distDir | Out-Null
     }
@@ -48,7 +48,7 @@ if ($OutputDir) {
 
 $exePath = Join-Path $scriptDir "dist\GPWAnalyticsAgent\GPWAnalyticsAgent.exe"
 if (-not (Test-Path $exePath)) {
-    throw "Plik wykonywalny nie został wygenerowany."
+    throw "Executable file was not generated."
 }
 
 $shortcutDir = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs"
@@ -64,5 +64,5 @@ $shortcut.WorkingDirectory = Split-Path $exePath
 $shortcut.IconLocation = $iconPath
 $shortcut.Save()
 
-Write-Host "Skrót utworzony: $shortcutPath"
-Write-Host "Budowanie zakończone. Uruchom skrót, aby wystartować aplikację z ikoną w menu Start."
+Write-Host "Shortcut created: $shortcutPath"
+Write-Host "Build complete. Launch the shortcut to start the application with the Start Menu icon."
