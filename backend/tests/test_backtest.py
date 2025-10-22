@@ -177,8 +177,61 @@ def test_backtest_portfolio_auto_handles_missing_history(monkeypatch):
 
     result = main.backtest_portfolio(request)
 
-    assert result.stats.last_value == pytest.approx(1.3, rel=1e-5)
+    assert result.stats.last_value == pytest.approx(1.15, rel=1e-5)
     assert len(result.equity) == len(data["AAA"])
+    assert result.allocations is not None
+    weights = {allocation.symbol: allocation.target_weight for allocation in result.allocations}
+    assert weights["Środki niezainwestowane"] == pytest.approx(0.5, rel=1e-6)
+
+
+def test_backtest_portfolio_auto_min_score_adds_cash_allocation(monkeypatch):
+    data = {
+        "AAA": [
+            ("2023-01-02", 100.0),
+            ("2023-01-03", 101.0),
+            ("2023-01-04", 102.0),
+        ],
+        "BBB": [
+            ("2023-01-02", 50.0),
+            ("2023-01-03", 50.5),
+            ("2023-01-04", 51.0),
+        ],
+        "CCC": [
+            ("2023-01-02", 40.0),
+            ("2023-01-03", 40.1),
+            ("2023-01-04", 40.2),
+        ],
+    }
+    fake = FakeClickHouse(data)
+    monkeypatch.setattr(main, "get_ch", lambda: fake)
+
+    monkeypatch.setattr(
+        main,
+        "_rank_symbols_by_score",
+        lambda *args, **kwargs: [("AAA", 1.0), ("BBB", 0.4), ("CCC", 0.2)],
+    )
+
+    request = main.BacktestPortfolioRequest(
+        start=date(2023, 1, 2),
+        rebalance="none",
+        auto=main.AutoSelectionConfig(
+            top_n=3,
+            components=[
+                main.ScoreComponent(lookback_days=2, metric="total_return", weight=1)
+            ],
+            weighting="equal",
+            min_score=0.5,
+        ),
+    )
+
+    result = main.backtest_portfolio(request)
+
+    assert result.allocations is not None
+    assert len(result.allocations) == 2
+
+    weights = {allocation.symbol: allocation.target_weight for allocation in result.allocations}
+    assert weights["AAA"] == pytest.approx(1.0 / 3.0, rel=1e-6)
+    assert weights["Środki niezainwestowane"] == pytest.approx(2.0 / 3.0, rel=1e-6)
 
 
 def test_portfolio_score_returns_top_n(monkeypatch):
@@ -220,6 +273,29 @@ def test_portfolio_score_returns_top_n(monkeypatch):
 
     assert [item.raw for item in result] == ["CCC", "AAA"]
     assert all(item.symbol.endswith(".WA") or item.symbol == item.raw for item in result)
+
+
+def test_portfolio_score_respects_min_score(monkeypatch):
+    monkeypatch.setattr(main, "get_ch", lambda: object())
+    monkeypatch.setattr(main, "_list_candidate_symbols", lambda ch, filters: ["AAA", "BBB", "CCC"])
+    monkeypatch.setattr(
+        main,
+        "_rank_symbols_by_score",
+        lambda *args, **kwargs: [("AAA", 1.0), ("BBB", 0.4), ("CCC", 0.3)],
+    )
+
+    request = main.PortfolioScoreRequest(
+        auto=main.AutoSelectionConfig(
+            top_n=3,
+            components=[main.ScoreComponent(lookback_days=2, metric="total_return", weight=5)],
+            weighting="equal",
+            min_score=0.5,
+        )
+    )
+
+    result = main.backtest_portfolio_score(request)
+
+    assert [item.raw for item in result] == ["AAA"]
 
 
 def test_score_preview_returns_metrics(monkeypatch):
