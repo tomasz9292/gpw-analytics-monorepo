@@ -41,8 +41,8 @@ if (-not $pythonCommand) {
     if ($env:ProgramFiles) {
         $fallbackSearchRoots += Join-Path $env:ProgramFiles "Python"
     }
-    if ($env:"ProgramFiles(x86)") {
-        $fallbackSearchRoots += Join-Path $env:"ProgramFiles(x86)" "Python"
+    if (${env:ProgramFiles(x86)}) {
+        $fallbackSearchRoots += Join-Path ${env:ProgramFiles(x86)} "Python"
     }
 
     $foundInterpreters = @()
