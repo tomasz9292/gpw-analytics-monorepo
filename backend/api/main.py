@@ -1944,7 +1944,7 @@ class ManualPortfolioConfig(BaseModel):
 
 
 class AutoSelectionConfig(BaseModel):
-    top_n: int = Field(..., ge=1, le=100)
+    top_n: int = Field(..., ge=1, le=5000)
     components: List[ScoreComponent] = Field(..., min_length=1)
     filters: Optional[UniverseFilters] = None
     weighting: str = Field("equal", pattern="^(equal|score)$")
@@ -2021,7 +2021,7 @@ class ScorePreviewRequest(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     rules: List[ScoreRulePayload] = Field(..., min_length=1)
-    limit: Optional[int] = Field(None, ge=1, le=100)
+    limit: Optional[int] = Field(None, ge=1, le=5000)
     universe: Optional[List[str]] = None
     sort: Optional[str] = Field(None, pattern="^(asc|desc)$")
 
@@ -4052,7 +4052,7 @@ def backtest_portfolio_tooling():
             ),
         ),
         auto=AutoSelectionDescriptor(
-            top_n=RangeDescriptor(min=1, max=100, step=1, default=5),
+            top_n=RangeDescriptor(min=1, max=5000, step=1, default=5),
             weighting_modes=["equal", "score"],
             components=[
                 ComponentDescriptor(
