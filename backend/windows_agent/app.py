@@ -118,8 +118,8 @@ class App:
     def __init__(self) -> None:
         self.root = Tk()
         self.root.title("GPW – Agent pobierania danych")
-        self.root.geometry("980x720")
-        self.root.minsize(860, 640)
+        self.root.geometry("1024x760")
+        self.root.minsize(900, 680)
         self._configure_styles()
         self._icon_path = self._prepare_icon()
         if self._icon_path:
@@ -134,7 +134,7 @@ class App:
         self.running = False
 
         self.output_dir_var = StringVar(value=str(DEFAULT_OUTPUT_DIR))
-        self.symbols_var = StringVar(value=", ".join(DEFAULT_OHLC_SYNC_SYMBOLS))
+        self.symbols_var = StringVar(value="")
         self.start_date_var = StringVar(value="")
         self.end_date_var = StringVar(value="")
         self.fetch_history_var = BooleanVar(value=True)
@@ -157,6 +157,7 @@ class App:
 
         self._load_config()
         self._build_ui()
+        self._prefill_symbols()
         self._log("Agent gotowy. Wybierz zakres danych i kliknij 'Pobierz dane'.")
 
     def _prepare_icon(self) -> Optional[Path]:
@@ -208,7 +209,9 @@ class App:
         accent = "#2563eb"
         neutral_bg = "#f3f4f6"
         surface_bg = "#ffffff"
+        surface_alt = "#e0e7ff"
         text_color = "#111827"
+        muted_text = "#4b5563"
 
         self.root.configure(background=neutral_bg)
         # When specifying fonts through Tk's option database, font families that
@@ -265,12 +268,29 @@ class App:
         style.configure("TEntry", fieldbackground="#ffffff", padding=8)
         style.configure("TSpinbox", fieldbackground="#ffffff", padding=8)
         style.configure("TLabelframe", background=surface_bg)
+        style.configure("Hero.TFrame", background=neutral_bg, padding=(8, 4))
+        style.configure("HeroTitle.TLabel", background=neutral_bg, foreground=text_color, font=("Segoe UI Semibold", 22))
+        style.configure("HeroSubtitle.TLabel", background=neutral_bg, foreground=muted_text, font=("Segoe UI", 11))
+        style.configure("Badge.TLabel", background=surface_alt, foreground="#1d4ed8", padding=(10, 4), font=("Segoe UI Semibold", 9))
+        style.configure("Inline.TFrame", background=surface_bg)
+        style.configure("SectionHeader.TLabel", background=surface_bg, foreground=muted_text, font=("Segoe UI", 9))
 
     # ------------------------------------------------------------------
     # UI
     def _build_ui(self) -> None:
+        hero = ttk.Frame(self.root, style="Hero.TFrame")
+        hero.pack(fill="x", padx=16, pady=(16, 4))
+        ttk.Label(hero, text="GPW Analytics Agent", style="HeroTitle.TLabel").pack(anchor="w")
+        ttk.Label(
+            hero,
+            text="Nowoczesne centrum pobierania danych GPW i eksportu do ClickHouse.",
+            style="HeroSubtitle.TLabel",
+        ).pack(anchor="w", pady=(4, 0))
+        badge = ttk.Label(hero, text=f"Identyfikator agenta: {self.agent_id}", style="Badge.TLabel")
+        badge.pack(anchor="w", pady=(12, 0))
+
         notebook = ttk.Notebook(self.root)
-        notebook.pack(fill="both", expand=True, padx=16, pady=16)
+        notebook.pack(fill="both", expand=True, padx=16, pady=(0, 16))
 
         downloads_frame = ttk.Frame(notebook, style="Content.TFrame")
         notebook.add(downloads_frame, text="Pobieranie danych")
@@ -294,7 +314,12 @@ class App:
         options.pack(fill="x", padx=4, pady=8)
 
         ttk.Label(options, text="Lista spółek (oddzielone przecinkami)").grid(row=0, column=0, sticky="w")
-        ttk.Entry(options, textvariable=self.symbols_var, width=80).grid(row=1, column=0, columnspan=3, sticky="ew", pady=4)
+        entry_row = ttk.Frame(options, style="Inline.TFrame")
+        entry_row.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(4, 8))
+        entry = ttk.Entry(entry_row, textvariable=self.symbols_var, width=80)
+        entry.pack(side="left", fill="x", expand=True)
+        entry.focus_set()
+        ttk.Button(entry_row, text="Odśwież z bazy", command=self._load_symbols_from_database).pack(side="left", padx=(8, 0))
 
         ttk.Checkbutton(options, text="Notowania historyczne", variable=self.fetch_history_var).grid(row=2, column=0, sticky="w", pady=2)
         ttk.Checkbutton(options, text="Profile spółek", variable=self.fetch_companies_var).grid(row=2, column=1, sticky="w", pady=2)
@@ -316,8 +341,9 @@ class App:
 
         destination = ttk.LabelFrame(container, text="Katalog wynikowy", style="Card.TLabelframe")
         destination.pack(fill="x", padx=4, pady=8)
-        ttk.Entry(destination, textvariable=self.output_dir_var, width=80).grid(row=0, column=0, sticky="ew", padx=(0, 8), pady=4)
-        ttk.Button(destination, text="Wybierz...", command=self._choose_output_dir).grid(row=0, column=1, pady=4)
+        ttk.Label(destination, text="Folder docelowy", style="SectionHeader.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 4))
+        ttk.Entry(destination, textvariable=self.output_dir_var, width=80).grid(row=1, column=0, sticky="ew", padx=(0, 8), pady=(0, 4))
+        ttk.Button(destination, text="Wybierz...", command=self._choose_output_dir).grid(row=1, column=1, pady=(0, 4))
         destination.columnconfigure(0, weight=1)
 
         actions = ttk.Frame(container, style="Card.TFrame")
@@ -396,6 +422,50 @@ class App:
             symbols = list(DEFAULT_OHLC_SYNC_SYMBOLS)
         return sorted(dict.fromkeys(symbols))
 
+    def _load_symbols_from_database(self, *, silent: bool = False) -> bool:
+        try:
+            client = self._create_clickhouse_client()
+        except OperationalError as exc:
+            self._log(f"Błąd połączenia z ClickHouse przy wczytywaniu listy spółek: {exc}")
+            if not silent:
+                messagebox.showerror("ClickHouse", f"Nie udało się połączyć: {exc}")
+            return False
+        except Exception as exc:
+            self._log(f"Nie udało się przygotować połączenia: {exc}")
+            if not silent:
+                messagebox.showerror("ClickHouse", f"Wystąpił błąd podczas łączenia: {exc}")
+            return False
+
+        try:
+            table = self._sanitize_identifier(self.db_table_companies_var.get().strip() or "companies")
+            query = f"SELECT DISTINCT symbol FROM {table} WHERE symbol != '' ORDER BY symbol"
+            result = client.query(query)
+            rows = getattr(result, "result_rows", [])
+            symbols = [normalize_input_symbol(str(row[0])) for row in rows if row and row[0]]
+        except Exception as exc:
+            self._log(f"Nie udało się pobrać listy spółek z tabeli {table}: {exc}")
+            if not silent:
+                messagebox.showerror("ClickHouse", f"Nie udało się pobrać listy spółek: {exc}")
+            return False
+        finally:
+            try:
+                client.close()
+            except Exception:
+                pass
+
+        unique_symbols = sorted(dict.fromkeys(symbols))
+        if not unique_symbols:
+            if not silent:
+                messagebox.showwarning("Lista spółek", "Tabela nie zawiera żadnych symboli.")
+            self._log("Brak symboli w tabeli spółek – pozostawiono dotychczasową listę.")
+            return False
+
+        self.symbols_var.set(", ".join(unique_symbols))
+        self._log(f"Załadowano {len(unique_symbols)} spółek z tabeli {table}.")
+        if not silent:
+            messagebox.showinfo("Lista spółek", f"Wczytano {len(unique_symbols)} symboli z bazy danych.")
+        return True
+
     # ------------------------------------------------------------------
     # Configuration
     def _load_config(self) -> None:
@@ -416,6 +486,12 @@ class App:
                 self._log(f"Nie udało się wczytać konfiguracji: {exc}")
         else:
             CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+
+    def _prefill_symbols(self) -> None:
+        success = self._load_symbols_from_database(silent=True)
+        if not success and not self.symbols_var.get().strip():
+            self.symbols_var.set(", ".join(DEFAULT_OHLC_SYNC_SYMBOLS))
+            self._log("Użyto listy domyślnej – nie udało się pobrać symboli z bazy.")
 
     def _save_config(self) -> None:
         config = DbConfig(
