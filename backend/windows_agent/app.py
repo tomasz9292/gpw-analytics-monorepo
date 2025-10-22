@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import csv
 import json
 import os
 import random
+import sys
+import tempfile
 import threading
 import time
 import uuid
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -36,12 +40,23 @@ from api.stooq_news import StooqCompanyNewsHarvester
 from api.stooq_ohlc import OhlcRow, StooqOhlcHarvester
 from api.symbols import DEFAULT_OHLC_SYNC_SYMBOLS, normalize_input_symbol
 
+def _get_base_path() -> Path:
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS)
+    return Path(__file__).resolve().parent
+
+
+BASE_PATH = _get_base_path()
+RESOURCES_DIR = BASE_PATH / "resources"
+ICON_B64_PATH = RESOURCES_DIR / "gpw_agent_icon.b64"
+
 if os.name == "nt":
     appdata = os.getenv("APPDATA")
     CONFIG_DIR = Path(appdata) / "GPWAnalyticsAgent" if appdata else Path.home() / "GPWAnalyticsAgent"
 else:
     CONFIG_DIR = Path.home() / ".gpw_analytics_agent"
 
+ICON_CACHE_PATH = CONFIG_DIR / "gpw-agent.ico"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 KEYRING_SERVICE = "GPWAnalyticsAgent"
 DEFAULT_OUTPUT_DIR = Path.home() / "Documents" / "GPW Analytics"
@@ -105,6 +120,13 @@ class App:
         self.root.title("GPW – Agent pobierania danych")
         self.root.geometry("980x720")
         self.root.minsize(860, 640)
+        self._configure_styles()
+        self._icon_path = self._prepare_icon()
+        if self._icon_path:
+            try:
+                self.root.iconbitmap(default=str(self._icon_path))
+            except Exception:
+                pass
 
         self.agent_id = f"agent-{uuid.uuid4().hex[:6]}"
         self.download_thread: Optional[threading.Thread] = None
@@ -137,28 +159,131 @@ class App:
         self._build_ui()
         self._log("Agent gotowy. Wybierz zakres danych i kliknij 'Pobierz dane'.")
 
+    def _prepare_icon(self) -> Optional[Path]:
+        if os.name != "nt":
+            return None
+        icon_bytes = self._load_icon_bytes()
+        if not icon_bytes:
+            return None
+        cache_path = ICON_CACHE_PATH
+        try:
+            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+
+        try:
+            if cache_path.exists():
+                try:
+                    if cache_path.read_bytes() == icon_bytes:
+                        return cache_path
+                except OSError:
+                    pass
+            cache_path.write_bytes(icon_bytes)
+            return cache_path
+        except OSError:
+            try:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".ico") as temp_icon:
+                    temp_icon.write(icon_bytes)
+                    return Path(temp_icon.name)
+            except Exception:
+                return None
+        return None
+
+    def _load_icon_bytes(self) -> Optional[bytes]:
+        if not ICON_B64_PATH.exists():
+            return None
+        try:
+            encoded = ICON_B64_PATH.read_text(encoding="utf-8")
+        except OSError:
+            return None
+        payload = "".join(encoded.split())
+        if not payload:
+            return None
+        try:
+            return base64.b64decode(payload)
+        except (binascii.Error, ValueError):
+            return None
+
+    def _configure_styles(self) -> None:
+        accent = "#2563eb"
+        neutral_bg = "#f3f4f6"
+        surface_bg = "#ffffff"
+        text_color = "#111827"
+
+        self.root.configure(background=neutral_bg)
+        self.root.option_add("*Font", "Segoe UI 10")
+        self.root.option_add("*TButton.padding", 6)
+        self.root.option_add("*TButton.relief", "flat")
+        style = ttk.Style(self.root)
+        try:
+            style.theme_use("clam")
+        except Exception:
+            pass
+
+        style.configure("TFrame", background=neutral_bg)
+        style.configure("Content.TFrame", background=neutral_bg, padding=8)
+        style.configure("Card.TLabelframe", background=surface_bg, borderwidth=1, relief="solid", padding=16)
+        style.configure("Card.TLabelframe.Label", background=surface_bg, foreground=text_color, font=("Segoe UI Semibold", 10))
+        style.configure("TLabel", background=surface_bg, foreground=text_color)
+        style.configure("Card.TFrame", background=surface_bg, padding=8)
+        style.configure("TNotebook", background=neutral_bg, borderwidth=0, padding=4)
+        style.configure("TNotebook.Tab", padding=(16, 10), font=("Segoe UI Semibold", 10))
+        style.map(
+            "TNotebook.Tab",
+            background=[("selected", surface_bg), ("!selected", neutral_bg)],
+            foreground=[("selected", text_color)],
+        )
+        style.configure("TButton", background=surface_bg, foreground=text_color, borderwidth=0, focuscolor=neutral_bg)
+        style.map(
+            "TButton",
+            background=[("active", "#e5e7eb"), ("pressed", "#d1d5db")],
+            relief=[("pressed", "sunken"), ("!pressed", "flat")],
+        )
+        style.configure(
+            "Accent.TButton",
+            background=accent,
+            foreground="#ffffff",
+            borderwidth=0,
+            focusthickness=3,
+            focuscolor="#bfdbfe",
+            padding=(18, 10),
+        )
+        style.map(
+            "Accent.TButton",
+            background=[("active", "#1d4ed8"), ("pressed", "#1e3a8a")],
+        )
+        style.configure("TCheckbutton", background=surface_bg, foreground=text_color, padding=6)
+        style.map("TCheckbutton", background=[("active", "#e5e7eb")])
+        style.configure("TEntry", fieldbackground="#ffffff", padding=8)
+        style.configure("TSpinbox", fieldbackground="#ffffff", padding=8)
+        style.configure("TLabelframe", background=surface_bg)
+
     # ------------------------------------------------------------------
     # UI
     def _build_ui(self) -> None:
         notebook = ttk.Notebook(self.root)
-        notebook.pack(fill="both", expand=True, padx=12, pady=12)
+        notebook.pack(fill="both", expand=True, padx=16, pady=16)
 
-        downloads_frame = ttk.Frame(notebook)
+        downloads_frame = ttk.Frame(notebook, style="Content.TFrame")
         notebook.add(downloads_frame, text="Pobieranie danych")
         self._build_download_tab(downloads_frame)
 
-        db_frame = ttk.Frame(notebook)
+        db_frame = ttk.Frame(notebook, style="Content.TFrame")
         notebook.add(db_frame, text="Połączenie z bazą danych")
         self._build_db_tab(db_frame)
 
-        log_frame = ttk.LabelFrame(self.root, text="Log zdarzeń")
-        log_frame.pack(fill="both", expand=True, padx=12, pady=(0, 12))
-        self.log_text = ScrolledText(log_frame, height=12, wrap="word", state="disabled")
+        log_frame = ttk.LabelFrame(self.root, text="Log zdarzeń", style="Card.TLabelframe")
+        log_frame.pack(fill="both", expand=True, padx=16, pady=(0, 16))
+        self.log_text = ScrolledText(log_frame, height=12, wrap="word", state="disabled", font=("Consolas", 10))
         self.log_text.pack(fill="both", expand=True, padx=8, pady=8)
+        self.log_text.configure(background="#ffffff", foreground="#111827", insertbackground="#111827")
 
     def _build_download_tab(self, parent: ttk.Frame) -> None:
-        options = ttk.LabelFrame(parent, text="Zakres pobierania")
-        options.pack(fill="x", padx=12, pady=12)
+        container = ttk.Frame(parent, style="Content.TFrame")
+        container.pack(fill="both", expand=True)
+
+        options = ttk.LabelFrame(container, text="Zakres pobierania", style="Card.TLabelframe")
+        options.pack(fill="x", padx=4, pady=8)
 
         ttk.Label(options, text="Lista spółek (oddzielone przecinkami)").grid(row=0, column=0, sticky="w")
         ttk.Entry(options, textvariable=self.symbols_var, width=80).grid(row=1, column=0, columnspan=3, sticky="ew", pady=4)
@@ -181,20 +306,23 @@ class App:
         options.columnconfigure(1, weight=1)
         options.columnconfigure(2, weight=1)
 
-        destination = ttk.LabelFrame(parent, text="Katalog wynikowy")
-        destination.pack(fill="x", padx=12, pady=(0, 12))
+        destination = ttk.LabelFrame(container, text="Katalog wynikowy", style="Card.TLabelframe")
+        destination.pack(fill="x", padx=4, pady=8)
         ttk.Entry(destination, textvariable=self.output_dir_var, width=80).grid(row=0, column=0, sticky="ew", padx=(0, 8), pady=4)
         ttk.Button(destination, text="Wybierz...", command=self._choose_output_dir).grid(row=0, column=1, pady=4)
         destination.columnconfigure(0, weight=1)
 
-        actions = ttk.Frame(parent)
-        actions.pack(fill="x", padx=12, pady=(0, 12))
-        ttk.Button(actions, text="Pobierz dane", command=self._start_download).pack(side="left")
+        actions = ttk.Frame(container, style="Card.TFrame")
+        actions.pack(fill="x", padx=4, pady=(0, 8))
+        ttk.Button(actions, text="Pobierz dane", command=self._start_download, style="Accent.TButton").pack(side="left")
         ttk.Button(actions, text="Otwórz katalog", command=self._open_output_dir).pack(side="left", padx=(8, 0))
 
     def _build_db_tab(self, parent: ttk.Frame) -> None:
-        connection = ttk.LabelFrame(parent, text="Parametry połączenia")
-        connection.pack(fill="x", padx=12, pady=12)
+        container = ttk.Frame(parent, style="Content.TFrame")
+        container.pack(fill="both", expand=True)
+
+        connection = ttk.LabelFrame(container, text="Parametry połączenia", style="Card.TLabelframe")
+        connection.pack(fill="x", padx=4, pady=8)
 
         labels = [
             ("Adres hosta", self.db_host_var),
@@ -213,11 +341,11 @@ class App:
 
         ttk.Checkbutton(connection, text="Szyfrowane połączenie (HTTPS)", variable=self.db_https_var).grid(row=len(labels), column=0, columnspan=2, sticky="w", pady=(8, 0))
 
-        ttk.Button(connection, text="Wprowadź hasło", command=self._prompt_password).grid(row=len(labels) + 1, column=0, pady=8, sticky="w")
-        ttk.Button(connection, text="Zapisz konfigurację", command=self._save_config).grid(row=len(labels) + 1, column=1, pady=8, sticky="e")
+        ttk.Button(connection, text="Wprowadź hasło", command=self._prompt_password).grid(row=len(labels) + 1, column=0, pady=12, sticky="w")
+        ttk.Button(connection, text="Zapisz konfigurację", command=self._save_config, style="Accent.TButton").grid(row=len(labels) + 1, column=1, pady=12, sticky="e")
 
-        actions = ttk.Frame(parent)
-        actions.pack(fill="x", padx=12, pady=(0, 12))
+        actions = ttk.Frame(container, style="Card.TFrame")
+        actions.pack(fill="x", padx=4, pady=(0, 8))
         ttk.Button(actions, text="Przetestuj połączenie", command=self._test_connection).pack(side="left")
         ttk.Button(actions, text="Eksportuj ostatnie dane", command=self._start_export).pack(side="left", padx=(8, 0))
 
