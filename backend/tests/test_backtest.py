@@ -495,3 +495,41 @@ def test_portfolio_score_respects_ascending_direction(monkeypatch):
     result = main.backtest_portfolio_score(request)
 
     assert result[0].raw == "BBB"
+
+
+def test_portfolio_simulate_shapes_response(monkeypatch):
+    data = {
+        "AAA": [
+            ("2023-01-02", 100.0),
+            ("2023-01-03", 101.0),
+            ("2023-01-04", 103.0),
+            ("2023-01-05", 102.5),
+        ],
+        "BBB": [
+            ("2023-01-02", 50.0),
+            ("2023-01-03", 51.0),
+            ("2023-01-04", 52.0),
+            ("2023-01-05", 54.0),
+        ],
+    }
+
+    fake = FakeClickHouse(data)
+    monkeypatch.setattr(main, "get_ch", lambda: fake)
+
+    request = main.BacktestPortfolioRequest(
+        start=date(2023, 1, 2),
+        rebalance="monthly",
+        manual=main.ManualPortfolioConfig(symbols=["AAA", "BBB"]),
+        initial_capital=10000.0,
+    )
+
+    result = main.portfolio_simulate(request)
+
+    assert result.summary.initial_value == pytest.approx(10000.0)
+    assert result.summary.final_value > 0
+    assert result.summary.total_return_pct is not None
+    assert len(result.equity_curve) >= 3
+    assert all(point.date for point in result.equity_curve)
+    assert result.allocations
+    assert all(allocation.symbol for allocation in result.allocations)
+    assert result.rebalances

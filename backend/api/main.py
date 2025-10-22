@@ -1892,6 +1892,34 @@ class PortfolioScoreItem(BaseModel):
     score: float
 
 
+class PortfolioEquitySnapshot(BaseModel):
+    date: str
+    value: float
+    return_pct: float
+
+
+class PortfolioSimulationSummary(BaseModel):
+    start: str
+    end: str
+    initial_value: float
+    final_value: float
+    total_return_pct: float
+    cagr_pct: float
+    volatility_pct: float
+    max_drawdown_pct: float
+    sharpe: float
+    turnover_pct: Optional[float] = None
+    trades_count: Optional[float] = None
+    fees_paid: Optional[float] = None
+
+
+class PortfolioSimulationResponse(BaseModel):
+    summary: PortfolioSimulationSummary
+    equity_curve: List[PortfolioEquitySnapshot]
+    allocations: List[PortfolioAllocation]
+    rebalances: List[PortfolioRebalanceEvent]
+
+
 class ScoreComponent(BaseModel):
     lookback_days: int = Field(..., ge=1, le=3650)
     metric: str = Field(..., description="Typ metryki score'u (np. total_return)")
@@ -3915,6 +3943,60 @@ def _run_backtest(req: BacktestPortfolioRequest) -> PortfolioResp:
     )
 
 
+def _build_simulation_response(
+    req: BacktestPortfolioRequest, result: PortfolioResp
+) -> PortfolioSimulationResponse:
+    equity_curve: List[PortfolioEquitySnapshot] = []
+    base_value = (
+        result.stats.initial_value
+        if result.stats.initial_value and result.stats.initial_value > 0
+        else (result.equity[0].value if result.equity else 0.0)
+    )
+
+    for point in result.equity:
+        if base_value > 0:
+            return_pct = point.value / base_value - 1.0
+        else:
+            return_pct = 0.0
+        equity_curve.append(
+            PortfolioEquitySnapshot(date=point.date, value=point.value, return_pct=return_pct)
+        )
+
+    summary = PortfolioSimulationSummary(
+        start=req.start.isoformat(),
+        end=(
+            req.end.isoformat()
+            if req.end is not None
+            else (result.equity[-1].date if result.equity else req.start.isoformat())
+        ),
+        initial_value=result.stats.initial_value
+        if result.stats.initial_value is not None
+        else (result.equity[0].value if result.equity else 0.0),
+        final_value=result.stats.final_value
+        if result.stats.final_value is not None
+        else (result.equity[-1].value if result.equity else 0.0),
+        total_return_pct=(
+            result.stats.total_return
+            if result.stats.total_return is not None
+            else ((result.equity[-1].value / base_value - 1.0) if base_value > 0 and result.equity else 0.0)
+        ),
+        cagr_pct=result.stats.cagr,
+        volatility_pct=result.stats.volatility,
+        max_drawdown_pct=result.stats.max_drawdown,
+        sharpe=result.stats.sharpe,
+        turnover_pct=result.stats.turnover,
+        trades_count=result.stats.trades,
+        fees_paid=result.stats.fees,
+    )
+
+    return PortfolioSimulationResponse(
+        summary=summary,
+        equity_curve=equity_curve,
+        allocations=list(result.allocations or []),
+        rebalances=list(result.rebalances or []),
+    )
+
+
 def _compute_portfolio_score(req: PortfolioScoreRequest) -> List[PortfolioScoreItem]:
     if not req.auto:
         raise HTTPException(400, "Endpoint score wspiera jedynie tryb auto")
@@ -4263,6 +4345,14 @@ def backtest_portfolio(req: BacktestPortfolioRequest):
     """
 
     return _run_backtest(req)
+
+
+@api_router.post("/portfolio/simulate", response_model=PortfolioSimulationResponse)
+def portfolio_simulate(req: BacktestPortfolioRequest):
+    """Nowy wariant backtestu z odpowiedzią zoptymalizowaną dla panelu symulatora."""
+
+    result = _run_backtest(req)
+    return _build_simulation_response(req, result)
 
 
 @api_router.post("/backtest/portfolio/score", response_model=List[PortfolioScoreItem])

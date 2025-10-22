@@ -95,12 +95,6 @@ const removeUndefined = (obj: Record<string, unknown>) =>
         Object.entries(obj).filter(([, value]) => value !== undefined && value !== null)
     );
 
-const parseSymbolInput = (value: string): string[] =>
-    value
-        .split(/[\s,;]+/)
-        .map((item) => item.trim().toUpperCase())
-        .filter((item) => item.length > 0);
-
 const findScoreMetric = (value: string): ScoreMetricOption | undefined =>
     SCORE_METRIC_OPTIONS.find((option) => option.value === value);
 
