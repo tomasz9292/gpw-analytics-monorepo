@@ -211,7 +211,15 @@ class App:
         text_color = "#111827"
 
         self.root.configure(background=neutral_bg)
-        self.root.option_add("*Font", "Segoe UI 10")
+        # When specifying fonts through Tk's option database, font families that
+        # contain spaces must be passed as a single Tcl list element. Providing
+        # the value as a plain string ("Segoe UI 10") makes Tk interpret
+        # "Segoe" as the family and expects the next token to be the integer
+        # size; it therefore tries to parse "UI" as an integer and raises
+        # ``TclError: expected integer but got "UI"`` when the first widget is
+        # created. Passing a Python tuple ensures Tk receives a proper list
+        # where the family name is treated as a single element.
+        self.root.option_add("*Font", ("Segoe UI", 10))
         self.root.option_add("*TButton.padding", 6)
         self.root.option_add("*TButton.relief", "flat")
         style = ttk.Style(self.root)
