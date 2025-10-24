@@ -4,14 +4,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence
 
 from .stooq_ohlc import OhlcRow, StooqOhlcHarvester
 
 
-INDEX_SYMBOL_ALIASES: Dict[str, str] = {
-    "MWIG40": "MW40",
-    "SWIG80": "SW80",
+INDEX_SYMBOL_ALIASES: Dict[str, Sequence[str]] = {
+    "MWIG40": ("MWIG40", "MW40"),
+    "SWIG80": ("SWIG80", "SW80"),
+    "WIG20TR": ("WIG20TR",),
+    "MWIG40TR": ("MWIG40TR",),
+    "SWIG80TR": ("SWIG80TR",),
 }
 
 
@@ -36,8 +39,30 @@ class StooqIndexQuoteHarvester:
 
     def fetch_history(self, index_symbol: str) -> List[IndexQuoteRow]:
         canonical = self._normalize_index_code(index_symbol)
-        lookup_symbol = INDEX_SYMBOL_ALIASES.get(canonical, canonical)
-        rows: List[OhlcRow] = self.ohlc_harvester.fetch_history(lookup_symbol)
+        lookup_candidates = INDEX_SYMBOL_ALIASES.get(canonical, (canonical,))
+        selected_rows: Optional[List[OhlcRow]] = None
+        last_error: Optional[Exception] = None
+
+        for candidate in lookup_candidates:
+            try:
+                rows = self.ohlc_harvester.fetch_history(candidate)
+            except Exception as exc:  # pragma: no cover - defensive, network errors mocked in tests
+                last_error = exc
+                continue
+
+            if rows:
+                selected_rows = rows
+                break
+
+            # Remember the result to return if all candidates are empty.
+            if selected_rows is None:
+                selected_rows = rows
+
+        if selected_rows is None:
+            if last_error is not None:
+                raise last_error
+            return []
+
         return [
             IndexQuoteRow(
                 index_code=canonical,
