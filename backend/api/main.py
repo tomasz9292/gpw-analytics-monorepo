@@ -3857,23 +3857,35 @@ def _run_backtest(req: BacktestPortfolioRequest) -> PortfolioResp:
                 return weights, 1.0, "Wolne środki do transakcji"
 
             weights = {sym: 0.0 for sym in all_symbols}
+            slots = max(req.auto.top_n, 1)
+            selected_ratio = min(len(selected), slots) / slots
+            actual_investable = investable_ratio * selected_ratio
+
             if req.auto.weighting == "score":
                 raw_values = [score for _, score in selected]
                 total_raw = sum(raw_values)
                 if total_raw > 0:
                     for sym, score in selected:
-                        weights[sym] = investable_ratio * (score / total_raw)
+                        weights[sym] = actual_investable * (score / total_raw)
                 else:
-                    equal = investable_ratio / len(selected)
+                    equal = actual_investable / len(selected)
                     for sym, _ in selected:
                         weights[sym] = equal
             else:
-                equal = investable_ratio / len(selected)
+                equal = actual_investable / len(selected)
                 for sym, _ in selected:
                     weights[sym] = equal
 
-            cash_weight_local = max(0.0, 1.0 - investable_ratio)
-            note = "Wolne środki do transakcji" if cash_weight_local > 0 else None
+            cash_weight_local = max(0.0, 1.0 - actual_investable)
+            note: Optional[str]
+            if cash_weight_local > 0:
+                note = (
+                    "Niewykorzystane sloty (część środków pozostaje w gotówce)"
+                    if len(selected) < req.auto.top_n
+                    else "Wolne środki do transakcji"
+                )
+            else:
+                note = None
             return weights, cash_weight_local, note
 
         weights_list = [0.0] * len(closes_ordered)

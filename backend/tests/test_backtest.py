@@ -256,6 +256,66 @@ def test_backtest_portfolio_auto_thresholds_leave_cash(monkeypatch):
     assert event.trades[0].note == "Wolne środki do transakcji"
 
 
+def test_backtest_portfolio_auto_partial_slots_use_cash(monkeypatch):
+    data = {
+        "AAA": [
+            ("2023-01-02", 100.0),
+            ("2023-01-03", 105.0),
+            ("2023-01-31", 130.0),
+            ("2023-02-01", 135.0),
+        ],
+        "BBB": [
+            ("2023-01-02", 100.0),
+            ("2023-01-03", 100.5),
+            ("2023-01-31", 100.4),
+            ("2023-02-01", 100.3),
+        ],
+    }
+    fake = FakeClickHouse(data)
+    monkeypatch.setattr(main, "get_ch", lambda: fake)
+
+    request = main.BacktestPortfolioRequest(
+        start=date(2023, 1, 3),
+        rebalance="monthly",
+        auto=main.AutoSelectionConfig(
+            top_n=2,
+            components=[
+                main.ScoreComponent(lookback_days=1, metric="total_return", weight=1)
+            ],
+            weighting="equal",
+            min_score=0.01,
+            filters=main.UniverseFilters(include=["AAA", "BBB"]),
+        ),
+    )
+
+    result = main.backtest_portfolio(request)
+
+    assert result.rebalances is not None
+    assert len(result.rebalances) >= 2
+
+    first_event = result.rebalances[0]
+    assert first_event.trades is not None
+    trades_map = {trade.symbol: trade for trade in first_event.trades}
+    assert "AAA" in trades_map
+    assert trades_map["AAA"].target_weight == pytest.approx(0.5, rel=1e-6)
+
+    cash_trade = trades_map["Wolne środki"]
+    assert cash_trade.target_weight == pytest.approx(0.5, rel=1e-6)
+    assert (
+        cash_trade.note
+        == "Niewykorzystane sloty (część środków pozostaje w gotówce)"
+    )
+
+    second_event = result.rebalances[1]
+    assert second_event.trades is not None
+    second_cash = [t for t in second_event.trades if t.symbol == "Wolne środki"][0]
+    assert second_cash.target_weight == pytest.approx(0.5, rel=1e-6)
+    assert (
+        second_cash.note
+        == "Niewykorzystane sloty (część środków pozostaje w gotówce)"
+    )
+
+
 def test_portfolio_score_returns_top_n(monkeypatch):
     data = {
         "AAA": [
