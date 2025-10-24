@@ -70,7 +70,15 @@ CONFIG_FILE = CONFIG_DIR / "config.json"
 KEYRING_SERVICE = "GPWAnalyticsAgent"
 DEFAULT_OUTPUT_DIR = Path.home() / "Documents" / "GPW Analytics"
 DEFAULT_NEWS_LIMIT = 30
-DEFAULT_INDEX_SYMBOLS = ("WIG20", "MWIG40", "SWIG80", "WIG")
+DEFAULT_INDEX_SYMBOLS = (
+    "WIG20",
+    "WIG20TR",
+    "MWIG40",
+    "MWIG40TR",
+    "SWIG80",
+    "SWIG80TR",
+    "WIG",
+)
 
 
 @dataclass
