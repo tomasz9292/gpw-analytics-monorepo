@@ -12,6 +12,8 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urljoin
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 
 LOGGER = logging.getLogger(__name__)
@@ -158,6 +160,27 @@ class GpwBenchmarkHarvester:
 
     def __init__(self, session: Optional[requests.Session] = None) -> None:
         self.session = session or requests.Session()
+        self._configure_session()
+
+    def _configure_session(self) -> None:
+        """Configure the underlying requests session with sane defaults."""
+
+        # RemoteDisconnected errors started appearing when the GPW Benchmark
+        # backend began aggressively closing connections.  Using urllib3
+        # retries ensures that we transparently recover from these transient
+        # connection drops without surfacing an error to the user.
+        retry = Retry(
+            total=3,
+            connect=5,
+            read=5,
+            backoff_factor=0.5,
+            status_forcelist=(500, 502, 503, 504),
+            allowed_methods=None,
+            raise_on_status=False,
+        )
+        adapter = HTTPAdapter(max_retries=retry)
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
 
     # ------------------------------------------------------------------
     def fetch(self) -> Tuple[List[IndexPortfolioRecord], List[IndexHistoryRecord]]:
