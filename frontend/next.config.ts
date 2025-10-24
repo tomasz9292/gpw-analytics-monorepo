@@ -35,6 +35,7 @@ const nextConfig: NextConfig = {
       // Publiczne endpointy backendu wykorzystywane bezpośrednio z klienta
       proxy("/api/score/:path*", "/score/:path*"),
       proxy("/api/backtest/:path*", "/backtest/:path*"),
+      proxy("/api/portfolio/:path*", "/portfolio/:path*"),
       proxy("/api/companies", "/companies"),
       proxy("/api/companies/:path*", "/companies/:path*"),
       proxy("/api/symbols", "/symbols"),
