@@ -41,6 +41,8 @@ const nextConfig: NextConfig = {
       proxy("/api/symbols/:path*", "/symbols/:path*"),
       proxy("/api/quotes", "/quotes"),
       proxy("/api/quotes/:path*", "/quotes/:path*"),
+      proxy("/api/indices", "/indices"),
+      proxy("/api/indices/:path*", "/indices/:path*"),
     ];
   },
 };

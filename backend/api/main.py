@@ -46,6 +46,8 @@ from .windows_agent import router as windows_agent_router
 
 TABLE_OHLC = os.getenv("TABLE_OHLC", "ohlc")
 TABLE_COMPANIES = os.getenv("TABLE_COMPANIES", "companies")
+TABLE_INDEX_PORTFOLIOS = os.getenv("TABLE_INDEX_PORTFOLIOS", "index_portfolios")
+TABLE_INDEX_HISTORY = os.getenv("TABLE_INDEX_HISTORY", "index_history")
 
 DEFAULT_COMPANIES_TABLE_DDL = textwrap.dedent(
     f"""
@@ -119,6 +121,42 @@ DEFAULT_OHLC_TABLE_DDL = textwrap.dedent(
     ORDER BY (symbol, date)
     """
 )
+
+DEFAULT_INDEX_PORTFOLIOS_DDL = textwrap.dedent(
+    f"""
+    CREATE TABLE IF NOT EXISTS {TABLE_INDEX_PORTFOLIOS} (
+        index_code LowCardinality(String),
+        index_name Nullable(String),
+        effective_date Date,
+        symbol LowCardinality(String),
+        company_name Nullable(String),
+        weight Nullable(Float64),
+        source LowCardinality(Nullable(String))
+    )
+    ENGINE = MergeTree()
+    ORDER BY (index_code, effective_date, symbol)
+    """
+)
+
+DEFAULT_INDEX_HISTORY_DDL = textwrap.dedent(
+    f"""
+    CREATE TABLE IF NOT EXISTS {TABLE_INDEX_HISTORY} (
+        index_code LowCardinality(String),
+        index_name Nullable(String),
+        date Date,
+        value Nullable(Float64),
+        change_pct Nullable(Float64),
+        source LowCardinality(Nullable(String))
+    )
+    ENGINE = MergeTree()
+    ORDER BY (index_code, date)
+    """
+)
+
+
+def _ensure_index_tables(ch_client) -> None:
+    ch_client.command(DEFAULT_INDEX_PORTFOLIOS_DDL)
+    ch_client.command(DEFAULT_INDEX_HISTORY_DDL)
 
 _OHLC_IMPORT_REQUIRED_COLUMNS = ("symbol", "date", "open", "high", "low", "close")
 _OHLC_IMPORT_OPTIONAL_COLUMNS = ("volume",)
@@ -1921,6 +1959,7 @@ class UniverseFilters(BaseModel):
     include: Optional[List[str]] = None
     exclude: Optional[List[str]] = None
     prefixes: Optional[List[str]] = None
+    indices: Optional[List[str]] = None
 
     @field_validator("include", "exclude", "prefixes", mode="before")
     @classmethod
@@ -1939,6 +1978,28 @@ class UniverseFilters(BaseModel):
         cleaned: List[str] = []
         for item in value:
             cleaned_item = item.strip()
+            if not cleaned_item:
+                raise ValueError("filter values must not be empty")
+            cleaned.append(cleaned_item)
+        return cleaned
+
+    @field_validator("indices", mode="before")
+    @classmethod
+    def _ensure_indices_list(cls, value):
+        if value is None:
+            return value
+        if isinstance(value, str):
+            return [value]
+        return list(value)
+
+    @field_validator("indices")
+    @classmethod
+    def _cleanup_indices(cls, value):
+        if value is None:
+            return value
+        cleaned: List[str] = []
+        for item in value:
+            cleaned_item = item.strip().upper()
             if not cleaned_item:
                 raise ValueError("filter values must not be empty")
             cleaned.append(cleaned_item)
@@ -2065,6 +2126,39 @@ class ScorePreviewResponse(BaseModel):
     universe_count: int
     rows: List[ScorePreviewRow]
     meta: Dict[str, object]
+
+
+class IndexConstituentResponse(BaseModel):
+    symbol: str
+    company_name: Optional[str] = None
+    weight: Optional[float] = None
+
+
+class IndexPortfolioSnapshotResponse(BaseModel):
+    index_code: str
+    index_name: Optional[str] = None
+    effective_date: str
+    constituents: List[IndexConstituentResponse]
+
+
+class IndexPortfoliosResponse(BaseModel):
+    portfolios: List[IndexPortfolioSnapshotResponse]
+
+
+class IndexHistoryPointResponse(BaseModel):
+    date: str
+    value: Optional[float] = None
+    change_pct: Optional[float] = None
+
+
+class IndexHistorySeriesResponse(BaseModel):
+    index_code: str
+    index_name: Optional[str] = None
+    points: List[IndexHistoryPointResponse]
+
+
+class IndexHistoryResponse(BaseModel):
+    items: List[IndexHistorySeriesResponse]
 
 
 # =========================
@@ -3206,6 +3300,155 @@ def _collect_all_company_symbols(ch_client) -> Optional[List[str]]:
     return None
 
 
+def _sanitize_index_code(value: str) -> str:
+    cleaned = "".join(ch for ch in value.upper() if ch.isalnum() or ch in {"_", "-"})
+    return cleaned
+
+
+def _collect_latest_index_membership(
+    ch_client, index_codes: Iterable[str]
+) -> Dict[str, List[str]]:
+    cleaned_codes = [_sanitize_index_code(code) for code in index_codes if _sanitize_index_code(code)]
+    if not cleaned_codes:
+        return {}
+    _ensure_index_tables(ch_client)
+    in_clause = ", ".join(f"'{code}'" for code in cleaned_codes)
+    inner_filter = f"WHERE index_code IN ({in_clause})"
+    outer_filter = f"WHERE p.index_code IN ({in_clause})"
+    query = f"""
+        WITH latest AS (
+            SELECT index_code, max(effective_date) AS max_date
+            FROM {TABLE_INDEX_PORTFOLIOS}
+            {inner_filter}
+            GROUP BY index_code
+        )
+        SELECT
+            p.index_code,
+            p.symbol
+        FROM {TABLE_INDEX_PORTFOLIOS} AS p
+        INNER JOIN latest AS l
+            ON p.index_code = l.index_code AND p.effective_date = l.max_date
+        {outer_filter}
+        ORDER BY p.index_code, p.symbol
+    """
+    try:
+        rows = ch_client.query(query).named_results()
+    except AttributeError:
+        rows = None
+    if rows is None:
+        rows = [
+            {"index_code": row[0], "symbol": row[1]}
+            for row in ch_client.query(query).result_rows
+        ]
+
+    membership: Dict[str, List[str]] = {}
+    for row in rows:
+        code_raw = row.get("index_code") if isinstance(row, dict) else row[0]
+        symbol_raw = row.get("symbol") if isinstance(row, dict) else row[1]
+        if not code_raw or not symbol_raw:
+            continue
+        code = str(code_raw).upper()
+        normalized_symbol = normalize_input_symbol(str(symbol_raw))
+        if not normalized_symbol:
+            continue
+        bucket = membership.setdefault(code, [])
+        if normalized_symbol not in bucket:
+            bucket.append(normalized_symbol)
+    return membership
+
+
+def _fetch_latest_index_portfolios(
+    ch_client, index_codes: Optional[Iterable[str]] = None
+) -> List[Dict[str, Any]]:
+    cleaned: List[str] = []
+    if index_codes is not None:
+        cleaned = [_sanitize_index_code(code) for code in index_codes if _sanitize_index_code(code)]
+    _ensure_index_tables(ch_client)
+    if cleaned:
+        in_clause = ", ".join(f"'{code}'" for code in cleaned)
+        inner_filter = f"WHERE index_code IN ({in_clause})"
+        outer_filter = f"WHERE p.index_code IN ({in_clause})"
+    else:
+        inner_filter = ""
+        outer_filter = ""
+
+    query = f"""
+        WITH latest AS (
+            SELECT index_code, max(effective_date) AS max_date
+            FROM {TABLE_INDEX_PORTFOLIOS}
+            {inner_filter}
+            GROUP BY index_code
+        )
+        SELECT
+            p.index_code,
+            p.index_name,
+            p.effective_date,
+            p.symbol,
+            p.company_name,
+            p.weight
+        FROM {TABLE_INDEX_PORTFOLIOS} AS p
+        INNER JOIN latest AS l
+            ON p.index_code = l.index_code AND p.effective_date = l.max_date
+        {outer_filter}
+        ORDER BY p.index_code, p.symbol
+    """
+
+    try:
+        rows = ch_client.query(query).named_results()
+    except AttributeError:
+        rows = None
+    if rows is None:
+        rows = [
+            {
+                "index_code": row[0],
+                "index_name": row[1],
+                "effective_date": row[2],
+                "symbol": row[3],
+                "company_name": row[4],
+                "weight": row[5],
+            }
+            for row in ch_client.query(query).result_rows
+        ]
+    return rows
+
+
+def _fetch_index_history_rows(
+    ch_client,
+    index_codes: Optional[Iterable[str]] = None,
+) -> List[Dict[str, Any]]:
+    cleaned: List[str] = []
+    if index_codes is not None:
+        cleaned = [_sanitize_index_code(code) for code in index_codes if _sanitize_index_code(code)]
+    _ensure_index_tables(ch_client)
+    conditions: List[str] = []
+    if cleaned:
+        in_clause = ", ".join(f"'{code}'" for code in cleaned)
+        conditions.append(f"index_code IN ({in_clause})")
+    where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    query = f"""
+        SELECT index_code, index_name, date, value, change_pct
+        FROM {TABLE_INDEX_HISTORY}
+        {where_clause}
+        ORDER BY index_code, date
+    """
+    try:
+        rows = ch_client.query(query).named_results()
+    except AttributeError:
+        rows = None
+    if rows is None:
+        rows = [
+            {
+                "index_code": row[0],
+                "index_name": row[1],
+                "date": row[2],
+                "value": row[3],
+                "change_pct": row[4],
+            }
+            for row in ch_client.query(query).result_rows
+        ]
+    return rows
+
+
 def _list_candidate_symbols(ch_client, filters: Optional[UniverseFilters]) -> List[str]:
     symbols = _collect_all_company_symbols(ch_client)
     if symbols is None:
@@ -3228,6 +3471,16 @@ def _list_candidate_symbols(ch_client, filters: Optional[UniverseFilters]) -> Li
         if not includes:
             raise HTTPException(400, "Lista include nie zawiera poprawnych symboli")
 
+    indices_whitelist = None
+    if filters.indices:
+        membership_map = _collect_latest_index_membership(ch_client, filters.indices)
+        aggregated: set[str] = set()
+        for members in membership_map.values():
+            aggregated.update(members)
+        if not aggregated:
+            raise HTTPException(404, "Brak spółek w wybranych indeksach")
+        indices_whitelist = aggregated
+
     excludes = set()
     if filters.exclude:
         excludes = {normalize_input_symbol(sym) for sym in filters.exclude}
@@ -3239,6 +3492,8 @@ def _list_candidate_symbols(ch_client, filters: Optional[UniverseFilters]) -> Li
 
     filtered: List[str] = []
     for sym in symbols:
+        if indices_whitelist is not None and sym not in indices_whitelist:
+            continue
         if includes and sym not in includes:
             continue
         if sym in excludes:
@@ -3327,12 +3582,56 @@ def _build_components_from_rules(rules: List[ScoreRulePayload]) -> List[ScoreCom
     return components
 
 
+def _build_filters_from_universe(universe: ScorePreviewRequest["universe"]) -> Optional[UniverseFilters]:
+    if not universe:
+        return None
+
+    if isinstance(universe, str):
+        tokens = [token.strip() for token in re.split(r"[\s,;]+", universe) if token.strip()]
+    else:
+        tokens: List[str] = []
+        for item in universe:
+            if isinstance(item, str):
+                cleaned = item.strip()
+            else:
+                cleaned = str(item).strip()
+            if cleaned:
+                tokens.append(cleaned)
+
+    if not tokens:
+        return None
+
+    include_tokens: List[str] = []
+    index_tokens: List[str] = []
+    for token in tokens:
+        lowered = token.lower()
+        if lowered.startswith("index:") or lowered.startswith("indeks:") or lowered.startswith("idx:"):
+            _, _, tail = token.partition(":")
+            candidate = tail.strip().upper()
+            if candidate:
+                index_tokens.append(candidate)
+            continue
+        include_tokens.append(token)
+
+    payload: Dict[str, object] = {}
+    if include_tokens:
+        payload["include"] = include_tokens
+    if index_tokens:
+        payload["indices"] = index_tokens
+
+    if not payload:
+        return None
+
+    try:
+        return UniverseFilters(**payload)
+    except ValidationError as exc:  # pragma: no cover - delegacja błędu walidacji
+        raise HTTPException(400, "Niepoprawny format wszechświata") from exc
+
+
 def _build_auto_config_from_preview(req: ScorePreviewRequest) -> AutoSelectionConfig:
     components = _build_components_from_rules(req.rules)
     top_n = req.limit or len(components)
-    filters = None
-    if req.universe:
-        filters = UniverseFilters(include=req.universe)
+    filters = _build_filters_from_universe(req.universe)
     return AutoSelectionConfig(
         top_n=top_n,
         components=components,
@@ -4324,6 +4623,119 @@ def backtest_portfolio_tooling():
             },
         ),
     )
+
+
+@api_router.get("/indices/portfolios", response_model=IndexPortfoliosResponse)
+def list_index_portfolios(codes: Optional[List[str]] = Query(default=None)) -> IndexPortfoliosResponse:
+    ch = get_ch()
+    rows = _fetch_latest_index_portfolios(ch, codes)
+    grouped: Dict[str, Dict[str, object]] = {}
+    for row in rows:
+        if isinstance(row, dict):
+            code_raw = row.get("index_code")
+            name_raw = row.get("index_name")
+            date_raw = row.get("effective_date")
+            symbol_raw = row.get("symbol")
+            company_raw = row.get("company_name")
+            weight_raw = row.get("weight")
+        else:
+            code_raw, name_raw, date_raw, symbol_raw, company_raw, weight_raw = row
+        if not code_raw or not symbol_raw:
+            continue
+        code = str(code_raw).upper()
+        symbol = normalize_input_symbol(str(symbol_raw))
+        if not symbol:
+            continue
+        effective_date = date_raw
+        if isinstance(effective_date, datetime):
+            effective_date = effective_date.date()
+        if isinstance(effective_date, date):
+            effective_iso = effective_date.isoformat()
+        else:
+            effective_iso = str(effective_date)
+        snapshot = grouped.setdefault(
+            code,
+            {
+                "index_code": code,
+                "index_name": (str(name_raw).strip() if name_raw else None),
+                "effective_date": effective_iso,
+                "constituents": [],
+            },
+        )
+        snapshot["effective_date"] = effective_iso
+        company_name = str(company_raw).strip() if company_raw else None
+        weight = float(weight_raw) if weight_raw is not None else None
+        constituents = snapshot["constituents"]  # type: ignore[index]
+        constituents.append(
+            IndexConstituentResponse(
+                symbol=pretty_symbol(symbol),
+                company_name=company_name,
+                weight=weight,
+            )
+        )
+    portfolios = [
+        IndexPortfolioSnapshotResponse(
+            index_code=data["index_code"],
+            index_name=data.get("index_name"),
+            effective_date=str(data.get("effective_date")),
+            constituents=[entry for entry in data["constituents"]],  # type: ignore[index]
+        )
+        for data in grouped.values()
+    ]
+    portfolios.sort(key=lambda item: item.index_code)
+    for portfolio in portfolios:
+        portfolio.constituents.sort(key=lambda item: item.symbol)
+    return IndexPortfoliosResponse(portfolios=portfolios)
+
+
+@api_router.get("/indices/history", response_model=IndexHistoryResponse)
+def list_index_history(codes: Optional[List[str]] = Query(default=None)) -> IndexHistoryResponse:
+    ch = get_ch()
+    rows = _fetch_index_history_rows(ch, codes)
+    grouped: Dict[str, Dict[str, object]] = {}
+    for row in rows:
+        if isinstance(row, dict):
+            code_raw = row.get("index_code")
+            name_raw = row.get("index_name")
+            date_raw = row.get("date")
+            value_raw = row.get("value")
+            change_raw = row.get("change_pct")
+        else:
+            code_raw, name_raw, date_raw, value_raw, change_raw = row
+        if not code_raw:
+            continue
+        code = str(code_raw).upper()
+        series = grouped.setdefault(
+            code,
+            {
+                "index_code": code,
+                "index_name": (str(name_raw).strip() if name_raw else None),
+                "points": [],
+            },
+        )
+        point_date = date_raw
+        if isinstance(point_date, datetime):
+            point_date = point_date.date()
+        if isinstance(point_date, date):
+            date_iso = point_date.isoformat()
+        else:
+            date_iso = str(point_date)
+        value = float(value_raw) if value_raw is not None else None
+        change = float(change_raw) if change_raw is not None else None
+        points = series["points"]  # type: ignore[index]
+        points.append(IndexHistoryPointResponse(date=date_iso, value=value, change_pct=change))
+    items = [
+        IndexHistorySeriesResponse(
+            index_code=data["index_code"],
+            index_name=data.get("index_name"),
+            points=[point for point in data["points"]],  # type: ignore[index]
+        )
+        for data in grouped.values()
+    ]
+    items.sort(key=lambda item: item.index_code)
+    for entry in items:
+        entry.points.sort(key=lambda point: point.date)
+    return IndexHistoryResponse(items=items)
 
 
 api_router.include_router(windows_agent_router)

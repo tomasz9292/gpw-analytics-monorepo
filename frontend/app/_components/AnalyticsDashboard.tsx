@@ -150,6 +150,46 @@ type LocalClickhousePersistedConfig = {
 
 type LocalClickhouseEnsureResult = { ok: true } | { ok: false; error: string };
 
+type GpwBenchmarkConstituent = {
+    symbol: string;
+    company_name?: string | null;
+    weight?: number | null;
+};
+
+type GpwBenchmarkPortfolio = {
+    index_code: string;
+    index_name?: string | null;
+    effective_date: string;
+    constituents: GpwBenchmarkConstituent[];
+};
+
+type GpwBenchmarkPortfoliosResponse = {
+    portfolios: GpwBenchmarkPortfolio[];
+};
+
+type BenchmarkUniverseOption = {
+    code: string;
+    name: string;
+    effectiveDate: string;
+    symbols: string[];
+};
+
+type GpwBenchmarkHistoryPoint = {
+    date: string;
+    value?: number | null;
+    change_pct?: number | null;
+};
+
+type GpwBenchmarkHistorySeries = {
+    index_code: string;
+    index_name?: string | null;
+    points: GpwBenchmarkHistoryPoint[];
+};
+
+type GpwBenchmarkHistoryResponse = {
+    items: GpwBenchmarkHistorySeries[];
+};
+
 
 const buildScoreComponents = (rules: ScoreBuilderRule[]): ScoreComponentRequest[] =>
     rules.reduce<ScoreComponentRequest[]>((acc, rule) => {
@@ -1486,7 +1526,7 @@ async function backtestPortfolioByScore(
             weight: component.weight,
             direction: component.direction,
         })),
-        filters: resolvedUniverse ? { include: resolvedUniverse } : undefined,
+        filters: buildUniverseFiltersPayload(resolvedUniverse),
     });
 
     const payload = removeUndefined({
@@ -7935,6 +7975,10 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
     const [scoreUniverseFallback, setScoreUniverseFallback] = useState<string[]>(
         () => [...SCORE_UNIVERSE_FALLBACK]
     );
+    const [benchmarkPortfolios, setBenchmarkPortfolios] = useState<GpwBenchmarkPortfolio[]>([]);
+    const [benchmarkHistory, setBenchmarkHistory] = useState<
+        Record<string, GpwBenchmarkHistorySeries>
+    >({});
     const [scoreAsOf, setScoreAsOf] = useState(defaultScoreDraft.asOf);
     const [scoreMinMcap, setScoreMinMcap] = useState(defaultScoreDraft.minMcap);
     const [scoreMinTurnover, setScoreMinTurnover] = useState(defaultScoreDraft.minTurnover);
@@ -7958,6 +8002,92 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                 ? scoreTemplates.find((tpl) => tpl.id === editingTemplateId) ?? null
                 : null,
         [editingTemplateId, scoreTemplates]
+    );
+
+    const benchmarkUniverseOptions = useMemo<BenchmarkUniverseOption[]>(() => {
+        return benchmarkPortfolios.map((portfolio) => {
+            const symbols = Array.from(
+                new Set(
+                    portfolio.constituents
+                        .map((entry) =>
+                            typeof entry.symbol === "string"
+                                ? entry.symbol.trim().toUpperCase()
+                                : ""
+                        )
+                        .filter(Boolean)
+                )
+            );
+            return {
+                code: portfolio.index_code,
+                name: portfolio.index_name?.trim() || portfolio.index_code,
+                effectiveDate: portfolio.effective_date,
+                symbols,
+            };
+        });
+    }, [benchmarkPortfolios]);
+
+    const handleBenchmarkUniverseSelect = useCallback(
+        (option: BenchmarkUniverseOption, target: "score" | "pf" | "both" = "score") => {
+            const universeToken = `index:${option.code}`;
+            if (target === "score" || target === "both") {
+                setScoreUniverse(universeToken);
+            }
+            if (target === "pf" || target === "both") {
+                setPfScoreUniverse(universeToken);
+            }
+            if (option.symbols.length) {
+                setScoreUniverseFallback((prev) => {
+                    const merged = new Set<string>([...option.symbols.slice(0, 500)]);
+                    prev.forEach((symbol) => merged.add(symbol));
+                    return Array.from(merged).slice(0, 500);
+                });
+            }
+        },
+        [setPfScoreUniverse, setScoreUniverse, setScoreUniverseFallback]
+    );
+
+    const benchmarkOverview = useMemo(
+        () =>
+            benchmarkUniverseOptions.map((option) => {
+                const historySeries = benchmarkHistory[option.code];
+                const points = historySeries?.points ?? [];
+                const ordered = [...points].sort((a, b) => a.date.localeCompare(b.date));
+                const lastPoint = ordered[ordered.length - 1];
+                const prevPoint = ordered[ordered.length - 2];
+                let changePct = lastPoint?.change_pct ?? null;
+                if (
+                    changePct == null &&
+                    lastPoint?.value != null &&
+                    prevPoint?.value != null &&
+                    prevPoint.value !== 0
+                ) {
+                    changePct = (lastPoint.value - prevPoint.value) / prevPoint.value;
+                }
+                return {
+                    code: option.code,
+                    name: option.name,
+                    effectiveDate: option.effectiveDate,
+                    symbolsCount: option.symbols.length,
+                    latestValue: lastPoint?.value ?? null,
+                    changePct,
+                    lastDate: lastPoint?.date ?? null,
+                };
+            }),
+        [benchmarkHistory, benchmarkUniverseOptions]
+    );
+
+    const benchmarkValueFormatter = useMemo(
+        () => new Intl.NumberFormat("pl-PL", { maximumFractionDigits: 2 }),
+        []
+    );
+    const benchmarkPercentFormatter = useMemo(
+        () =>
+            new Intl.NumberFormat("pl-PL", {
+                style: "percent",
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+            }),
+        []
     );
 
     const isAuthenticated = Boolean(authUser);
@@ -8531,6 +8661,62 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
             active = false;
         };
     }, []);
+
+    useEffect(() => {
+        let active = true;
+        const loadBenchmarkPortfolios = async () => {
+            try {
+                const response = await fetch("/api/indices/portfolios");
+                if (!response.ok) {
+                    return;
+                }
+                const data = (await response.json()) as GpwBenchmarkPortfoliosResponse;
+                if (!active || !data || !Array.isArray(data.portfolios)) {
+                    return;
+                }
+                const cleaned = data.portfolios.filter(
+                    (item) => Array.isArray(item.constituents) && item.constituents.length > 0
+                );
+                setBenchmarkPortfolios(cleaned);
+            } catch {
+                // ignorujemy chwilowe błędy – widget indeksów jest opcjonalny
+            }
+        };
+        void loadBenchmarkPortfolios();
+        return () => {
+            active = false;
+        };
+    }, []);
+
+    useEffect(() => {
+        if (!benchmarkPortfolios.length) {
+            return;
+        }
+        let active = true;
+        const loadBenchmarkHistory = async () => {
+            try {
+                const response = await fetch("/api/indices/history");
+                if (!response.ok) {
+                    return;
+                }
+                const data = (await response.json()) as GpwBenchmarkHistoryResponse;
+                if (!active || !data || !Array.isArray(data.items)) {
+                    return;
+                }
+                const map: Record<string, GpwBenchmarkHistorySeries> = {};
+                data.items.forEach((series) => {
+                    map[series.index_code] = series;
+                });
+                setBenchmarkHistory(map);
+            } catch {
+                // ignorujemy chwilowe błędy sieciowe
+            }
+        };
+        void loadBenchmarkHistory();
+        return () => {
+            active = false;
+        };
+    }, [benchmarkPortfolios]);
 
     // Portfel
     const [pfMode, setPfMode] = useState<"manual" | "score">(defaultPortfolioDraft.mode);
@@ -9249,6 +9435,50 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
             .filter(Boolean);
         if (!tokens.length) return null;
         return tokens.length === 1 ? tokens[0] : tokens;
+    };
+
+    const buildUniverseFiltersPayload = (
+        value: string | string[] | null | undefined
+    ): { include?: string | string[]; indices?: string[] } | undefined => {
+        if (value == null) {
+            return undefined;
+        }
+        const rawEntries = Array.isArray(value) ? value : [value];
+        const tokens: string[] = [];
+        for (const entry of rawEntries) {
+            if (typeof entry !== "string") continue;
+            entry
+                .split(/[\s,;]+/)
+                .map((token) => token.trim())
+                .filter(Boolean)
+                .forEach((token) => tokens.push(token));
+        }
+        if (!tokens.length) {
+            return undefined;
+        }
+        const includeTokens: string[] = [];
+        const indexTokens: string[] = [];
+        tokens.forEach((token) => {
+            const lowered = token.toLowerCase();
+            if (lowered.startsWith("index:")) {
+                const code = token.slice(token.indexOf(":") + 1).trim().toUpperCase();
+                if (code) {
+                    indexTokens.push(code);
+                }
+            } else {
+                includeTokens.push(token);
+            }
+        });
+        const payload: { include?: string | string[]; indices?: string[] } = {};
+        if (includeTokens.length === 1) {
+            payload.include = includeTokens[0];
+        } else if (includeTokens.length > 1) {
+            payload.include = includeTokens;
+        }
+        if (indexTokens.length) {
+            payload.indices = Array.from(new Set(indexTokens));
+        }
+        return Object.keys(payload).length ? payload : undefined;
     };
 
     const addScoreRule = () => {
@@ -10187,6 +10417,44 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                         Pozostaw puste, aby uwzględnić wszystkie spółki
                                         GPW dostępne w bazie danych.
                                     </span>
+                                    {benchmarkUniverseOptions.length > 0 && (
+                                        <div className="flex flex-wrap items-center gap-2 text-xs text-subtle">
+                                            <span>Wybierz indeks:</span>
+                                            {benchmarkUniverseOptions.map((option) => {
+                                                const token = `index:${option.code}`.toLowerCase();
+                                                const isActive = scoreUniverse?.trim().toLowerCase() === token;
+                                                const baseClasses =
+                                                    "rounded-full border px-3 py-1 transition text-xs";
+                                                const activeClasses =
+                                                    "border-[var(--color-primary)] text-primary bg-primary/10";
+                                                const inactiveClasses =
+                                                    "border-soft text-muted hover:border-[var(--color-primary)] hover:text-primary";
+                                                return (
+                                                    <button
+                                                        key={option.code}
+                                                        type="button"
+                                                        onClick={() =>
+                                                            handleBenchmarkUniverseSelect(option, "score")
+                                                        }
+                                                        className={`${baseClasses} ${
+                                                            isActive ? activeClasses : inactiveClasses
+                                                        }`}
+                                                        title={`Skład indeksu na ${option.effectiveDate}`}
+                                                    >
+                                                        <span className="font-semibold">{option.code}</span>
+                                                        {option.name && option.name !== option.code && (
+                                                            <span className="ml-1 text-[10px]">
+                                                                {option.name}
+                                                            </span>
+                                                        )}
+                                                        <span className="ml-1 text-[10px] text-subtle">
+                                                            {option.effectiveDate}
+                                                        </span>
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
                                 </label>
                                 <label className="flex flex-col gap-2">
                                     <span className="text-muted text-xs uppercase tracking-wide">
@@ -10820,6 +11088,71 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                             )}
                         </div>
                     </Card>
+                    {benchmarkUniverseOptions.length > 0 && (
+                        <Card
+                            title="Indeksy GPW Benchmark"
+                            description="Aktualne portfele i wyniki indeksów dostępnych jako wszechświat dla rankingu."
+                        >
+                            {benchmarkOverview.length > 0 ? (
+                                <div className="overflow-x-auto">
+                                    <table className="min-w-full divide-y divide-soft text-sm">
+                                        <thead className="bg-soft-surface text-xs uppercase tracking-wide text-muted">
+                                            <tr>
+                                                <th className="px-3 py-2 text-left">Indeks</th>
+                                                <th className="px-3 py-2 text-left">Nazwa</th>
+                                                <th className="px-3 py-2 text-right">Spółki</th>
+                                                <th className="px-3 py-2 text-left">Skład z dnia</th>
+                                                <th className="px-3 py-2 text-right">Ostatnia wartość</th>
+                                                <th className="px-3 py-2 text-right">Zmiana</th>
+                                                <th className="px-3 py-2 text-left">Notowanie z dnia</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-soft">
+                                            {benchmarkOverview.map((item) => (
+                                                <tr key={item.code}>
+                                                    <td className="px-3 py-2 font-medium text-primary">{item.code}</td>
+                                                    <td className="px-3 py-2 text-subtle">
+                                                        {item.name || "—"}
+                                                    </td>
+                                                    <td className="px-3 py-2 text-right">
+                                                        {item.symbolsCount}
+                                                    </td>
+                                                    <td className="px-3 py-2 text-subtle">
+                                                        {item.effectiveDate}
+                                                    </td>
+                                                    <td className="px-3 py-2 text-right">
+                                                        {item.latestValue != null
+                                                            ? benchmarkValueFormatter.format(item.latestValue)
+                                                            : "—"}
+                                                    </td>
+                                                    <td
+                                                        className={`px-3 py-2 text-right ${
+                                                            item.changePct != null
+                                                                ? item.changePct >= 0
+                                                                    ? "text-positive"
+                                                                    : "text-negative"
+                                                                : "text-subtle"
+                                                        }`}
+                                                    >
+                                                        {item.changePct != null
+                                                            ? benchmarkPercentFormatter.format(item.changePct)
+                                                            : "—"}
+                                                    </td>
+                                                    <td className="px-3 py-2 text-subtle">
+                                                        {item.lastDate ?? "—"}
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            ) : (
+                                <div className="text-xs text-subtle">
+                                    Ładujemy dane indeksów GPW Benchmark…
+                                </div>
+                            )}
+                        </Card>
+                    )}
                 </Section>
                 )}
 
@@ -11050,6 +11383,52 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                         className={inputBaseClasses}
                                                         placeholder="np. WIG20.WA"
                                                     />
+                                                    {benchmarkUniverseOptions.length > 0 && (
+                                                        <div className="flex flex-wrap items-center gap-2 text-xs text-subtle">
+                                                            <span>Wybierz indeks:</span>
+                                                            {benchmarkUniverseOptions.map((option) => {
+                                                                const token = `index:${option.code}`.toLowerCase();
+                                                                const isActive =
+                                                                    pfScoreUniverse?.trim().toLowerCase() === token;
+                                                                const baseClasses =
+                                                                    "rounded-full border px-3 py-1 transition text-xs";
+                                                                const activeClasses =
+                                                                    "border-[var(--color-primary)] text-primary bg-primary/10";
+                                                                const inactiveClasses =
+                                                                    "border-soft text-muted hover:border-[var(--color-primary)] hover:text-primary";
+                                                                return (
+                                                                    <button
+                                                                        key={`pf-${option.code}`}
+                                                                        type="button"
+                                                                        onClick={() =>
+                                                                            handleBenchmarkUniverseSelect(
+                                                                                option,
+                                                                                "pf"
+                                                                            )
+                                                                        }
+                                                                        className={`${baseClasses} ${
+                                                                            isActive
+                                                                                ? activeClasses
+                                                                                : inactiveClasses
+                                                                        }`}
+                                                                        title={`Skład indeksu na ${option.effectiveDate}`}
+                                                                    >
+                                                                        <span className="font-semibold">
+                                                                            {option.code}
+                                                                        </span>
+                                                                        {option.name && option.name !== option.code && (
+                                                                            <span className="ml-1 text-[10px]">
+                                                                                {option.name}
+                                                                            </span>
+                                                                        )}
+                                                                        <span className="ml-1 text-[10px] text-subtle">
+                                                                            {option.effectiveDate}
+                                                                        </span>
+                                                                    </button>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                    )}
                                                 </label>
                                             </div>
                                             <div className="grid gap-3 md:grid-cols-2">
