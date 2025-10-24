@@ -11,7 +11,7 @@ import textwrap
 import unicodedata
 from datetime import date, datetime, timedelta, timezone
 from math import sqrt
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple, TypedDict
 from typing import Literal
 from uuid import uuid4
 
@@ -1646,6 +1646,114 @@ def _normalize_company_row(row: Dict[str, Any], symbol_column: str) -> Optional[
     canonical["raw"] = {col: _convert_clickhouse_value(val) for col, val in row.items()}
 
     return canonical
+
+
+class _CompanyNameLookupEntry(TypedDict, total=False):
+    raw_symbol: str
+    symbol: str
+    name: Optional[str]
+    names: List[str]
+
+
+def _build_company_name_lookup(ch_client) -> Dict[str, _CompanyNameLookupEntry]:
+    columns = _get_company_columns(ch_client)
+    lowered_to_original = {col.lower(): col for col in columns}
+
+    symbol_column: Optional[str] = None
+    for candidate in COMPANY_SYMBOL_CANDIDATES:
+        existing = lowered_to_original.get(candidate)
+        if existing:
+            symbol_column = existing
+            break
+
+    if not symbol_column:
+        return {}
+
+    name_columns: List[str] = []
+    for candidate in COMPANY_NAME_CANDIDATES:
+        existing = lowered_to_original.get(candidate)
+        if existing and existing not in name_columns:
+            name_columns.append(existing)
+
+    # Jeśli nie mamy dodatkowych kolumn z nazwą, zapytanie ograniczy się do symbolu.
+    selected_columns: List[str] = []
+    seen: Set[str] = set()
+    for column in [symbol_column, *name_columns]:
+        if column and column not in seen:
+            selected_columns.append(column)
+            seen.add(column)
+
+    if not selected_columns:
+        return {}
+
+    select_clause = ", ".join(_quote_identifier(col) for col in selected_columns)
+    sql = f"SELECT {select_clause} FROM {TABLE_COMPANIES}"
+
+    try:
+        result = ch_client.query(sql)
+    except Exception:  # pragma: no cover - zależy od konfiguracji DB
+        return {}
+
+    column_names = list(getattr(result, "column_names", []))
+    try:
+        rows = result.named_results()
+    except AttributeError:
+        rows = None
+
+    if rows is None:
+        rows = [
+            {col: value for col, value in zip(column_names, row)}
+            for row in getattr(result, "result_rows", [])
+        ]
+
+    lookup: Dict[str, _CompanyNameLookupEntry] = {}
+
+    for row in rows:
+        symbol_value = row.get(symbol_column)
+        if symbol_value is None:
+            continue
+
+        raw_symbol = str(_convert_clickhouse_value(symbol_value)).strip()
+        if not raw_symbol:
+            continue
+
+        normalized_raw = normalize_input_symbol(raw_symbol)
+        if not normalized_raw:
+            continue
+
+        pretty = pretty_symbol(normalized_raw)
+        base = pretty.split(".", 1)[0] if "." in pretty else pretty
+
+        resolved_names: List[str] = []
+        for column in name_columns:
+            value = row.get(column)
+            text = str(_convert_clickhouse_value(value)).strip()
+            if text:
+                resolved_names.append(text)
+
+        entry: _CompanyNameLookupEntry = {
+            "raw_symbol": normalized_raw,
+            "symbol": pretty,
+            "name": resolved_names[0] if resolved_names else None,
+            "names": resolved_names,
+        }
+
+        alias_keys: Set[str] = {
+            normalized_raw,
+            pretty,
+            base,
+            raw_symbol,
+        }
+
+        for alias in resolved_names:
+            alias_keys.add(alias)
+
+        for key in alias_keys:
+            cleaned = key.strip().upper()
+            if cleaned:
+                lookup.setdefault(cleaned, entry)
+
+    return lookup
 
 
 # =========================
@@ -4793,6 +4901,7 @@ def backtest_portfolio_tooling():
 def list_index_portfolios(codes: Optional[List[str]] = Query(default=None)) -> IndexPortfoliosResponse:
     ch = get_ch()
     rows = _fetch_latest_index_portfolios(ch, codes)
+    company_lookup = _build_company_name_lookup(ch)
     grouped: Dict[str, Dict[str, object]] = {}
     for row in rows:
         if isinstance(row, dict):
@@ -4810,6 +4919,8 @@ def list_index_portfolios(codes: Optional[List[str]] = Query(default=None)) -> I
         symbol = normalize_input_symbol(str(symbol_raw))
         if not symbol:
             continue
+        pretty = pretty_symbol(symbol)
+        pretty_base = pretty.split(".", 1)[0] if "." in pretty else pretty
         effective_date = date_raw
         if isinstance(effective_date, datetime):
             effective_date = effective_date.date()
@@ -4828,11 +4939,38 @@ def list_index_portfolios(codes: Optional[List[str]] = Query(default=None)) -> I
         )
         snapshot["effective_date"] = effective_iso
         company_name = str(company_raw).strip() if company_raw else None
+        if company_name == "":
+            company_name = None
+        lookup_keys = [
+            symbol,
+            pretty,
+            pretty_base,
+            str(symbol_raw).strip() if symbol_raw else None,
+            company_name,
+        ]
+        resolved_entry: Optional[_CompanyNameLookupEntry] = None
+        for key in lookup_keys:
+            if not key:
+                continue
+            resolved_entry = company_lookup.get(str(key).strip().upper())
+            if resolved_entry:
+                break
+        if resolved_entry:
+            resolved_name = resolved_entry.get("name")
+            if resolved_name:
+                normalized_existing = (company_name or "").strip().upper()
+                if not normalized_existing or normalized_existing in {
+                    symbol,
+                    pretty.upper(),
+                    pretty_base.upper(),
+                    str(symbol_raw).strip().upper() if symbol_raw else "",
+                }:
+                    company_name = resolved_name
         weight = float(weight_raw) if weight_raw is not None else None
         constituents = snapshot["constituents"]  # type: ignore[index]
         constituents.append(
             IndexConstituentResponse(
-                symbol=pretty_symbol(symbol),
+                symbol=pretty,
                 raw_symbol=symbol,
                 company_name=company_name,
                 weight=weight,
