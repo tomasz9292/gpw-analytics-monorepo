@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import io
 import json
 import logging
 import re
@@ -10,6 +11,16 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urljoin
+
+try:  # pragma: no cover - optional dependency
+    import pdfplumber
+except ModuleNotFoundError:  # pragma: no cover - optional dependency
+    pdfplumber = None  # type: ignore[assignment]
+
+try:  # pragma: no cover - optional dependency
+    from bs4 import BeautifulSoup
+except ModuleNotFoundError:  # pragma: no cover - optional dependency
+    BeautifulSoup = None  # type: ignore[assignment]
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -254,8 +265,19 @@ class GpwBenchmarkHarvester:
                 self._load_index_history_archive(archive_source, index_code, index_name),
             )
 
-        portfolios_sorted = sorted(portfolio_records.values(), key=lambda record: (record.index_code, record.effective_date, record.symbol))
-        history_sorted = sorted(history_records.values(), key=lambda record: (record.index_code, record.date))
+        if not portfolio_records:
+            self._merge_portfolios(
+                portfolio_records,
+                self._load_portfolios_from_pdf_archive(),
+            )
+
+        portfolios_sorted = sorted(
+            portfolio_records.values(),
+            key=lambda record: (record.index_code, record.effective_date, record.symbol),
+        )
+        history_sorted = sorted(
+            history_records.values(), key=lambda record: (record.index_code, record.date)
+        )
 
         return portfolios_sorted, history_sorted
 
@@ -443,6 +465,220 @@ class GpwBenchmarkHarvester:
             if records:
                 return records
         return []
+
+    # ------------------------------------------------------------------
+    def _load_portfolios_from_pdf_archive(self) -> List[IndexPortfolioRecord]:
+        if BeautifulSoup is None or pdfplumber is None:
+            LOGGER.warning(
+                "Skipping GPW Benchmark PDF archive fallback due to missing dependencies"
+            )
+            return []
+        try:
+            html_payload = self._load_html_page()
+        except Exception as exc:  # noqa: BLE001 - logging only
+            LOGGER.warning("GPW Benchmark PDF archive listing failed: %s", exc)
+            return []
+
+        links = self._discover_pdf_links(html_payload)
+        if not links:
+            return []
+
+        records: Dict[Tuple[str, date, str], IndexPortfolioRecord] = {}
+        for revision_date, index_code, index_name, pdf_url in links:
+            try:
+                response = self.session.get(
+                    pdf_url,
+                    headers={**self.SESSION_HEADERS, "Accept": "application/pdf"},
+                    timeout=30,
+                )
+                response.raise_for_status()
+            except Exception as exc:  # noqa: BLE001 - logging only
+                LOGGER.debug("Failed to download GPW Benchmark PDF %s: %s", pdf_url, exc)
+                continue
+            try:
+                entries = self._parse_pdf_portfolio(
+                    response.content, revision_date, index_code, index_name
+                )
+            except Exception as exc:  # noqa: BLE001 - logging only
+                LOGGER.debug("Failed to parse GPW Benchmark PDF %s: %s", pdf_url, exc)
+                continue
+            for record in entries:
+                key = (record.index_code, record.effective_date, record.symbol)
+                if key not in records:
+                    records[key] = record
+        return list(records.values())
+
+    # ------------------------------------------------------------------
+    def _discover_pdf_links(
+        self, html_payload: str
+    ) -> List[Tuple[date, str, Optional[str], str]]:
+        soup = BeautifulSoup(html_payload, "html.parser")
+        results: List[Tuple[date, str, Optional[str], str]] = []
+        for anchor in soup.find_all("a"):
+            text = (anchor.text or "").strip().lower()
+            if "pobierz" not in text:
+                continue
+            href = anchor.get("href")
+            if not href or not href.lower().endswith(".pdf"):
+                continue
+            if href.startswith("/"):
+                url = urljoin(self.BASE_URL, href)
+            elif href.startswith("http"):
+                url = href
+            else:
+                url = urljoin(self.BASE_URL + "/", href)
+            filename = url.split("/")[-1]
+            index_code = self._normalize_index_from_filename(filename)
+            revision_date = self._revision_date_from_filename(filename)
+            if not index_code or not revision_date:
+                continue
+            results.append((revision_date, index_code, index_code, url))
+        results.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        return results
+
+    # ------------------------------------------------------------------
+    def _parse_pdf_portfolio(
+        self,
+        pdf_bytes: bytes,
+        revision_date: date,
+        index_code: str,
+        index_name: Optional[str],
+    ) -> List[IndexPortfolioRecord]:
+        entries: List[IndexPortfolioRecord] = []
+        if pdfplumber is None:
+            return []
+
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            for page in pdf.pages:
+                page_entries = self._parse_pdf_page(page)
+                for isin, ticker, company_name, weight_pct in page_entries:
+                    weight = _parse_weight(weight_pct)
+                    if weight is None:
+                        continue
+                    normalized_symbol = _normalize_symbol(ticker)
+                    if not normalized_symbol:
+                        continue
+                    entries.append(
+                        IndexPortfolioRecord(
+                            index_code=index_code,
+                            index_name=index_name,
+                            effective_date=revision_date,
+                            symbol=normalized_symbol,
+                            company_name=company_name,
+                            weight=weight,
+                        )
+                    )
+                if page_entries:
+                    continue
+                text_entries = self._parse_pdf_text(page)
+                for isin, ticker, company_name, weight_pct in text_entries:
+                    weight = _parse_weight(weight_pct)
+                    if weight is None:
+                        continue
+                    normalized_symbol = _normalize_symbol(ticker)
+                    if not normalized_symbol:
+                        continue
+                    entries.append(
+                        IndexPortfolioRecord(
+                            index_code=index_code,
+                            index_name=index_name,
+                            effective_date=revision_date,
+                            symbol=normalized_symbol,
+                            company_name=company_name,
+                            weight=weight,
+                        )
+                    )
+        return entries
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _parse_pdf_page(page: pdfplumber.page.Page) -> List[Tuple[str, str, Optional[str], str]]:
+        try:
+            tables = page.extract_tables() or []
+        except Exception:  # noqa: BLE001 - fall back to text extraction
+            tables = []
+        results: List[Tuple[str, str, Optional[str], str]] = []
+        for table in tables:
+            if not table:
+                continue
+            header = [cell.strip().lower() if isinstance(cell, str) else "" for cell in table[0]]
+            header_joined = " ".join(header)
+            if "kod" not in header_joined or "udział" not in header_joined:
+                continue
+            for row in table[1:]:
+                if not row:
+                    continue
+                cells = [cell.strip() if isinstance(cell, str) else "" for cell in row]
+                isin = next((cell for cell in cells if re.match(r"^[A-Z]{2}[A-Z0-9]{10,}$", cell)), "")
+                if not isin:
+                    continue
+                try:
+                    isin_index = cells.index(isin)
+                except ValueError:
+                    continue
+                ticker = ""
+                company_name: Optional[str] = None
+                if isin_index + 1 < len(cells):
+                    ticker = cells[isin_index + 1].replace(" ", "")
+                if isin_index + 2 < len(cells):
+                    company_name = cells[isin_index + 2] or None
+                weight_candidates = [cell for cell in cells if re.search(r"\d+[,.]\d+", cell)]
+                if not weight_candidates:
+                    continue
+                weight_text = weight_candidates[-1]
+                weight_text = weight_text.replace("\xa0", " ").replace(" ", "")
+                weight_text = weight_text.replace(",", ".")
+                results.append((isin, ticker, company_name, weight_text))
+        return results
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _parse_pdf_text(page: pdfplumber.page.Page) -> List[Tuple[str, str, Optional[str], str]]:
+        try:
+            text = page.extract_text() or ""
+        except Exception:  # noqa: BLE001 - treat as empty page
+            text = ""
+        results: List[Tuple[str, str, Optional[str], str]] = []
+        for line in text.splitlines():
+            cleaned = re.sub(r"\s+", " ", line.strip())
+            match = re.search(
+                r"([A-Z]{2}[A-Z0-9]{9,})\s+([A-Z0-9\.]+)\s+(.*?)\s+(\d+[,.]\d{2,})$",
+                cleaned,
+            )
+            if not match:
+                continue
+            isin, ticker, company_name, weight_text = match.groups()
+            ticker = ticker.replace(" ", "")
+            company_name = company_name.strip() or None
+            weight_text = weight_text.replace(" ", "").replace("\xa0", "").replace(",", ".")
+            results.append((isin, ticker, company_name, weight_text))
+        return results
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _normalize_index_from_filename(filename: str) -> Optional[str]:
+        match = re.search(r"_(WIG30|WIG20|sWIG80|mWIG40|WIG)\.pdf$", filename, re.IGNORECASE)
+        if not match:
+            return None
+        value = match.group(1)
+        mapping = {
+            "wig30": "WIG30",
+            "wig20": "WIG20",
+            "swig80": "sWIG80",
+            "mwig40": "mWIG40",
+            "wig": "WIG",
+        }
+        return mapping.get(value.lower(), value)
+
+    @staticmethod
+    def _revision_date_from_filename(filename: str) -> Optional[date]:
+        match = re.search(r"(\d{4})_(\d{2})_(\d{2})_", filename)
+        if not match:
+            return None
+        try:
+            return datetime.strptime("-".join(match.groups()), "%Y-%m-%d").date()
+        except ValueError:
+            return None
 
     def _load_index_history_archive(
         self, payload: Optional[Dict[str, Any]], index_code: str, index_name: Optional[str]
