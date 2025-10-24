@@ -152,6 +152,7 @@ type LocalClickhouseEnsureResult = { ok: true } | { ok: false; error: string };
 
 type GpwBenchmarkConstituent = {
     symbol: string;
+    raw_symbol?: string | null;
     company_name?: string | null;
     weight?: number | null;
 };
@@ -9034,17 +9035,28 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
 
     const benchmarkUniverseOptions = useMemo<BenchmarkUniverseOption[]>(() => {
         return benchmarkPortfolios.map((portfolio) => {
-            const symbols = Array.from(
-                new Set(
-                    portfolio.constituents
-                        .map((entry) =>
-                            typeof entry.symbol === "string"
-                                ? entry.symbol.trim().toUpperCase()
-                                : ""
-                        )
-                        .filter(Boolean)
-                )
-            );
+            const symbolSet = new Set<string>();
+            portfolio.constituents.forEach((entry) => {
+                const pretty =
+                    typeof entry.symbol === "string" ? entry.symbol.trim().toUpperCase() : "";
+                if (pretty) {
+                    symbolSet.add(pretty);
+                    if (pretty.includes(".")) {
+                        const base = pretty.split(".", 1)[0].trim().toUpperCase();
+                        if (base) {
+                            symbolSet.add(base);
+                        }
+                    }
+                }
+                const raw =
+                    typeof entry.raw_symbol === "string"
+                        ? entry.raw_symbol.trim().toUpperCase()
+                        : "";
+                if (raw) {
+                    symbolSet.add(raw);
+                }
+            });
+            const symbols = Array.from(symbolSet).filter(Boolean);
             return {
                 code: portfolio.index_code,
                 name: portfolio.index_name?.trim() || portfolio.index_code,
@@ -11932,6 +11944,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                 onPick={(sym) => setPfBenchmark(sym)}
                                                 placeholder="Dodaj benchmark (np. WIG20.WA)"
                                                 inputClassName="w-60"
+                                                allowedKinds={["stock", "index"]}
                                             />
                                             {pfBenchmark && (
                                                 <div className="flex items-center gap-2 text-sm text-muted">

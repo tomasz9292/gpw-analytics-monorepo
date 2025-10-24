@@ -58,6 +58,11 @@ DEFAULT_OHLC_SYNC_SYMBOLS = (
 )
 
 ALIASES_WA_TO_RAW: Dict[str, str] = {wa.lower(): raw for raw, wa in ALIASES_RAW_TO_WA.items()}
+ALIASES_TICKER_TO_RAW: Dict[str, str] = {
+    wa.split(".", 1)[0].lower(): raw
+    for raw, wa in ALIASES_RAW_TO_WA.items()
+    if wa
+}
 
 
 def pretty_symbol(raw: str) -> str:
@@ -83,9 +88,15 @@ def normalize_input_symbol(s: str) -> str:
     if not cleaned:
         return ""
 
-    maybe = ALIASES_WA_TO_RAW.get(cleaned.lower())
+    lower = cleaned.lower()
+
+    maybe = ALIASES_WA_TO_RAW.get(lower)
     if maybe:
         return maybe
+
+    ticker = ALIASES_TICKER_TO_RAW.get(lower)
+    if ticker:
+        return ticker
 
     if "." in cleaned:
         base = cleaned.split(".", 1)[0].strip()
@@ -110,6 +121,7 @@ def to_stooq_symbol(value: str) -> str:
 __all__ = [
     "ALIASES_RAW_TO_WA",
     "ALIASES_WA_TO_RAW",
+    "ALIASES_TICKER_TO_RAW",
     "DEFAULT_OHLC_SYNC_SYMBOLS",
     "normalize_input_symbol",
     "pretty_symbol",
