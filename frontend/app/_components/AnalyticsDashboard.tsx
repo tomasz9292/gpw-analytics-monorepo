@@ -687,6 +687,59 @@ const resolveUniverseWithFallback = (
     return undefined;
 };
 
+const buildUniverseFiltersPayload = (
+    value: string | string[] | null | undefined
+): { include?: string | string[]; indices?: string[] } | undefined => {
+    if (value == null) {
+        return undefined;
+    }
+
+    const rawEntries = Array.isArray(value) ? value : [value];
+    const tokens: string[] = [];
+
+    for (const entry of rawEntries) {
+        if (typeof entry !== "string") continue;
+        entry
+            .split(/[\s,;]+/)
+            .map((token) => token.trim())
+            .filter(Boolean)
+            .forEach((token) => tokens.push(token));
+    }
+
+    if (!tokens.length) {
+        return undefined;
+    }
+
+    const includeTokens: string[] = [];
+    const indexTokens: string[] = [];
+
+    tokens.forEach((token) => {
+        const lowered = token.toLowerCase();
+        if (lowered.startsWith("index:")) {
+            const code = token.slice(token.indexOf(":") + 1).trim().toUpperCase();
+            if (code) {
+                indexTokens.push(code);
+            }
+        } else {
+            includeTokens.push(token);
+        }
+    });
+
+    const payload: { include?: string | string[]; indices?: string[] } = {};
+
+    if (includeTokens.length === 1) {
+        payload.include = includeTokens[0];
+    } else if (includeTokens.length > 1) {
+        payload.include = includeTokens;
+    }
+
+    if (indexTokens.length) {
+        payload.indices = Array.from(new Set(indexTokens));
+    }
+
+    return Object.keys(payload).length ? payload : undefined;
+};
+
 const toTemplateRule = (rule: ScoreBuilderRule): ScoreTemplateRule => {
     const option = findScoreMetric(rule.metric);
     const lookbackDays = resolveLookbackDays(option, rule.lookbackDays);
@@ -8004,77 +8057,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
         [editingTemplateId, scoreTemplates]
     );
 
-    const benchmarkUniverseOptions = useMemo<BenchmarkUniverseOption[]>(() => {
-        return benchmarkPortfolios.map((portfolio) => {
-            const symbols = Array.from(
-                new Set(
-                    portfolio.constituents
-                        .map((entry) =>
-                            typeof entry.symbol === "string"
-                                ? entry.symbol.trim().toUpperCase()
-                                : ""
-                        )
-                        .filter(Boolean)
-                )
-            );
-            return {
-                code: portfolio.index_code,
-                name: portfolio.index_name?.trim() || portfolio.index_code,
-                effectiveDate: portfolio.effective_date,
-                symbols,
-            };
-        });
-    }, [benchmarkPortfolios]);
 
-    const handleBenchmarkUniverseSelect = useCallback(
-        (option: BenchmarkUniverseOption, target: "score" | "pf" | "both" = "score") => {
-            const universeToken = `index:${option.code}`;
-            if (target === "score" || target === "both") {
-                setScoreUniverse(universeToken);
-            }
-            if (target === "pf" || target === "both") {
-                setPfScoreUniverse(universeToken);
-            }
-            if (option.symbols.length) {
-                setScoreUniverseFallback((prev) => {
-                    const merged = new Set<string>([...option.symbols.slice(0, 500)]);
-                    prev.forEach((symbol) => merged.add(symbol));
-                    return Array.from(merged).slice(0, 500);
-                });
-            }
-        },
-        [setPfScoreUniverse, setScoreUniverse, setScoreUniverseFallback]
-    );
-
-    const benchmarkOverview = useMemo(
-        () =>
-            benchmarkUniverseOptions.map((option) => {
-                const historySeries = benchmarkHistory[option.code];
-                const points = historySeries?.points ?? [];
-                const ordered = [...points].sort((a, b) => a.date.localeCompare(b.date));
-                const lastPoint = ordered[ordered.length - 1];
-                const prevPoint = ordered[ordered.length - 2];
-                let changePct = lastPoint?.change_pct ?? null;
-                if (
-                    changePct == null &&
-                    lastPoint?.value != null &&
-                    prevPoint?.value != null &&
-                    prevPoint.value !== 0
-                ) {
-                    changePct = (lastPoint.value - prevPoint.value) / prevPoint.value;
-                }
-                return {
-                    code: option.code,
-                    name: option.name,
-                    effectiveDate: option.effectiveDate,
-                    symbolsCount: option.symbols.length,
-                    latestValue: lastPoint?.value ?? null,
-                    changePct,
-                    lastDate: lastPoint?.date ?? null,
-                };
-            }),
-        [benchmarkHistory, benchmarkUniverseOptions]
-    );
 
     const benchmarkValueFormatter = useMemo(
         () => new Intl.NumberFormat("pl-PL", { maximumFractionDigits: 2 }),
@@ -8775,8 +8758,81 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
     const pfScoreLimitInvalid = !Number.isFinite(pfScoreLimit) || pfScoreLimit <= 0;
     const pfDisableScoreSimulation =
         pfLoading || pfInitial <= 0 || pfRangeInvalid || pfScoreNameInvalid || pfScoreLimitInvalid;
+
     const pfDisableSimulation =
         pfMode === "manual" ? pfDisableManualSimulation : pfDisableScoreSimulation;
+
+    const benchmarkUniverseOptions = useMemo<BenchmarkUniverseOption[]>(() => {
+        return benchmarkPortfolios.map((portfolio) => {
+            const symbols = Array.from(
+                new Set(
+                    portfolio.constituents
+                        .map((entry) =>
+                            typeof entry.symbol === "string"
+                                ? entry.symbol.trim().toUpperCase()
+                                : ""
+                        )
+                        .filter(Boolean)
+                )
+            );
+            return {
+                code: portfolio.index_code,
+                name: portfolio.index_name?.trim() || portfolio.index_code,
+                effectiveDate: portfolio.effective_date,
+                symbols,
+            };
+        });
+    }, [benchmarkPortfolios]);
+
+    const handleBenchmarkUniverseSelect = useCallback(
+        (option: BenchmarkUniverseOption, target: "score" | "pf" | "both" = "score") => {
+            const universeToken = `index:${option.code}`;
+            if (target === "score" || target === "both") {
+                setScoreUniverse(universeToken);
+            }
+            if (target === "pf" || target === "both") {
+                setPfScoreUniverse(universeToken);
+            }
+            if (option.symbols.length) {
+                setScoreUniverseFallback((prev) => {
+                    const merged = new Set<string>([...option.symbols.slice(0, 500)]);
+                    prev.forEach((symbol) => merged.add(symbol));
+                    return Array.from(merged).slice(0, 500);
+                });
+            }
+        },
+        [setPfScoreUniverse, setScoreUniverse, setScoreUniverseFallback]
+    );
+
+    const benchmarkOverview = useMemo(
+        () =>
+            benchmarkUniverseOptions.map((option) => {
+                const historySeries = benchmarkHistory[option.code];
+                const points = historySeries?.points ?? [];
+                const ordered = [...points].sort((a, b) => a.date.localeCompare(b.date));
+                const lastPoint = ordered[ordered.length - 1];
+                const prevPoint = ordered[ordered.length - 2];
+                let changePct = lastPoint?.change_pct ?? null;
+                if (
+                    changePct == null &&
+                    lastPoint?.value != null &&
+                    prevPoint?.value != null &&
+                    prevPoint.value !== 0
+                ) {
+                    changePct = (lastPoint.value - prevPoint.value) / prevPoint.value;
+                }
+                return {
+                    code: option.code,
+                    name: option.name,
+                    effectiveDate: option.effectiveDate,
+                    symbolsCount: option.symbols.length,
+                    latestValue: lastPoint?.value ?? null,
+                    changePct,
+                    lastDate: lastPoint?.date ?? null,
+                };
+            }),
+        [benchmarkHistory, benchmarkUniverseOptions]
+    );
 
     const stopPfProgressInterval = useCallback(() => {
         if (pfProgressTimerRef.current) {
@@ -9435,50 +9491,6 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
             .filter(Boolean);
         if (!tokens.length) return null;
         return tokens.length === 1 ? tokens[0] : tokens;
-    };
-
-    const buildUniverseFiltersPayload = (
-        value: string | string[] | null | undefined
-    ): { include?: string | string[]; indices?: string[] } | undefined => {
-        if (value == null) {
-            return undefined;
-        }
-        const rawEntries = Array.isArray(value) ? value : [value];
-        const tokens: string[] = [];
-        for (const entry of rawEntries) {
-            if (typeof entry !== "string") continue;
-            entry
-                .split(/[\s,;]+/)
-                .map((token) => token.trim())
-                .filter(Boolean)
-                .forEach((token) => tokens.push(token));
-        }
-        if (!tokens.length) {
-            return undefined;
-        }
-        const includeTokens: string[] = [];
-        const indexTokens: string[] = [];
-        tokens.forEach((token) => {
-            const lowered = token.toLowerCase();
-            if (lowered.startsWith("index:")) {
-                const code = token.slice(token.indexOf(":") + 1).trim().toUpperCase();
-                if (code) {
-                    indexTokens.push(code);
-                }
-            } else {
-                includeTokens.push(token);
-            }
-        });
-        const payload: { include?: string | string[]; indices?: string[] } = {};
-        if (includeTokens.length === 1) {
-            payload.include = includeTokens[0];
-        } else if (includeTokens.length > 1) {
-            payload.include = includeTokens;
-        }
-        if (indexTokens.length) {
-            payload.indices = Array.from(new Set(indexTokens));
-        }
-        return Object.keys(payload).length ? payload : undefined;
     };
 
     const addScoreRule = () => {
@@ -11089,10 +11101,11 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                         </div>
                     </Card>
                     {benchmarkUniverseOptions.length > 0 && (
-                        <Card
-                            title="Indeksy GPW Benchmark"
-                            description="Aktualne portfele i wyniki indeksów dostępnych jako wszechświat dla rankingu."
-                        >
+                        <Card title="Indeksy GPW Benchmark">
+                            <p className="text-sm text-subtle mb-4">
+                                Aktualne portfele i wyniki indeksów dostępnych jako wszechświat
+                                dla rankingu.
+                            </p>
                             {benchmarkOverview.length > 0 ? (
                                 <div className="overflow-x-auto">
                                     <table className="min-w-full divide-y divide-soft text-sm">
