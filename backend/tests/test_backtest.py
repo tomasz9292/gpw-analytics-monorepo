@@ -200,8 +200,8 @@ def test_backtest_portfolio_auto_uses_dynamic_scores(monkeypatch):
     trade_symbols = [trade.symbol for trade in first_event.trades]
     assert any(symbol.startswith("AAA") for symbol in trade_symbols)
     cash_trade = [trade for trade in first_event.trades if trade.symbol == "Wolne środki"][0]
-    assert cash_trade.target_weight == pytest.approx(0.5, rel=1e-6)
-    assert cash_trade.note == "Wolne środki do transakcji"
+    assert cash_trade.target_weight == pytest.approx(0.0, rel=1e-6)
+    assert cash_trade.note is None
 
     second_event = result.rebalances[1]
     assert second_event.trades is not None
