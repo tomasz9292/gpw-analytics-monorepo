@@ -152,6 +152,8 @@ class GpwBenchmarkHarvester:
             "Chrome/122.0 Safari/537.36"
         ),
         "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "pl,en;q=0.9",
+        "Referer": "https://gpwbenchmark.pl/",
     }
 
     def __init__(self, session: Optional[requests.Session] = None) -> None:
@@ -162,8 +164,8 @@ class GpwBenchmarkHarvester:
         """Download and normalise data from GPW Benchmark."""
 
         root_payload = self._load_index_payload()
-        portfolio_records: List[IndexPortfolioRecord] = []
-        history_records: List[IndexHistoryRecord] = []
+        portfolio_records: Dict[Tuple[str, date, str], IndexPortfolioRecord] = {}
+        history_records: Dict[Tuple[str, date], IndexHistoryRecord] = {}
 
         for entry in root_payload:
             index_code = self._extract_index_code(entry)
@@ -171,36 +173,76 @@ class GpwBenchmarkHarvester:
                 continue
             index_name = self._extract_index_name(entry)
 
-            portfolio_records.extend(
-                self._extract_portfolios_for_index(entry, index_code, index_name)
+            self._merge_portfolios(
+                portfolio_records,
+                self._extract_portfolios_for_index(entry, index_code, index_name),
             )
-            history_records.extend(
-                self._extract_history_for_index(entry, index_code, index_name)
+            self._merge_history(
+                history_records,
+                self._extract_history_for_index(entry, index_code, index_name),
             )
 
             missing_portfolios = not any(
-                record.index_code == index_code for record in portfolio_records
+                key[0] == index_code for key in portfolio_records.keys()
             )
-            missing_history = not any(
-                record.index_code == index_code for record in history_records
-            )
+            missing_history = not any(key[0] == index_code for key in history_records.keys())
             if missing_portfolios or missing_history:
                 detail_payload = self._load_index_detail(entry)
                 if detail_payload:
                     if missing_portfolios:
-                        portfolio_records.extend(
+                        self._merge_portfolios(
+                            portfolio_records,
                             self._extract_portfolios_for_index(
                                 detail_payload, index_code, index_name
-                            )
+                            ),
                         )
                     if missing_history:
-                        history_records.extend(
+                        self._merge_history(
+                            history_records,
                             self._extract_history_for_index(
                                 detail_payload, index_code, index_name
-                            )
+                            ),
                         )
+            else:
+                detail_payload = None
 
-        return portfolio_records, history_records
+            archive_source = detail_payload or entry
+            self._merge_portfolios(
+                portfolio_records,
+                self._load_index_portfolio_archive(
+                    archive_source, index_code, index_name
+                ),
+            )
+            self._merge_history(
+                history_records,
+                self._load_index_history_archive(archive_source, index_code, index_name),
+            )
+
+        portfolios_sorted = sorted(portfolio_records.values(), key=lambda record: (record.index_code, record.effective_date, record.symbol))
+        history_sorted = sorted(history_records.values(), key=lambda record: (record.index_code, record.date))
+
+        return portfolios_sorted, history_sorted
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _merge_portfolios(
+        destination: Dict[Tuple[str, date, str], IndexPortfolioRecord],
+        records: Iterable[IndexPortfolioRecord],
+    ) -> None:
+        for record in records or []:
+            key = (record.index_code, record.effective_date, record.symbol)
+            if key not in destination:
+                destination[key] = record
+
+    @staticmethod
+    def _merge_history(
+        destination: Dict[Tuple[str, date], IndexHistoryRecord],
+        records: Iterable[IndexHistoryRecord],
+    ) -> None:
+        for record in records or []:
+            key = (record.index_code, record.date)
+            if key not in destination:
+                destination[key] = record
 
     # ------------------------------------------------------------------
     def _load_index_payload(self) -> List[Dict[str, Any]]:
@@ -279,6 +321,84 @@ class GpwBenchmarkHarvester:
         except Exception as exc:  # noqa: BLE001 - logging only
             LOGGER.debug("Failed to load detail for %s: %s", slug, exc)
         return None
+
+    def _load_index_portfolio_archive(
+        self, payload: Optional[Dict[str, Any]], index_code: str, index_name: Optional[str]
+    ) -> List[IndexPortfolioRecord]:
+        slug = self._extract_index_slug(payload or {})
+        if not slug:
+            return []
+        endpoints = [
+            f"/api/indexes/{slug}/portfolios?lang=pl&period=ALL",
+            f"/api/indexes/{slug}/portfolios?lang=pl&period=all",
+            f"/api/indexes/{slug}/portfolio?lang=pl&period=ALL",
+        ]
+        for endpoint in endpoints:
+            try:
+                response = self.session.get(
+                    urljoin(self.BASE_URL, endpoint),
+                    headers=self.SESSION_HEADERS,
+                    timeout=20,
+                )
+                response.raise_for_status()
+            except Exception as exc:  # noqa: BLE001 - logging only
+                LOGGER.debug("Failed to load portfolio archive for %s using %s: %s", slug, endpoint, exc)
+                continue
+            try:
+                data = response.json()
+            except ValueError:
+                LOGGER.debug("Portfolio archive %s for %s did not return JSON", endpoint, slug)
+                continue
+            container: Dict[str, Any]
+            if isinstance(data, list):
+                container = {"portfolios": data}
+            elif isinstance(data, dict):
+                container = data
+            else:
+                continue
+            records = self._extract_portfolios_for_index(container, index_code, index_name)
+            if records:
+                return records
+        return []
+
+    def _load_index_history_archive(
+        self, payload: Optional[Dict[str, Any]], index_code: str, index_name: Optional[str]
+    ) -> List[IndexHistoryRecord]:
+        slug = self._extract_index_slug(payload or {})
+        if not slug:
+            return []
+        endpoints = [
+            f"/api/indexes/{slug}/history?lang=pl&period=ALL",
+            f"/api/indexes/{slug}/history?lang=pl&period=all",
+            f"/api/indexes/{slug}/history?lang=pl&range=ALL",
+        ]
+        for endpoint in endpoints:
+            try:
+                response = self.session.get(
+                    urljoin(self.BASE_URL, endpoint),
+                    headers=self.SESSION_HEADERS,
+                    timeout=20,
+                )
+                response.raise_for_status()
+            except Exception as exc:  # noqa: BLE001 - logging only
+                LOGGER.debug("Failed to load history archive for %s using %s: %s", slug, endpoint, exc)
+                continue
+            try:
+                data = response.json()
+            except ValueError:
+                LOGGER.debug("History archive %s for %s did not return JSON", endpoint, slug)
+                continue
+            container: Dict[str, Any]
+            if isinstance(data, list):
+                container = {"history": data}
+            elif isinstance(data, dict):
+                container = data
+            else:
+                continue
+            records = self._extract_history_for_index(container, index_code, index_name)
+            if records:
+                return records
+        return []
 
     @staticmethod
     def _extract_index_code(payload: Dict[str, Any]) -> Optional[str]:

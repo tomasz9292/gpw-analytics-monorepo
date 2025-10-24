@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import calendar
 import csv
 import json
 import os
@@ -16,7 +17,7 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 import clickhouse_connect
 import keyring
@@ -30,6 +31,7 @@ from tkinter import (
     Listbox,
     StringVar,
     Tk,
+    Toplevel,
     filedialog,
     messagebox,
 )
@@ -122,6 +124,121 @@ class DownloadResults:
         self.index_portfolios.clear()
         self.index_history.clear()
         self.output_files.clear()
+
+
+class CalendarDialog:
+    """Simple calendar dialog returning a date selected by the user."""
+
+    _MONTH_NAMES = [
+        "",
+        "Styczeń",
+        "Luty",
+        "Marzec",
+        "Kwiecień",
+        "Maj",
+        "Czerwiec",
+        "Lipiec",
+        "Sierpień",
+        "Wrzesień",
+        "Październik",
+        "Listopad",
+        "Grudzień",
+    ]
+
+    def __init__(self, master: Tk, initial_date: Optional[date] = None, title: str = "Wybierz datę") -> None:
+        self._state: object = "cancel"
+        self._calendar = calendar.Calendar(firstweekday=0)
+        initial = initial_date or date.today()
+        self._year = initial.year
+        self._month = initial.month
+
+        self._top = Toplevel(master)
+        self._top.title(title)
+        self._top.transient(master)
+        self._top.grab_set()
+        self._top.resizable(False, False)
+        self._top.configure(padx=12, pady=12)
+        self._top.protocol("WM_DELETE_WINDOW", self._on_cancel)
+
+        header = ttk.Frame(self._top)
+        header.pack(fill="x")
+        ttk.Button(header, text="◀", width=3, command=self._prev_month).pack(side="left")
+        self._month_label = ttk.Label(header, anchor="center", font=("Segoe UI", 10, "bold"))
+        self._month_label.pack(side="left", expand=True, padx=8)
+        ttk.Button(header, text="▶", width=3, command=self._next_month).pack(side="right")
+
+        weekdays = ttk.Frame(self._top)
+        weekdays.pack(fill="x", pady=(12, 4))
+        for index, label in enumerate(["Pn", "Wt", "Śr", "Cz", "Pt", "So", "Nd"]):
+            ttk.Label(weekdays, text=label, width=4, anchor="center").grid(row=0, column=index, padx=2)
+
+        self._days_frame = ttk.Frame(self._top)
+        self._days_frame.pack(fill="both", expand=True)
+
+        actions = ttk.Frame(self._top)
+        actions.pack(fill="x", pady=(12, 0))
+        ttk.Button(actions, text="Wyczyść", command=self._on_clear).pack(side="left")
+        ttk.Button(actions, text="Anuluj", command=self._on_cancel).pack(side="right")
+
+        self._render_calendar()
+
+    def show(self) -> Tuple[bool, Optional[date]]:
+        self._top.wait_window()
+        if self._state == "cancel":
+            return False, None
+        if self._state == "clear":
+            return True, None
+        if isinstance(self._state, date):
+            return True, self._state
+        return False, None
+
+    # ------------------------------------------------------------------
+    def _render_calendar(self) -> None:
+        for child in self._days_frame.winfo_children():
+            child.destroy()
+        month_name = self._MONTH_NAMES[self._month] if 0 <= self._month < len(self._MONTH_NAMES) else ""
+        self._month_label.configure(text=f"{month_name} {self._year}".strip())
+        row = 0
+        for week in self._calendar.monthdatescalendar(self._year, self._month):
+            for column, current_day in enumerate(week):
+                button = ttk.Button(
+                    self._days_frame,
+                    text=str(current_day.day),
+                    width=4,
+                    command=lambda day=current_day: self._on_select(day),
+                )
+                button.grid(row=row, column=column, padx=2, pady=2)
+                if current_day.month != self._month:
+                    button.state(["disabled"])
+            row += 1
+
+    def _prev_month(self) -> None:
+        self._month -= 1
+        if self._month == 0:
+            self._month = 12
+            self._year -= 1
+        self._render_calendar()
+
+    def _next_month(self) -> None:
+        self._month += 1
+        if self._month == 13:
+            self._month = 1
+            self._year += 1
+        self._render_calendar()
+
+    def _on_select(self, selected_day: date) -> None:
+        if selected_day.month != self._month:
+            return
+        self._state = selected_day
+        self._top.destroy()
+
+    def _on_cancel(self) -> None:
+        self._state = "cancel"
+        self._top.destroy()
+
+    def _on_clear(self) -> None:
+        self._state = "clear"
+        self._top.destroy()
 
 
 class App:
@@ -362,8 +479,8 @@ class App:
         ttk.Label(options, text="Data do (RRRR-MM-DD)").grid(row=3, column=1, sticky="w", pady=(8, 2))
         ttk.Label(options, text="Limit wiadomości").grid(row=3, column=2, sticky="w", pady=(8, 2))
 
-        ttk.Entry(options, textvariable=self.start_date_var, width=18).grid(row=4, column=0, sticky="w")
-        ttk.Entry(options, textvariable=self.end_date_var, width=18).grid(row=4, column=1, sticky="w")
+        self._build_date_selector(options, self.start_date_var, row=4, column=0, title="Data od")
+        self._build_date_selector(options, self.end_date_var, row=4, column=1, title="Data do")
         ttk.Spinbox(options, from_=5, to=500, textvariable=self.news_limit_var, width=8).grid(row=4, column=2, sticky="w")
 
         ttk.Checkbutton(options, text="Losowe opóźnienia między zapytaniami", variable=self.random_delay_var).grid(row=5, column=0, columnspan=2, sticky="w", pady=(8, 0))
@@ -456,6 +573,20 @@ class App:
             selectforeground="#b91c1c",
         )
         self.progress_errors_listbox.insert(END, "Brak błędów podczas synchronizacji.")
+
+    def _build_date_selector(
+        self, parent: ttk.Frame, variable: StringVar, row: int, column: int, title: str
+    ) -> None:
+        container = ttk.Frame(parent, style="Inline.TFrame")
+        container.grid(row=row, column=column, sticky="w")
+        entry = ttk.Entry(container, textvariable=variable, width=16)
+        entry.pack(side="left")
+        ttk.Button(
+            container,
+            text="📅",
+            width=3,
+            command=lambda: self._open_date_picker(variable, title),
+        ).pack(side="left", padx=(4, 0))
 
     def _build_db_tab(self, parent: ttk.Frame) -> None:
         container = ttk.Frame(parent, style="Content.TFrame")
@@ -616,6 +747,17 @@ class App:
                 subprocess.Popen(["xdg-open", str(path)])
         except Exception as exc:  # pragma: no cover - platform specific
             messagebox.showerror("Błąd", f"Nie udało się otworzyć katalogu: {exc}")
+
+    def _open_date_picker(self, target: StringVar, title: str) -> None:
+        initial = self._parse_date(target.get())
+        dialog = CalendarDialog(self.root, initial_date=initial, title=title)
+        changed, selected = dialog.show()
+        if not changed:
+            return
+        if selected is None:
+            target.set("")
+        else:
+            target.set(selected.isoformat())
 
     def _log(self, message: str) -> None:
         timestamp = datetime.now().strftime("%H:%M:%S")
