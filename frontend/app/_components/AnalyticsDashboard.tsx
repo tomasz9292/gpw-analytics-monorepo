@@ -1489,9 +1489,9 @@ async function searchSymbols(
                         Array<{ symbol?: string; raw?: string }>
                     >;
                 })
-                .then((rows) =>
+                .then((rows): SymbolRow[] =>
                     rows
-                        .map((row) => {
+                        .map<SymbolRow | null>((row) => {
                             const symbol = typeof row.symbol === "string" ? row.symbol.trim() : "";
                             if (!symbol) return null;
                             const normalized = symbol.toUpperCase();
@@ -1503,7 +1503,7 @@ async function searchSymbols(
                                 kind: "stock" as const,
                             } satisfies SymbolRow;
                         })
-                        .filter((row): row is SymbolRow => Boolean(row))
+                        .filter((row): row is SymbolRow => row !== null)
                 )
                 .catch((): SymbolRow[] => [])
         );
@@ -1522,9 +1522,9 @@ async function searchSymbols(
                         { items?: Array<{ code?: string; name?: string | null }> }
                     >;
                 })
-                .then((payload) =>
+                .then((payload): SymbolRow[] =>
                     (payload.items ?? [])
-                        .map((item) => {
+                        .map<SymbolRow | null>((item) => {
                             const code = typeof item.code === "string" ? item.code.trim().toUpperCase() : "";
                             if (!code) return null;
                             const name = typeof item.name === "string" ? item.name.trim() : null;
@@ -1535,7 +1535,7 @@ async function searchSymbols(
                                 kind: "index" as const,
                             } satisfies SymbolRow;
                         })
-                        .filter((row): row is SymbolRow => Boolean(row))
+                        .filter((row): row is SymbolRow => row !== null)
                 )
                 .catch((): SymbolRow[] => [])
         );
