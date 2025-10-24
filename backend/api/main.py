@@ -3434,8 +3434,8 @@ def _collect_latest_index_membership(
         return {}
     _ensure_index_tables(ch_client)
     in_clause = ", ".join(f"'{code}'" for code in cleaned_codes)
-    inner_filter = f"WHERE index_code IN ({in_clause})"
-    outer_filter = f"WHERE p.index_code IN ({in_clause})"
+    inner_filter = f"WHERE upper(index_code) IN ({in_clause})"
+    outer_filter = f"WHERE upper(p.index_code) IN ({in_clause})"
     query = f"""
         WITH latest AS (
             SELECT index_code, max(effective_date) AS max_date
@@ -3487,8 +3487,8 @@ def _fetch_latest_index_portfolios(
     _ensure_index_tables(ch_client)
     if cleaned:
         in_clause = ", ".join(f"'{code}'" for code in cleaned)
-        inner_filter = f"WHERE index_code IN ({in_clause})"
-        outer_filter = f"WHERE p.index_code IN ({in_clause})"
+        inner_filter = f"WHERE upper(index_code) IN ({in_clause})"
+        outer_filter = f"WHERE upper(p.index_code) IN ({in_clause})"
     else:
         inner_filter = ""
         outer_filter = ""
@@ -3547,7 +3547,7 @@ def _fetch_index_history_rows(
     conditions: List[str] = []
     if cleaned:
         in_clause = ", ".join(f"'{code}'" for code in cleaned)
-        conditions.append(f"index_code IN ({in_clause})")
+        conditions.append(f"upper(index_code) IN ({in_clause})")
     params: Dict[str, Any] = {}
     if start is not None:
         conditions.append("date >= %(start)s")
@@ -3593,7 +3593,7 @@ def _fetch_index_portfolio_history_map(
     query = f"""
         SELECT index_code, index_name, effective_date, symbol
         FROM {TABLE_INDEX_PORTFOLIOS}
-        WHERE index_code IN ({in_clause})
+        WHERE upper(index_code) IN ({in_clause})
         ORDER BY index_code, effective_date, symbol
     """
 
