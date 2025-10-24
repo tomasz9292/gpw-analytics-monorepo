@@ -59,6 +59,19 @@ _NAME_CANDIDATE_KEYS = (
     "label",
 )
 
+_INDEX_CODE_KEYS = (
+    "code",
+    "symbol",
+    "index",
+    "indexCode",
+    "index_code",
+    "ticker",
+    "shortName",
+    "short_name",
+    "slug",
+    "id",
+)
+
 
 @dataclass(frozen=True)
 class IndexPortfolioRecord:
@@ -294,11 +307,58 @@ class GpwBenchmarkHarvester:
         else:
             candidates = []
 
-        parsed: List[Dict[str, Any]] = []
-        for item in candidates:
-            if isinstance(item, dict):
-                parsed.append(item)
-        return parsed
+        parsed: List[Dict[str, Any]] = [item for item in candidates if isinstance(item, dict)]
+        if parsed:
+            return parsed
+
+        # The public site started embedding the payload deeper inside the
+        # server-rendered JSON (e.g. within dehydrated React query state).
+        # When the top-level keys above are missing we attempt to discover any
+        # nested dictionaries that resemble index descriptors so that the rest
+        # of the extraction pipeline can still operate.
+        return self._discover_index_entries(data)
+
+    # ------------------------------------------------------------------
+    def _discover_index_entries(self, payload: Any) -> List[Dict[str, Any]]:
+        if payload is None:
+            return []
+        results: Dict[Tuple[str, Optional[str], Optional[str]], Dict[str, Any]] = {}
+        stack: List[Any] = [payload]
+        visited: set[int] = set()
+        while stack:
+            current = stack.pop()
+            current_id = id(current)
+            if current_id in visited:
+                continue
+            visited.add(current_id)
+            if isinstance(current, dict):
+                if self._looks_like_index_entry(current):
+                    code = self._extract_index_code(current)
+                    slug = self._extract_index_slug(current)
+                    name = self._extract_index_name(current)
+                    key = (code or "", slug, name)
+                    if key not in results:
+                        results[key] = current
+                for value in current.values():
+                    stack.append(value)
+            elif isinstance(current, list):
+                for item in current:
+                    stack.append(item)
+        return list(results.values())
+
+    @staticmethod
+    def _looks_like_index_entry(payload: Dict[str, Any]) -> bool:
+        if not isinstance(payload, dict):
+            return False
+        code = GpwBenchmarkHarvester._extract_index_code(payload)
+        if not code:
+            return False
+        slug = GpwBenchmarkHarvester._extract_index_slug(payload)
+        name = GpwBenchmarkHarvester._extract_index_name(payload)
+        # Some containers are lightweight and only expose the code, but those
+        # are rarely relevant.  Requiring either a slug or a readable name
+        # keeps false positives (e.g. company dictionaries) to a minimum.
+        return bool(slug or name)
 
     def _load_html_page(self) -> str:
         response = self.session.get(
@@ -425,7 +485,7 @@ class GpwBenchmarkHarvester:
 
     @staticmethod
     def _extract_index_code(payload: Dict[str, Any]) -> Optional[str]:
-        for key in ("code", "symbol", "index", "indexCode", "index_code", "ticker"):
+        for key in _INDEX_CODE_KEYS:
             value = payload.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip().upper()
@@ -451,13 +511,27 @@ class GpwBenchmarkHarvester:
             value = payload.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
+        url_value = None
+        for key in ("url", "href", "link", "permalink"):
+            candidate = payload.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                url_value = candidate.strip()
+                break
+        if url_value:
+            url_value = url_value.strip("/")
+            if "/" in url_value:
+                url_value = url_value.rsplit("/", 1)[-1]
+            return url_value
         return None
 
     # ------------------------------------------------------------------
     def _extract_portfolios_for_index(
         self, payload: Dict[str, Any], index_code: str, index_name: Optional[str]
     ) -> List[IndexPortfolioRecord]:
-        containers = self._collect_candidate_containers(payload, {"portfolios", "portfolio"})
+        containers = self._collect_candidate_containers(
+            payload,
+            {"portfolios", "portfolio", "indexPortfolios", "portfolioHistory"},
+        )
         results: List[IndexPortfolioRecord] = []
         for container in containers:
             snapshots = self._normalise_snapshot_container(container)
@@ -581,7 +655,14 @@ class GpwBenchmarkHarvester:
 
     @staticmethod
     def _pick_constituents(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
-        for key in ("companies", "components", "composition", "members", "portfolio"):
+        for key in (
+            "companies",
+            "components",
+            "composition",
+            "members",
+            "portfolio",
+            "constituents",
+        ):
             value = payload.get(key)
             if isinstance(value, list):
                 return [item for item in value if isinstance(item, dict)]
