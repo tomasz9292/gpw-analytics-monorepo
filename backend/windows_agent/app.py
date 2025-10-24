@@ -1270,6 +1270,7 @@ class App:
                     "index_name": record.index_name,
                     "effective_date": record.effective_date.isoformat(),
                     "symbol": record.symbol,
+                    "symbol_base": normalize_input_symbol(record.symbol_base or record.symbol),
                     "company_name": record.company_name,
                     "weight": record.weight,
                 }
@@ -1523,6 +1524,7 @@ class App:
                 record.index_name,
                 record.effective_date,
                 record.symbol,
+                normalize_input_symbol(record.symbol_base or record.symbol),
                 record.company_name,
                 record.weight,
                 "GPW Benchmark",
@@ -1536,6 +1538,7 @@ class App:
                 index_name Nullable(String),
                 effective_date Date,
                 symbol LowCardinality(String),
+                symbol_base LowCardinality(String),
                 company_name Nullable(String),
                 weight Nullable(Float64),
                 source LowCardinality(Nullable(String))
@@ -1543,6 +1546,9 @@ class App:
             ENGINE = MergeTree()
             ORDER BY (index_code, effective_date, symbol)
             """
+        )
+        client.command(
+            f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS symbol_base LowCardinality(String) AFTER symbol"
         )
         client.insert(
             table,
@@ -1552,6 +1558,7 @@ class App:
                 "index_name",
                 "effective_date",
                 "symbol",
+                "symbol_base",
                 "company_name",
                 "weight",
                 "source",

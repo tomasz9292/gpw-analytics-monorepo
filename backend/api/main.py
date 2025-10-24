@@ -129,6 +129,7 @@ DEFAULT_INDEX_PORTFOLIOS_DDL = textwrap.dedent(
         index_name Nullable(String),
         effective_date Date,
         symbol LowCardinality(String),
+        symbol_base LowCardinality(String),
         company_name Nullable(String),
         weight Nullable(Float64),
         source LowCardinality(Nullable(String))
@@ -156,6 +157,9 @@ DEFAULT_INDEX_HISTORY_DDL = textwrap.dedent(
 
 def _ensure_index_tables(ch_client) -> None:
     ch_client.command(DEFAULT_INDEX_PORTFOLIOS_DDL)
+    ch_client.command(
+        f"ALTER TABLE {TABLE_INDEX_PORTFOLIOS} ADD COLUMN IF NOT EXISTS symbol_base LowCardinality(String) AFTER symbol"
+    )
     ch_client.command(DEFAULT_INDEX_HISTORY_DDL)
 
 _OHLC_IMPORT_REQUIRED_COLUMNS = ("symbol", "date", "open", "high", "low", "close")
@@ -2272,6 +2276,7 @@ class ScorePreviewResponse(BaseModel):
 class IndexConstituentResponse(BaseModel):
     symbol: str
     raw_symbol: Optional[str] = None
+    symbol_base: Optional[str] = None
     company_name: Optional[str] = None
     weight: Optional[float] = None
 
@@ -3535,6 +3540,7 @@ def _fetch_latest_index_portfolios(
             p.index_name,
             p.effective_date,
             p.symbol,
+            p.symbol_base,
             p.company_name,
             p.weight
         FROM {TABLE_INDEX_PORTFOLIOS} AS p
@@ -3555,12 +3561,45 @@ def _fetch_latest_index_portfolios(
                 "index_name": row[1],
                 "effective_date": row[2],
                 "symbol": row[3],
-                "company_name": row[4],
-                "weight": row[5],
+                "symbol_base": row[4],
+                "company_name": row[5],
+                "weight": row[6],
             }
             for row in ch_client.query(query).result_rows
         ]
-    return rows
+    normalized_rows: List[Dict[str, Any]] = []
+    for row in rows:
+        if isinstance(row, dict):
+            normalized_rows.append(dict(row))
+            continue
+        try:
+            normalized_rows.append(dict(row))
+            continue
+        except (TypeError, ValueError):
+            pass
+        if isinstance(row, (list, tuple)):
+            normalized_rows.append(
+                {
+                    "index_code": row[0],
+                    "index_name": row[1],
+                    "effective_date": row[2],
+                    "symbol": row[3],
+                    "symbol_base": row[4] if len(row) > 4 else None,
+                    "company_name": row[5] if len(row) > 5 else None,
+                    "weight": row[6] if len(row) > 6 else None,
+                }
+            )
+            continue
+        normalized_rows.append({
+            "index_code": getattr(row, "index_code", None),
+            "index_name": getattr(row, "index_name", None),
+            "effective_date": getattr(row, "effective_date", None),
+            "symbol": getattr(row, "symbol", None),
+            "symbol_base": getattr(row, "symbol_base", None),
+            "company_name": getattr(row, "company_name", None),
+            "weight": getattr(row, "weight", None),
+        })
+    return normalized_rows
 
 
 def _fetch_index_history_rows(
@@ -4938,18 +4977,36 @@ def list_index_portfolios(codes: Optional[List[str]] = Query(default=None)) -> I
             code_raw = row.get("index_code")
             name_raw = row.get("index_name")
             date_raw = row.get("effective_date")
-            symbol_raw = row.get("symbol")
+            symbol_display_raw = row.get("symbol")
+            symbol_base_raw = row.get("symbol_base")
             company_raw = row.get("company_name")
             weight_raw = row.get("weight")
         else:
-            code_raw, name_raw, date_raw, symbol_raw, company_raw, weight_raw = row
-        if not code_raw or not symbol_raw:
+            if len(row) >= 7:
+                (
+                    code_raw,
+                    name_raw,
+                    date_raw,
+                    symbol_display_raw,
+                    symbol_base_raw,
+                    company_raw,
+                    weight_raw,
+                ) = row
+            else:
+                code_raw, name_raw, date_raw, symbol_display_raw, company_raw, weight_raw = row
+                symbol_base_raw = None
+        if not code_raw or not (symbol_display_raw or symbol_base_raw):
             continue
         code = str(code_raw).upper()
-        symbol = normalize_input_symbol(str(symbol_raw))
+        display_symbol = (
+            str(symbol_display_raw).strip().upper() if symbol_display_raw else ""
+        )
+        base_candidate = symbol_base_raw if symbol_base_raw else display_symbol
+        symbol = normalize_input_symbol(str(base_candidate)) if base_candidate else ""
         if not symbol:
             continue
-        pretty = pretty_symbol(symbol)
+        pretty_candidate = display_symbol or pretty_symbol(symbol)
+        pretty = pretty_candidate.strip().upper() if pretty_candidate else symbol
         pretty_base = pretty.split(".", 1)[0] if "." in pretty else pretty
         effective_date = date_raw
         if isinstance(effective_date, datetime):
@@ -4975,7 +5032,8 @@ def list_index_portfolios(codes: Optional[List[str]] = Query(default=None)) -> I
             symbol,
             pretty,
             pretty_base,
-            str(symbol_raw).strip() if symbol_raw else None,
+            str(symbol_display_raw).strip() if symbol_display_raw else None,
+            str(symbol_base_raw).strip() if symbol_base_raw else None,
             company_name,
         ]
         resolved_entry: Optional[_CompanyNameLookupEntry] = None
@@ -4993,7 +5051,7 @@ def list_index_portfolios(codes: Optional[List[str]] = Query(default=None)) -> I
                     symbol,
                     pretty.upper(),
                     pretty_base.upper(),
-                    str(symbol_raw).strip().upper() if symbol_raw else "",
+                    str(symbol_display_raw).strip().upper() if symbol_display_raw else "",
                 }:
                     company_name = resolved_name
         weight = float(weight_raw) if weight_raw is not None else None
@@ -5002,6 +5060,7 @@ def list_index_portfolios(codes: Optional[List[str]] = Query(default=None)) -> I
             IndexConstituentResponse(
                 symbol=pretty,
                 raw_symbol=symbol,
+                symbol_base=symbol,
                 company_name=company_name,
                 weight=weight,
             )
