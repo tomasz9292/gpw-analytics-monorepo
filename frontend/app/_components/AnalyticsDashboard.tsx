@@ -5561,7 +5561,11 @@ const CompanySyncPanel = () => {
                 <Card
                     title={
                         selectedCompany
-                            ? `Szczegóły ${selectedCompany.symbol}`
+                            ? `Szczegóły ${
+                                  selectedCompany.name ??
+                                  selectedCompany.short_name ??
+                                  selectedCompany.symbol
+                              }`
                             : "Wybierz spółkę z listy"
                     }
                 >
