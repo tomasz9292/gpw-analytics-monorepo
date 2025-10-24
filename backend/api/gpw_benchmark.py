@@ -12,6 +12,8 @@ from datetime import date, datetime
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from urllib.parse import urljoin
 
+from .symbols import normalize_input_symbol
+
 try:  # pragma: no cover - optional dependency
     import pdfplumber
 except ModuleNotFoundError:  # pragma: no cover - optional dependency
@@ -92,6 +94,18 @@ class IndexPortfolioRecord:
     symbol: str
     company_name: Optional[str]
     weight: Optional[float]
+
+    @property
+    def symbol_base(self) -> str:
+        """Return the normalized GPW ticker without the `.WA` suffix."""
+
+        raw = (self.symbol or "").strip()
+        if not raw:
+            return ""
+        if raw.endswith(".WA"):
+            raw = raw[:-3]
+        normalized = normalize_input_symbol(raw)
+        return normalized if normalized else raw.upper()
 
 
 @dataclass(frozen=True)

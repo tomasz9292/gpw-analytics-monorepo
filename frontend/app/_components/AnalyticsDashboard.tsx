@@ -152,6 +152,7 @@ type LocalClickhouseEnsureResult = { ok: true } | { ok: false; error: string };
 
 type GpwBenchmarkConstituent = {
     symbol: string;
+    symbol_base?: string | null;
     raw_symbol?: string | null;
     company_name?: string | null;
     weight?: number | null;
@@ -9055,19 +9056,16 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
             portfolio.constituents.forEach((entry) => {
                 const displaySymbol = normalizeSymbol(entry.symbol);
                 const rawSymbol = normalizeSymbol(entry.raw_symbol);
-                const baseSymbol = displaySymbol.includes(".")
-                    ? displaySymbol.split(".", 1)[0].trim().toUpperCase()
-                    : displaySymbol;
+                const baseSymbol = normalizeSymbol(
+                    entry.symbol_base ?? entry.raw_symbol ?? entry.symbol
+                );
                 const key = baseSymbol || rawSymbol || displaySymbol;
 
                 if (displaySymbol) {
                     symbolSet.add(displaySymbol);
-                    if (displaySymbol.includes(".")) {
-                        const base = displaySymbol.split(".", 1)[0].trim().toUpperCase();
-                        if (base) {
-                            symbolSet.add(base);
-                        }
-                    }
+                }
+                if (baseSymbol) {
+                    symbolSet.add(baseSymbol);
                 }
                 if (rawSymbol) {
                     symbolSet.add(rawSymbol);
