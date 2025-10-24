@@ -9,7 +9,7 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from urllib.parse import urljoin
 
 try:  # pragma: no cover - optional dependency
@@ -213,12 +213,15 @@ class GpwBenchmarkHarvester:
         root_payload = self._load_index_payload()
         portfolio_records: Dict[Tuple[str, date, str], IndexPortfolioRecord] = {}
         history_records: Dict[Tuple[str, date], IndexHistoryRecord] = {}
+        index_names: Dict[str, Optional[str]] = {}
 
         for entry in root_payload:
             index_code = self._extract_index_code(entry)
             if not index_code:
                 continue
             index_name = self._extract_index_name(entry)
+            if index_code not in index_names:
+                index_names[index_code] = index_name
 
             self._merge_portfolios(
                 portfolio_records,
@@ -265,10 +268,23 @@ class GpwBenchmarkHarvester:
                 self._load_index_history_archive(archive_source, index_code, index_name),
             )
 
+        missing_portfolio_indexes: Set[str] = {
+            code
+            for code in index_names
+            if not any(key[0] == code for key in portfolio_records.keys())
+        }
+        if missing_portfolio_indexes:
+            self._merge_portfolios(
+                portfolio_records,
+                self._load_portfolios_from_pdf_archive(
+                    missing_portfolio_indexes, index_names
+                ),
+            )
+
         if not portfolio_records:
             self._merge_portfolios(
                 portfolio_records,
-                self._load_portfolios_from_pdf_archive(),
+                self._load_portfolios_from_pdf_archive(index_name_map=index_names),
             )
 
         portfolios_sorted = sorted(
@@ -467,7 +483,11 @@ class GpwBenchmarkHarvester:
         return []
 
     # ------------------------------------------------------------------
-    def _load_portfolios_from_pdf_archive(self) -> List[IndexPortfolioRecord]:
+    def _load_portfolios_from_pdf_archive(
+        self,
+        target_index_codes: Optional[Iterable[str]] = None,
+        index_name_map: Optional[Dict[str, Optional[str]]] = None,
+    ) -> List[IndexPortfolioRecord]:
         if BeautifulSoup is None or pdfplumber is None:
             LOGGER.warning(
                 "Skipping GPW Benchmark PDF archive fallback due to missing dependencies"
@@ -483,8 +503,20 @@ class GpwBenchmarkHarvester:
         if not links:
             return []
 
+        target_set: Optional[Set[str]] = None
+        if target_index_codes:
+            target_set = {code.upper() for code in target_index_codes if code}
+
         records: Dict[Tuple[str, date, str], IndexPortfolioRecord] = {}
         for revision_date, index_code, index_name, pdf_url in links:
+            normalized_code = index_code.upper()
+            if target_set and normalized_code not in target_set:
+                continue
+            resolved_name = (
+                index_name_map.get(normalized_code)
+                if index_name_map and normalized_code in index_name_map
+                else index_name
+            )
             try:
                 response = self.session.get(
                     pdf_url,
@@ -497,7 +529,7 @@ class GpwBenchmarkHarvester:
                 continue
             try:
                 entries = self._parse_pdf_portfolio(
-                    response.content, revision_date, index_code, index_name
+                    response.content, revision_date, normalized_code, resolved_name
                 )
             except Exception as exc:  # noqa: BLE001 - logging only
                 LOGGER.debug("Failed to parse GPW Benchmark PDF %s: %s", pdf_url, exc)
