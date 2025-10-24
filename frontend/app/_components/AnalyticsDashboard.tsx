@@ -106,6 +106,21 @@ type ScoreComponentRequest = {
     label?: string;
 };
 
+type PortfolioSimulationStage = "preparing" | "ranking" | "building" | "finalizing";
+
+type PortfolioSimulationProgress = {
+    percent: number;
+    stage: PortfolioSimulationStage;
+    message?: string | null;
+};
+
+const PF_PROGRESS_STAGE_LABELS: Record<PortfolioSimulationStage, string> = {
+    preparing: "Przygotowywanie symulacji",
+    ranking: "Budowanie rankingu",
+    building: "Tworzenie portfela",
+    finalizing: "Finalizacja wyników",
+};
+
 type LocalClickhouseConfigState = {
     source: "env" | "override";
     mode: "url" | "manual";
@@ -8552,6 +8567,11 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
     const pfRangeInvalid = pfStart > pfEnd;
     const [pfLoading, setPfLoading] = useState(false);
     const [pfErr, setPfErr] = useState("");
+    const [pfProgress, setPfProgress] = useState<PortfolioSimulationProgress | null>(null);
+    const pfProgressTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const pfProgressCleanupRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const pfProgressMessagesRef = useRef<string[]>([]);
+    const pfProgressMessageIndexRef = useRef(0);
     const [pfSelectedTemplateId, setPfSelectedTemplateId] = useState<string | null>(null);
     const pfHasInvalidWeights = pfRows.some((row) => Number(row.weight) < 0 || Number.isNaN(Number(row.weight)));
     const pfHasMissingSymbols = pfRows.some(
@@ -8571,6 +8591,52 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
         pfLoading || pfInitial <= 0 || pfRangeInvalid || pfScoreNameInvalid || pfScoreLimitInvalid;
     const pfDisableSimulation =
         pfMode === "manual" ? pfDisableManualSimulation : pfDisableScoreSimulation;
+
+    const stopPfProgressInterval = useCallback(() => {
+        if (pfProgressTimerRef.current) {
+            clearInterval(pfProgressTimerRef.current);
+            pfProgressTimerRef.current = null;
+        }
+    }, []);
+
+    const clearPfProgressCleanup = useCallback(() => {
+        if (pfProgressCleanupRef.current) {
+            clearTimeout(pfProgressCleanupRef.current);
+            pfProgressCleanupRef.current = null;
+        }
+    }, []);
+
+    const resetPfProgressTimers = useCallback(() => {
+        stopPfProgressInterval();
+        clearPfProgressCleanup();
+        pfProgressMessagesRef.current = [];
+        pfProgressMessageIndexRef.current = 0;
+    }, [clearPfProgressCleanup, stopPfProgressInterval]);
+
+    useEffect(
+        () => () => {
+            resetPfProgressTimers();
+        },
+        [resetPfProgressTimers]
+    );
+
+    useEffect(() => {
+        if (pfMode !== "score") {
+            resetPfProgressTimers();
+            setPfProgress(null);
+        }
+    }, [pfMode, resetPfProgressTimers]);
+
+    const pfProgressState = pfMode === "score" ? pfProgress : null;
+    const pfProgressPercent = pfProgressState
+        ? Math.max(0, Math.min(100, Math.round(pfProgressState.percent)))
+        : 0;
+    const pfProgressStageLabel = pfProgressState
+        ? PF_PROGRESS_STAGE_LABELS[pfProgressState.stage]
+        : null;
+    const pfProgressMessage = pfProgressState?.message?.trim()
+        ? pfProgressState.message.trim()
+        : null;
 
     const preferencesObject = useMemo<PersistedPreferences>(() => {
         const sanitizedWatch = Array.from(
@@ -9377,6 +9443,8 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
             setPfRes(null);
 
             if (pfMode === "manual") {
+                resetPfProgressTimers();
+                setPfProgress(null);
                 const symbols = pfRows.map((r2) => r2.symbol);
                 const weights = pfRows.map((r2) => Number(r2.weight));
                 const res = await backtestPortfolio(symbols, weights, {
@@ -9417,6 +9485,51 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                     throw new Error("Skonfiguruj ranking score, aby uruchomić symulację.");
                 }
 
+                resetPfProgressTimers();
+                const componentLabels = Array.from(
+                    new Set(
+                        componentsForScore
+                            .map((component) => (component.label ?? "").trim())
+                            .filter((label) => Boolean(label))
+                    )
+                );
+                pfProgressMessagesRef.current = componentLabels;
+                pfProgressMessageIndexRef.current = 0;
+                const initialMessage = componentLabels.length
+                    ? `Analiza metryki: ${componentLabels[0]}`
+                    : "Budowanie rankingu spółek…";
+                setPfProgress({
+                    percent: 5,
+                    stage: "ranking",
+                    message: initialMessage,
+                });
+                pfProgressTimerRef.current = setInterval(() => {
+                    setPfProgress((prev) => {
+                        if (!prev) {
+                            return prev;
+                        }
+                        const messages = pfProgressMessagesRef.current;
+                        let nextMessage = prev.message ?? undefined;
+                        if (messages.length > 1) {
+                            pfProgressMessageIndexRef.current =
+                                (pfProgressMessageIndexRef.current + 1) % messages.length;
+                            nextMessage = `Analiza metryki: ${messages[pfProgressMessageIndexRef.current]}`;
+                        }
+                        const increment = prev.percent >= 90 ? 0 : Math.max(2, Math.random() * 6);
+                        const nextPercent = Math.min(90, prev.percent + increment);
+                        let nextStage: PortfolioSimulationStage = prev.stage;
+                        if (nextPercent >= 65 && nextStage !== "finalizing") {
+                            nextStage = "building";
+                        }
+                        return {
+                            ...prev,
+                            percent: nextPercent,
+                            stage: nextStage,
+                            message: nextMessage,
+                        };
+                    });
+                }, 900);
+
                 const res = await backtestPortfolioByScore(
                     {
                         score: pfScoreName.trim(),
@@ -9437,6 +9550,20 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                     componentsForScore,
                     scoreUniverseFallback
                 );
+                setPfProgress((prev) =>
+                    prev
+                        ? {
+                              ...prev,
+                              percent: 100,
+                              stage: "finalizing",
+                              message: "Finalizowanie wyników symulacji…",
+                          }
+                        : {
+                              percent: 100,
+                              stage: "finalizing",
+                              message: "Finalizowanie wyników symulacji…",
+                          }
+                );
                 setPfRes(res);
             }
 
@@ -9444,7 +9571,20 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
         } catch (e: unknown) {
             const message = e instanceof Error ? e.message : String(e);
             setPfErr(message);
+            if (pfMode === "score") {
+                resetPfProgressTimers();
+                setPfProgress(null);
+            }
         } finally {
+            if (pfMode === "score") {
+                resetPfProgressTimers();
+                pfProgressCleanupRef.current = setTimeout(() => {
+                    setPfProgress(null);
+                }, 1200);
+            } else {
+                resetPfProgressTimers();
+                setPfProgress(null);
+            }
             setPfLoading(false);
         }
     };
@@ -11048,6 +11188,28 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                             ? "Symuluj portfel"
                                             : "Symuluj wg score"}
                                     </button>
+                                    {pfProgressState && (
+                                        <div
+                                            className="w-full rounded-2xl border border-dashed border-soft/80 bg-white/80 p-3 text-xs text-muted"
+                                            aria-live="polite"
+                                        >
+                                            <div className="flex items-center justify-between font-medium text-primary/80">
+                                                <span>{pfProgressStageLabel ?? "Postęp symulacji"}</span>
+                                                <span className="font-semibold text-primary">{pfProgressPercent}%</span>
+                                            </div>
+                                            <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-soft">
+                                                <div
+                                                    className="h-full rounded-full bg-primary transition-all duration-500"
+                                                    style={{ width: `${pfProgressPercent}%` }}
+                                                />
+                                            </div>
+                                            {pfProgressMessage && (
+                                                <div className="mt-2 text-[11px] text-subtle">
+                                                    {pfProgressMessage}
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
                                     {pfMode === "manual" ? (
                                         <>
                                             {pfHasInvalidWeights && (
