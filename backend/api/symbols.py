@@ -1,7 +1,5 @@
 """Helpers for working with GPW symbol aliases used across the project."""
-
 from __future__ import annotations
-
 from typing import Dict
 
 from .company_ingestion import _normalize_gpw_symbol
@@ -34,36 +32,28 @@ ALIASES_RAW_TO_WA: Dict[str, str] = {
 }
 
 DEFAULT_OHLC_SYNC_SYMBOLS = (
-    "ALIOR",
-    "ALLEGRO",
-    "ASSECOPOL",
+    "ALR",
+    "ALE",
+    "ACP",
     "CCC",
-    "CDPROJEKT",
-    "CYFRPLSAT",
-    "DINOPL",
+    "CDR",
+    "CPS",
+    "DNP",
     "JSW",
-    "KGHM",
-    "KRUK",
+    "KGH",
+    "KRU",
     "LPP",
-    "MBANK",
-    "MERCATOR",
-    "ORANGEPL",
-    "PEKAO",
-    "PEPCO",
+    "MBK",
+    "MRC",
+    "OPL",
+    "PEO",
+    "PCO",
     "PGE",
-    "PKNORLEN",
-    "PKOBP",
-    "SANPL",
-    "TAURONPE",
+    "PKN",
+    "PKO",
+    "SPL",
+    "TPE",
 )
-
-ALIASES_WA_TO_RAW: Dict[str, str] = {wa.lower(): raw for raw, wa in ALIASES_RAW_TO_WA.items()}
-ALIASES_TICKER_TO_RAW: Dict[str, str] = {
-    wa.split(".", 1)[0].lower(): raw
-    for raw, wa in ALIASES_RAW_TO_WA.items()
-    if wa
-}
-
 
 def pretty_symbol(raw: str) -> str:
     """Zwraca 'ładny' ticker z sufiksem .WA jeśli znamy alias; w p.p. zwraca raw."""
@@ -73,37 +63,39 @@ def pretty_symbol(raw: str) -> str:
 
 def normalize_input_symbol(s: str) -> str:
     """
-    Dla wejścia użytkownika zwraca surowy symbol (RAW) używany w bazie.
-    Obsługuje zarówno 'CDR.WA' jak i 'CDPROJEKT'.
+    Dla wejścia użytkownika zwraca bazowy ticker używany przy pobieraniu
+    notowań (np. ``CDR`` zamiast ``CDPROJEKT``).
 
-    W praktyce użytkownicy często wpisują tickery małymi literami albo z
-    sufiksem .WA dla spółek z GPW.  Funkcja stara się więc:
-    - przywrócić RAW z mapy aliasów, jeśli go znamy,
-    - w przeciwnym razie, gdy ticker wygląda jak "XYZ.WA", uciąć sufiks i
-      zwrócić bazowy symbol,
-    - w ostateczności zwrócić wejście spójne wielkościowo (UPPER).
+    W praktyce użytkownicy często wpisują tickery małymi literami, z
+    sufiksem ``.WA`` albo korzystają z historycznych oznaczeń z GPW.
+    Funkcja stara się więc:
+    - zamienić znane aliasy na odpowiadający im ticker GPW,
+    - w przypadku wejścia zakończonego ``.WA`` zwrócić fragment przed
+      sufiksem,
+    - w ostateczności zwrócić wejście w postaci UPPERCASE.
     """
 
     cleaned = s.strip()
     if not cleaned:
         return ""
 
-    lower = cleaned.lower()
+    candidate = cleaned.upper()
 
-    maybe = ALIASES_WA_TO_RAW.get(lower)
-    if maybe:
-        return maybe
+    alias = ALIASES_RAW_TO_WA.get(candidate)
+    if alias:
+        candidate = alias
 
-    ticker = ALIASES_TICKER_TO_RAW.get(lower)
-    if ticker:
-        return ticker
+    try:
+        return _normalize_gpw_symbol(candidate)
+    except RuntimeError:
+        pass
 
-    if "." in cleaned:
-        base = cleaned.split(".", 1)[0].strip()
+    if "." in candidate:
+        base = candidate.split(".", 1)[0].strip()
         if base:
-            return base.upper()
+            return base
 
-    return cleaned.upper()
+    return candidate
 
 
 def to_stooq_symbol(value: str) -> str:
@@ -120,8 +112,6 @@ def to_stooq_symbol(value: str) -> str:
 
 __all__ = [
     "ALIASES_RAW_TO_WA",
-    "ALIASES_WA_TO_RAW",
-    "ALIASES_TICKER_TO_RAW",
     "DEFAULT_OHLC_SYNC_SYMBOLS",
     "normalize_input_symbol",
     "pretty_symbol",
