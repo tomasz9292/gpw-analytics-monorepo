@@ -37,6 +37,11 @@ from tkinter import ttk
 from tkinter.scrolledtext import ScrolledText
 
 from api.company_ingestion import CompanyDataHarvester
+from api.gpw_benchmark import (
+    GpwBenchmarkHarvester,
+    IndexHistoryRecord,
+    IndexPortfolioRecord,
+)
 from api.stooq_news import StooqCompanyNewsHarvester
 from api.stooq_ohlc import OhlcRow, StooqOhlcHarvester
 from api.symbols import DEFAULT_OHLC_SYNC_SYMBOLS, normalize_input_symbol
@@ -74,6 +79,8 @@ class DbConfig:
     table_ohlc: str = "ohlc"
     table_companies: str = "companies"
     table_news: str = "company_news"
+    table_index_portfolios: str = "index_portfolios"
+    table_index_history: str = "index_history"
 
     def to_json(self) -> Dict[str, object]:
         data = asdict(self)
@@ -94,6 +101,8 @@ class DbConfig:
             table_ohlc=str(payload.get("table_ohlc", "ohlc")),
             table_companies=str(payload.get("table_companies", "companies")),
             table_news=str(payload.get("table_news", "company_news")),
+            table_index_portfolios=str(payload.get("table_index_portfolios", "index_portfolios")),
+            table_index_history=str(payload.get("table_index_history", "index_history")),
         )
 
 
@@ -102,12 +111,16 @@ class DownloadResults:
     ohlc: List[OhlcRow] = field(default_factory=list)
     companies: List[Dict[str, object]] = field(default_factory=list)
     news: List[Dict[str, object]] = field(default_factory=list)
+    index_portfolios: List[IndexPortfolioRecord] = field(default_factory=list)
+    index_history: List[IndexHistoryRecord] = field(default_factory=list)
     output_files: List[Path] = field(default_factory=list)
 
     def clear(self) -> None:
         self.ohlc.clear()
         self.companies.clear()
         self.news.clear()
+        self.index_portfolios.clear()
+        self.index_history.clear()
         self.output_files.clear()
 
 
@@ -139,6 +152,7 @@ class App:
         self.fetch_news_var = BooleanVar(value=False)
         self.news_limit_var = IntVar(value=DEFAULT_NEWS_LIMIT)
         self.random_delay_var = BooleanVar(value=True)
+        self.fetch_indices_var = BooleanVar(value=False)
 
         self.db_host_var = StringVar()
         self.db_port_var = IntVar(value=8123)
@@ -148,6 +162,8 @@ class App:
         self.db_table_ohlc_var = StringVar(value="ohlc")
         self.db_table_companies_var = StringVar(value="companies")
         self.db_table_news_var = StringVar(value="company_news")
+        self.db_table_index_portfolios_var = StringVar(value="index_portfolios")
+        self.db_table_index_history_var = StringVar(value="index_history")
         self.db_password_cache: Optional[str] = None
 
         self.results = DownloadResults()
@@ -336,6 +352,11 @@ class App:
         ttk.Checkbutton(options, text="Notowania historyczne", variable=self.fetch_history_var).grid(row=2, column=0, sticky="w", pady=2)
         ttk.Checkbutton(options, text="Profile spółek", variable=self.fetch_companies_var).grid(row=2, column=1, sticky="w", pady=2)
         ttk.Checkbutton(options, text="Wiadomości", variable=self.fetch_news_var).grid(row=2, column=2, sticky="w", pady=2)
+        ttk.Checkbutton(
+            options,
+            text="Indeksy GPW Benchmark",
+            variable=self.fetch_indices_var,
+        ).grid(row=2, column=3, sticky="w", pady=2)
 
         ttk.Label(options, text="Data od (RRRR-MM-DD)").grid(row=3, column=0, sticky="w", pady=(8, 2))
         ttk.Label(options, text="Data do (RRRR-MM-DD)").grid(row=3, column=1, sticky="w", pady=(8, 2))
@@ -350,6 +371,7 @@ class App:
         options.columnconfigure(0, weight=1)
         options.columnconfigure(1, weight=1)
         options.columnconfigure(2, weight=1)
+        options.columnconfigure(3, weight=1)
 
         destination = ttk.LabelFrame(container, text="Katalog wynikowy", style="Card.TLabelframe")
         destination.pack(fill="x", padx=4, pady=8)
@@ -450,6 +472,8 @@ class App:
             ("Tabela notowań", self.db_table_ohlc_var),
             ("Tabela profili", self.db_table_companies_var),
             ("Tabela wiadomości", self.db_table_news_var),
+            ("Tabela portfeli indeksów", self.db_table_index_portfolios_var),
+            ("Tabela historii indeksów", self.db_table_index_history_var),
         ]
 
         for idx, (label, var) in enumerate(labels):
@@ -669,6 +693,8 @@ class App:
                 self.db_table_ohlc_var.set(config.table_ohlc)
                 self.db_table_companies_var.set(config.table_companies)
                 self.db_table_news_var.set(config.table_news)
+                self.db_table_index_portfolios_var.set(config.table_index_portfolios)
+                self.db_table_index_history_var.set(config.table_index_history)
                 self.db_password_cache = keyring.get_password(KEYRING_SERVICE, config.username)
             except Exception as exc:
                 self._log(f"Nie udało się wczytać konfiguracji: {exc}")
@@ -691,6 +717,10 @@ class App:
             table_ohlc=self.db_table_ohlc_var.get().strip() or "ohlc",
             table_companies=self.db_table_companies_var.get().strip() or "companies",
             table_news=self.db_table_news_var.get().strip() or "company_news",
+            table_index_portfolios=self.db_table_index_portfolios_var.get().strip()
+            or "index_portfolios",
+            table_index_history=self.db_table_index_history_var.get().strip()
+            or "index_history",
         )
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         CONFIG_FILE.write_text(json.dumps(config.to_json(), indent=2), encoding="utf-8")
@@ -720,7 +750,12 @@ class App:
     def _download_worker(self) -> None:
         self.results.clear()
         symbols = self._collect_symbols()
-        if not symbols:
+        symbol_required_flags = [
+            self.fetch_history_var.get(),
+            self.fetch_companies_var.get(),
+            self.fetch_news_var.get(),
+        ]
+        if any(symbol_required_flags) and not symbols:
             self._log("Brak spółek do pobrania. Uzupełnij listę symboli.")
             messagebox.showinfo("Pobieranie", "Brak spółek do pobrania. Uzupełnij listę symboli.")
             self._reset_progress(0)
@@ -731,12 +766,10 @@ class App:
         output_dir = Path(self.output_dir_var.get())
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        selected_flags = [
-            self.fetch_history_var.get(),
-            self.fetch_companies_var.get(),
-            self.fetch_news_var.get(),
-        ]
+        selected_flags = symbol_required_flags
         total_tasks = len(symbols) * sum(1 for flag in selected_flags if flag)
+        if self.fetch_indices_var.get():
+            total_tasks += 1
         self._reset_progress(total_tasks)
         if total_tasks == 0:
             self._log("Nie wybrano żadnych danych do pobrania.")
@@ -758,6 +791,9 @@ class App:
             if self.fetch_news_var.get():
                 self._set_status("Synchronizacja wiadomości spółek")
                 success_any = self._download_news(symbols, output_dir) or success_any
+            if self.fetch_indices_var.get():
+                self._set_status("Synchronizacja portfeli indeksów GPW Benchmark")
+                success_any = self._download_indices(output_dir) or success_any
         except Exception as exc:
             unexpected_error = exc
             error_message = f"Nieoczekiwany błąd pobierania: {exc}"
@@ -933,6 +969,83 @@ class App:
         self._log(f"Zapisano wiadomości do pliku {json_path}")
         return True
 
+    def _download_indices(self, output_dir: Path) -> bool:
+        harvester = GpwBenchmarkHarvester()
+        self._log("Pobieram dane indeksów z GPW Benchmark")
+        try:
+            portfolios, history = harvester.fetch()
+        except Exception as exc:
+            error_message = f"Błąd pobierania indeksów GPW Benchmark: {exc}"
+            self._log(error_message)
+            self._append_error_message(error_message)
+            messagebox.showerror("Indeksy", error_message)
+            self._increment_progress(1, 0)
+            return False
+
+        if not portfolios and not history:
+            info = "Serwis GPW Benchmark nie zwrócił żadnych danych."
+            self._log(info)
+            self._append_error_message(info)
+            self._increment_progress(1, 0)
+            return False
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        saved_records = 0
+
+        if portfolios:
+            serialized_portfolios = [
+                {
+                    "index_code": record.index_code,
+                    "index_name": record.index_name,
+                    "effective_date": record.effective_date.isoformat(),
+                    "symbol": record.symbol,
+                    "company_name": record.company_name,
+                    "weight": record.weight,
+                }
+                for record in portfolios
+            ]
+            portfolios_path = output_dir / f"indices_portfolios_{timestamp}.json"
+            portfolios_path.write_text(
+                json.dumps(serialized_portfolios, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            self.results.index_portfolios = portfolios
+            self.results.output_files.append(portfolios_path)
+            self._register_output_file()
+            self._log(f"Zapisano portfele indeksów do pliku {portfolios_path}")
+            saved_records += len(portfolios)
+
+        if history:
+            serialized_history = [
+                {
+                    "index_code": record.index_code,
+                    "index_name": record.index_name,
+                    "date": record.date.isoformat(),
+                    "value": record.value,
+                    "change_pct": record.change_pct,
+                }
+                for record in history
+            ]
+            history_path = output_dir / f"indices_history_{timestamp}.json"
+            history_path.write_text(
+                json.dumps(serialized_history, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            self.results.index_history = history
+            self.results.output_files.append(history_path)
+            self._register_output_file()
+            self._log(f"Zapisano historię indeksów do pliku {history_path}")
+            saved_records += len(history)
+
+        if saved_records == 0:
+            self._log("Brak rekordów indeksów do zapisania.")
+            self._append_error_message("Brak rekordów indeksów do zapisania")
+            self._increment_progress(1, 0)
+            return False
+
+        self._increment_progress(1, saved_records)
+        return True
+
     def _maybe_sleep(self) -> None:
         if self.random_delay_var.get():
             delay = random.uniform(1.0, 3.5)
@@ -945,7 +1058,13 @@ class App:
         if self.export_thread and self.export_thread.is_alive():
             messagebox.showinfo("Eksport", "Trwa poprzedni eksport danych.")
             return
-        if not (self.results.ohlc or self.results.companies or self.results.news):
+        if not (
+            self.results.ohlc
+            or self.results.companies
+            or self.results.news
+            or self.results.index_portfolios
+            or self.results.index_history
+        ):
             messagebox.showwarning("Eksport", "Najpierw pobierz dane, aby mieć co wysłać do bazy.")
             return
         self.export_thread = threading.Thread(target=self._export_worker, daemon=True)
@@ -962,6 +1081,8 @@ class App:
             self._export_ohlc(client)
             self._export_companies(client)
             self._export_news(client)
+            self._export_index_portfolios(client)
+            self._export_index_history(client)
             self._log("Eksport zakończony powodzeniem.")
             messagebox.showinfo("Eksport", "Dane wysłano do bazy ClickHouse.")
         except Exception as exc:
@@ -1065,6 +1186,99 @@ class App:
         )
         client.insert(table, rows, column_names=columns)
         self._log(f"Wysłano {len(rows)} wiadomości do tabeli {table}")
+
+    def _export_index_portfolios(self, client: ClickHouseClient) -> None:
+        if not self.results.index_portfolios:
+            return
+        table = self._sanitize_identifier(
+            self.db_table_index_portfolios_var.get().strip() or "index_portfolios"
+        )
+        rows = [
+            [
+                record.index_code,
+                record.index_name,
+                record.effective_date,
+                record.symbol,
+                record.company_name,
+                record.weight,
+                "GPW Benchmark",
+            ]
+            for record in self.results.index_portfolios
+        ]
+        client.command(
+            f"""
+            CREATE TABLE IF NOT EXISTS {table} (
+                index_code LowCardinality(String),
+                index_name Nullable(String),
+                effective_date Date,
+                symbol LowCardinality(String),
+                company_name Nullable(String),
+                weight Nullable(Float64),
+                source LowCardinality(Nullable(String))
+            )
+            ENGINE = MergeTree()
+            ORDER BY (index_code, effective_date, symbol)
+            """
+        )
+        client.insert(
+            table,
+            rows,
+            column_names=[
+                "index_code",
+                "index_name",
+                "effective_date",
+                "symbol",
+                "company_name",
+                "weight",
+                "source",
+            ],
+        )
+        self._log(f"Wysłano {len(rows)} rekordów indeksów do tabeli {table}")
+
+    def _export_index_history(self, client: ClickHouseClient) -> None:
+        if not self.results.index_history:
+            return
+        table = self._sanitize_identifier(
+            self.db_table_index_history_var.get().strip() or "index_history"
+        )
+        rows = [
+            [
+                record.index_code,
+                record.index_name,
+                record.date,
+                record.value,
+                record.change_pct,
+                "GPW Benchmark",
+            ]
+            for record in self.results.index_history
+        ]
+        client.command(
+            f"""
+            CREATE TABLE IF NOT EXISTS {table} (
+                index_code LowCardinality(String),
+                index_name Nullable(String),
+                date Date,
+                value Nullable(Float64),
+                change_pct Nullable(Float64),
+                source LowCardinality(Nullable(String))
+            )
+            ENGINE = MergeTree()
+            ORDER BY (index_code, date)
+            """
+        )
+        client.insert(
+            table,
+            rows,
+            column_names=[
+                "index_code",
+                "index_name",
+                "date",
+                "value",
+                "change_pct",
+                "source",
+            ],
+        )
+        self._log(f"Wysłano {len(rows)} punktów historii indeksów do tabeli {table}")
 
     def _test_connection(self) -> None:
         try:
