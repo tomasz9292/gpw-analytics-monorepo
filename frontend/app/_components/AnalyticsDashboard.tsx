@@ -1505,7 +1505,7 @@ async function searchSymbols(
                         })
                         .filter((row): row is SymbolRow => Boolean(row))
                 )
-                .catch(() => [])
+                .catch((): SymbolRow[] => [])
         );
     }
 
@@ -1537,7 +1537,7 @@ async function searchSymbols(
                         })
                         .filter((row): row is SymbolRow => Boolean(row))
                 )
-                .catch(() => [])
+                .catch((): SymbolRow[] => [])
         );
     }
 
