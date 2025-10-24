@@ -95,12 +95,6 @@ const removeUndefined = (obj: Record<string, unknown>) =>
         Object.entries(obj).filter(([, value]) => value !== undefined && value !== null)
     );
 
-const parseSymbolInput = (value: string): string[] =>
-    value
-        .split(/[\s,;]+/)
-        .map((item) => item.trim().toUpperCase())
-        .filter((item) => item.length > 0);
-
 const findScoreMetric = (value: string): ScoreMetricOption | undefined =>
     SCORE_METRIC_OPTIONS.find((option) => option.value === value);
 
@@ -1437,7 +1431,6 @@ async function backtestPortfolioByScore(
     fallbackUniverse?: string[]
 ): Promise<PortfolioResp> {
     const {
-        score,
         universe = null,
         limit,
         weighting,
@@ -1462,75 +1455,54 @@ async function backtestPortfolioByScore(
             ? Math.floor(limit)
             : undefined;
 
-    const previewRules: ScorePreviewRulePayload[] = components.map((component) => ({
-        metric: `${component.metric}_${component.lookback_days}`,
-        weight: component.weight,
-        direction: component.direction,
-        label: component.label,
-        lookbackDays: component.lookback_days,
-    }));
+    const topN = Math.max(limitCandidate ?? components.length, 1);
 
     const resolvedUniverse = resolveUniverseWithFallback(universe, fallbackUniverse);
 
-    const previewPayload: ScorePreviewRequest = {
-        name: score && score.trim() ? score.trim() : undefined,
-        rules: previewRules,
-        limit: limitCandidate,
-        universe: resolvedUniverse,
-        sort: direction ?? undefined,
-    };
-
-    const preview = await previewScoreRanking(previewPayload);
-
-    let rows = preview.rows.slice();
-    if (typeof minScore === "number") {
-        rows = rows.filter((row) => row.score === undefined || row.score >= minScore);
-    }
-    if (typeof maxScore === "number") {
-        rows = rows.filter((row) => row.score === undefined || row.score <= maxScore);
-    }
-
-    const overallDirection = direction === "asc" ? "asc" : "desc";
-    rows.sort((a, b) => {
-        const aScore = a.score ?? 0;
-        const bScore = b.score ?? 0;
-        return overallDirection === "asc" ? aScore - bScore : bScore - aScore;
+    const autoPayload = removeUndefined({
+        top_n: topN,
+        weighting: weighting === "score" ? "score" : "equal",
+        direction: direction === "asc" ? "asc" : "desc",
+        min_score: typeof minScore === "number" ? minScore : undefined,
+        max_score: typeof maxScore === "number" ? maxScore : undefined,
+        components: components.map((component) => ({
+            metric: component.metric,
+            lookback_days: component.lookback_days,
+            weight: component.weight,
+            direction: component.direction,
+        })),
+        filters: resolvedUniverse ? { include: resolvedUniverse } : undefined,
     });
 
-    const finalLimit = limitCandidate ?? rows.length;
-    const topRows = rows.slice(0, finalLimit);
-    if (!topRows.length) {
-        throw new Error("Brak spółek spełniających kryteria score.");
-    }
-
-    const rawWeights =
-        weighting === "score"
-            ? topRows.map((row) => Math.max(row.score ?? 0, 0))
-            : topRows.map(() => 1);
-
-    const totalWeight = rawWeights.reduce(
-        (acc, value) => acc + (Number.isFinite(value) ? (value as number) : 0),
-        0
-    );
-
-    const normalizedWeights =
-        totalWeight > 0
-            ? rawWeights.map((value) =>
-                  Number.isFinite(value) ? ((value as number) / totalWeight) || 0 : 0
-              )
-            : topRows.map(() => 1 / topRows.length);
-
-    const symbols = topRows.map((row) => row.symbol);
-
-    return backtestPortfolio(symbols, normalizedWeights, {
+    const payload = removeUndefined({
         start,
         end,
         rebalance,
-        initialCapital,
-        feePct,
-        thresholdPct,
-        benchmark,
+        initial_capital: initialCapital,
+        fee_pct: feePct,
+        threshold_pct: thresholdPct,
+        benchmark: benchmark?.trim() ? benchmark.trim() : undefined,
+        auto: autoPayload,
     });
+
+    const response = await fetch(`/api/backtest/portfolio`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+        let message = "";
+        try {
+            message = await response.text();
+        } catch {
+            // ignore – fallback to generic error below
+        }
+        throw new Error(message || `API /backtest/portfolio ${response.status}`);
+    }
+
+    const json = await response.json();
+    return normalizePortfolioResponse(json);
 }
 
 
