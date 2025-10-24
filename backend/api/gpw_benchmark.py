@@ -753,24 +753,30 @@ class GpwBenchmarkHarvester:
 
     @staticmethod
     def _extract_index_code(payload: Dict[str, Any]) -> Optional[str]:
-        for key in _INDEX_CODE_KEYS:
-            value = payload.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip().upper()
-        nested = payload.get("index") or payload.get("meta") or {}
-        if isinstance(nested, dict):
-            return GpwBenchmarkHarvester._extract_index_code(nested)
+        current: Optional[Dict[str, Any]] = payload
+        visited: Set[int] = set()
+        while isinstance(current, dict) and id(current) not in visited:
+            visited.add(id(current))
+            for key in _INDEX_CODE_KEYS:
+                value = current.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip().upper()
+            nested = current.get("index") or current.get("meta")
+            current = nested if isinstance(nested, dict) else None
         return None
 
     @staticmethod
     def _extract_index_name(payload: Dict[str, Any]) -> Optional[str]:
-        for key in ("name", "title", "label", "indexName", "index_name"):
-            value = payload.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-        nested = payload.get("index") or payload.get("meta") or {}
-        if isinstance(nested, dict):
-            return GpwBenchmarkHarvester._extract_index_name(nested)
+        current: Optional[Dict[str, Any]] = payload
+        visited: Set[int] = set()
+        while isinstance(current, dict) and id(current) not in visited:
+            visited.add(id(current))
+            for key in ("name", "title", "label", "indexName", "index_name"):
+                value = current.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+            nested = current.get("index") or current.get("meta")
+            current = nested if isinstance(nested, dict) else None
         return None
 
     @staticmethod
