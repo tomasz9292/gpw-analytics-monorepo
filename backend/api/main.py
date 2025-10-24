@@ -2133,6 +2133,7 @@ class ScorePreviewResponse(BaseModel):
 
 class IndexConstituentResponse(BaseModel):
     symbol: str
+    raw_symbol: Optional[str] = None
     company_name: Optional[str] = None
     weight: Optional[float] = None
 
@@ -4832,6 +4833,7 @@ def list_index_portfolios(codes: Optional[List[str]] = Query(default=None)) -> I
         constituents.append(
             IndexConstituentResponse(
                 symbol=pretty_symbol(symbol),
+                raw_symbol=symbol,
                 company_name=company_name,
                 weight=weight,
             )
