@@ -3808,7 +3808,7 @@ def _run_backtest(req: BacktestPortfolioRequest) -> PortfolioResp:
             raise HTTPException(404, "Brak danych historycznych po filtrach score")
 
         all_symbols = list(closes_ordered.keys())
-        investable_ratio = 0.5
+        investable_ratio = max(0.0, min(1.0, 1.0 - float(cash_weight)))
         min_score = req.auto.min_score
         max_score = req.auto.max_score
         direction_desc = req.auto.direction != "asc"
