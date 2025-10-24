@@ -168,11 +168,19 @@ type GpwBenchmarkPortfoliosResponse = {
     portfolios: GpwBenchmarkPortfolio[];
 };
 
+type BenchmarkUniverseConstituent = {
+    symbol: string;
+    baseSymbol: string;
+    rawSymbol: string | null;
+    companyName: string | null;
+};
+
 type BenchmarkUniverseOption = {
     code: string;
     name: string;
     effectiveDate: string;
     symbols: string[];
+    constituents: BenchmarkUniverseConstituent[];
 };
 
 type GpwBenchmarkHistoryPoint = {
@@ -8302,6 +8310,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
     const [benchmarkHistory, setBenchmarkHistory] = useState<
         Record<string, GpwBenchmarkHistorySeries>
     >({});
+    const [selectedBenchmarkCode, setSelectedBenchmarkCode] = useState<string | null>(null);
     const [scoreAsOf, setScoreAsOf] = useState(defaultScoreDraft.asOf);
     const [scoreMinMcap, setScoreMinMcap] = useState(defaultScoreDraft.minMcap);
     const [scoreMinTurnover, setScoreMinTurnover] = useState(defaultScoreDraft.minTurnover);
@@ -9036,35 +9045,102 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
     const benchmarkUniverseOptions = useMemo<BenchmarkUniverseOption[]>(() => {
         return benchmarkPortfolios.map((portfolio) => {
             const symbolSet = new Set<string>();
+            const constituentMap = new Map<string, BenchmarkUniverseConstituent>();
+
+            const normalizeSymbol = (value: unknown): string =>
+                typeof value === "string" ? value.trim().toUpperCase() : "";
+            const normalizeName = (value: unknown): string =>
+                typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+
             portfolio.constituents.forEach((entry) => {
-                const pretty =
-                    typeof entry.symbol === "string" ? entry.symbol.trim().toUpperCase() : "";
-                if (pretty) {
-                    symbolSet.add(pretty);
-                    if (pretty.includes(".")) {
-                        const base = pretty.split(".", 1)[0].trim().toUpperCase();
+                const displaySymbol = normalizeSymbol(entry.symbol);
+                const rawSymbol = normalizeSymbol(entry.raw_symbol);
+                const baseSymbol = displaySymbol.includes(".")
+                    ? displaySymbol.split(".", 1)[0].trim().toUpperCase()
+                    : displaySymbol;
+                const key = baseSymbol || rawSymbol || displaySymbol;
+
+                if (displaySymbol) {
+                    symbolSet.add(displaySymbol);
+                    if (displaySymbol.includes(".")) {
+                        const base = displaySymbol.split(".", 1)[0].trim().toUpperCase();
                         if (base) {
                             symbolSet.add(base);
                         }
                     }
                 }
-                const raw =
-                    typeof entry.raw_symbol === "string"
-                        ? entry.raw_symbol.trim().toUpperCase()
-                        : "";
-                if (raw) {
-                    symbolSet.add(raw);
+                if (rawSymbol) {
+                    symbolSet.add(rawSymbol);
                 }
+
+                if (!key) {
+                    return;
+                }
+
+                const existing = constituentMap.get(key);
+                const companyName = normalizeName(entry.company_name);
+
+                if (existing) {
+                    if (!existing.symbol && displaySymbol) {
+                        existing.symbol = displaySymbol;
+                    }
+                    if (!existing.rawSymbol && rawSymbol) {
+                        existing.rawSymbol = rawSymbol;
+                    }
+                    if (!existing.companyName && companyName) {
+                        existing.companyName = companyName;
+                    }
+                    return;
+                }
+
+                constituentMap.set(key, {
+                    symbol: displaySymbol || rawSymbol || key,
+                    baseSymbol: key,
+                    rawSymbol: rawSymbol || null,
+                    companyName: companyName || null,
+                });
             });
+
             const symbols = Array.from(symbolSet).filter(Boolean);
+            const constituents = Array.from(constituentMap.values()).sort((a, b) =>
+                a.baseSymbol.localeCompare(b.baseSymbol)
+            );
+
             return {
                 code: portfolio.index_code,
                 name: portfolio.index_name?.trim() || portfolio.index_code,
                 effectiveDate: portfolio.effective_date,
                 symbols,
+                constituents,
             };
         });
     }, [benchmarkPortfolios]);
+
+    useEffect(() => {
+        if (!benchmarkUniverseOptions.length) {
+            setSelectedBenchmarkCode((prev) => (prev === null ? prev : null));
+            return;
+        }
+        setSelectedBenchmarkCode((prev) => {
+            if (prev && benchmarkUniverseOptions.some((option) => option.code === prev)) {
+                return prev;
+            }
+            return benchmarkUniverseOptions[0].code;
+        });
+    }, [benchmarkUniverseOptions]);
+
+    const selectedBenchmarkOption = useMemo(() => {
+        if (!benchmarkUniverseOptions.length) {
+            return null;
+        }
+        if (!selectedBenchmarkCode) {
+            return benchmarkUniverseOptions[0];
+        }
+        return (
+            benchmarkUniverseOptions.find((option) => option.code === selectedBenchmarkCode) ??
+            benchmarkUniverseOptions[0]
+        );
+    }, [benchmarkUniverseOptions, selectedBenchmarkCode]);
 
     const handleBenchmarkUniverseSelect = useCallback(
         (option: BenchmarkUniverseOption, target: "score" | "pf" | "both" = "score") => {
@@ -9075,6 +9151,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
             if (target === "pf" || target === "both") {
                 setPfScoreUniverse(universeToken);
             }
+            setSelectedBenchmarkCode(option.code);
             if (option.symbols.length) {
                 setScoreUniverseFallback((prev) => {
                     const merged = new Set<string>([...option.symbols.slice(0, 500)]);
@@ -9107,7 +9184,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                     code: option.code,
                     name: option.name,
                     effectiveDate: option.effectiveDate,
-                    symbolsCount: option.symbols.length,
+                    symbolsCount: option.constituents.length,
                     latestValue: lastPoint?.value ?? null,
                     changePct,
                     lastDate: lastPoint?.date ?? null,
@@ -11506,58 +11583,125 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                 dla rankingu.
                             </p>
                             {benchmarkOverview.length > 0 ? (
-                                <div className="overflow-x-auto">
-                                    <table className="min-w-full divide-y divide-soft text-sm">
-                                        <thead className="bg-soft-surface text-xs uppercase tracking-wide text-muted">
-                                            <tr>
-                                                <th className="px-3 py-2 text-left">Indeks</th>
-                                                <th className="px-3 py-2 text-left">Nazwa</th>
-                                                <th className="px-3 py-2 text-right">Spółki</th>
-                                                <th className="px-3 py-2 text-left">Skład z dnia</th>
-                                                <th className="px-3 py-2 text-right">Ostatnia wartość</th>
-                                                <th className="px-3 py-2 text-right">Zmiana</th>
-                                                <th className="px-3 py-2 text-left">Notowanie z dnia</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody className="divide-y divide-soft">
-                                            {benchmarkOverview.map((item) => (
-                                                <tr key={item.code}>
-                                                    <td className="px-3 py-2 font-medium text-primary">{item.code}</td>
-                                                    <td className="px-3 py-2 text-subtle">
-                                                        {item.name || "—"}
-                                                    </td>
-                                                    <td className="px-3 py-2 text-right">
-                                                        {item.symbolsCount}
-                                                    </td>
-                                                    <td className="px-3 py-2 text-subtle">
-                                                        {item.effectiveDate}
-                                                    </td>
-                                                    <td className="px-3 py-2 text-right">
-                                                        {item.latestValue != null
-                                                            ? benchmarkValueFormatter.format(item.latestValue)
-                                                            : "—"}
-                                                    </td>
-                                                    <td
-                                                        className={`px-3 py-2 text-right ${
-                                                            item.changePct != null
-                                                                ? item.changePct >= 0
-                                                                    ? "text-positive"
-                                                                    : "text-negative"
-                                                                : "text-subtle"
-                                                        }`}
-                                                    >
-                                                        {item.changePct != null
-                                                            ? benchmarkPercentFormatter.format(item.changePct)
-                                                            : "—"}
-                                                    </td>
-                                                    <td className="px-3 py-2 text-subtle">
-                                                        {item.lastDate ?? "—"}
-                                                    </td>
+                                <>
+                                    <div className="overflow-x-auto">
+                                        <table className="min-w-full divide-y divide-soft text-sm">
+                                            <thead className="bg-soft-surface text-xs uppercase tracking-wide text-muted">
+                                                <tr>
+                                                    <th className="px-3 py-2 text-left">Indeks</th>
+                                                    <th className="px-3 py-2 text-left">Nazwa</th>
+                                                    <th className="px-3 py-2 text-right">Spółki</th>
+                                                    <th className="px-3 py-2 text-left">Skład z dnia</th>
+                                                    <th className="px-3 py-2 text-right">Ostatnia wartość</th>
+                                                    <th className="px-3 py-2 text-right">Zmiana</th>
+                                                    <th className="px-3 py-2 text-left">Notowanie z dnia</th>
                                                 </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
-                                </div>
+                                            </thead>
+                                            <tbody className="divide-y divide-soft">
+                                                {benchmarkOverview.map((item) => (
+                                                    <tr key={item.code}>
+                                                        <td className="px-3 py-2 font-medium text-primary">{item.code}</td>
+                                                        <td className="px-3 py-2 text-subtle">
+                                                            {item.name || "—"}
+                                                        </td>
+                                                        <td className="px-3 py-2 text-right">
+                                                            {item.symbolsCount}
+                                                        </td>
+                                                        <td className="px-3 py-2 text-subtle">
+                                                            {item.effectiveDate}
+                                                        </td>
+                                                        <td className="px-3 py-2 text-right">
+                                                            {item.latestValue != null
+                                                                ? benchmarkValueFormatter.format(item.latestValue)
+                                                                : "—"}
+                                                        </td>
+                                                        <td
+                                                            className={`px-3 py-2 text-right ${
+                                                                item.changePct != null
+                                                                    ? item.changePct >= 0
+                                                                        ? "text-positive"
+                                                                        : "text-negative"
+                                                                    : "text-subtle"
+                                                            }`}
+                                                        >
+                                                            {item.changePct != null
+                                                                ? benchmarkPercentFormatter.format(item.changePct)
+                                                                : "—"}
+                                                        </td>
+                                                        <td className="px-3 py-2 text-subtle">
+                                                            {item.lastDate ?? "—"}
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    <div className="mt-6 space-y-3 rounded-xl border border-soft bg-soft-surface p-4">
+                                        <div className="flex flex-wrap items-center gap-3">
+                                            <span className="text-sm font-medium text-neutral">
+                                                Skład indeksu
+                                            </span>
+                                            <select
+                                                value={selectedBenchmarkOption?.code ?? ""}
+                                                onChange={(event) => {
+                                                    const value = event.target.value;
+                                                    setSelectedBenchmarkCode(value || null);
+                                                }}
+                                                className="min-w-[10rem] rounded-lg border border-soft bg-base px-3 py-1.5 text-sm text-neutral shadow-sm focus:border-[var(--color-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/20"
+                                            >
+                                                {benchmarkUniverseOptions.map((option) => (
+                                                    <option key={option.code} value={option.code}>
+                                                        {option.code}
+                                                        {option.name && option.name !== option.code
+                                                            ? ` – ${option.name}`
+                                                            : ""}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                        {selectedBenchmarkOption ? (
+                                            selectedBenchmarkOption.constituents.length > 0 ? (
+                                                <div className="overflow-x-auto">
+                                                    <table className="min-w-full divide-y divide-soft text-sm">
+                                                        <thead className="bg-soft-surface text-xs uppercase tracking-wide text-muted">
+                                                            <tr>
+                                                                <th className="px-3 py-2 text-left">Symbol</th>
+                                                                <th className="px-3 py-2 text-left">Spółka</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody className="divide-y divide-soft">
+                                                            {selectedBenchmarkOption.constituents.map((constituent) => (
+                                                                <tr
+                                                                    key={`${selectedBenchmarkOption.code}-${constituent.baseSymbol}`}
+                                                                >
+                                                                    <td className="px-3 py-2 font-medium text-primary">
+                                                                        {constituent.symbol}
+                                                                        {constituent.symbol !== constituent.baseSymbol && (
+                                                                            <span className="ml-2 text-xs text-subtle">
+                                                                                ({constituent.baseSymbol})
+                                                                            </span>
+                                                                        )}
+                                                                    </td>
+                                                                    <td className="px-3 py-2 text-subtle">
+                                                                        {constituent.companyName ?? "—"}
+                                                                    </td>
+                                                                </tr>
+                                                            ))}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                            ) : (
+                                                <div className="text-xs text-subtle">
+                                                    Brak danych o składzie tego indeksu.
+                                                </div>
+                                            )
+                                        ) : (
+                                            <div className="text-xs text-subtle">
+                                                Wybierz indeks, aby zobaczyć listę spółek.
+                                            </div>
+                                        )}
+                                    </div>
+                                </>
                             ) : (
                                 <div className="text-xs text-subtle">
                                     Ładujemy dane indeksów GPW Benchmark…

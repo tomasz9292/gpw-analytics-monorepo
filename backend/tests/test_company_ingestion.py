@@ -1010,6 +1010,31 @@ def test_get_company_profile_endpoint(monkeypatch):
     assert profile.fundamentals.market_cap == 123.0
 
 
+def test_build_company_name_lookup_prefers_human_readable_name():
+    class FakeResult:
+        column_names = ["symbol", "name", "short_name"]
+
+        def named_results(self):
+            return [
+                {"symbol": "CDR", "name": "CDR", "short_name": "CD PROJEKT"},
+            ]
+
+    class FakeClickHouse:
+        def query(self, sql: str):  # noqa: ARG002
+            return FakeResult()
+
+    previous_cache = main._COMPANY_COLUMNS_CACHE
+    main._COMPANY_COLUMNS_CACHE = ["symbol", "name", "short_name"]
+    try:
+        lookup = main._build_company_name_lookup(FakeClickHouse())
+    finally:
+        main._COMPANY_COLUMNS_CACHE = previous_cache
+
+    assert lookup["CDR"]["name"] == "CD PROJEKT"
+    assert lookup["CDR"]["raw_symbol"] == "CDR"
+    assert lookup["CD PROJEKT"]["symbol"] == "CDR"
+
+
 def test_get_company_profile_not_found(monkeypatch):
     class EmptyResult:
         def __init__(self):

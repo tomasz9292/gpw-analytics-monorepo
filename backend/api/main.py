@@ -1731,11 +1731,41 @@ def _build_company_name_lookup(ch_client) -> Dict[str, _CompanyNameLookupEntry]:
             if text:
                 resolved_names.append(text)
 
+        deduplicated_names: List[str] = []
+        seen_names: Set[str] = set()
+        for candidate in resolved_names:
+            cleaned = candidate.strip()
+            if not cleaned:
+                continue
+            upper = cleaned.upper()
+            if upper in seen_names:
+                continue
+            seen_names.add(upper)
+            deduplicated_names.append(cleaned)
+
+        symbol_keys: Set[str] = {
+            normalized_raw,
+            pretty,
+            base,
+            raw_symbol,
+        }
+        normalized_symbol_keys = {
+            key.strip().upper() for key in symbol_keys if key and key.strip()
+        }
+
+        preferred_name: Optional[str] = None
+        for candidate in deduplicated_names:
+            if candidate.strip().upper() not in normalized_symbol_keys:
+                preferred_name = candidate
+                break
+        if preferred_name is None and deduplicated_names:
+            preferred_name = deduplicated_names[0]
+
         entry: _CompanyNameLookupEntry = {
             "raw_symbol": normalized_raw,
             "symbol": pretty,
-            "name": resolved_names[0] if resolved_names else None,
-            "names": resolved_names,
+            "name": preferred_name,
+            "names": deduplicated_names,
         }
 
         alias_keys: Set[str] = {
@@ -1745,7 +1775,7 @@ def _build_company_name_lookup(ch_client) -> Dict[str, _CompanyNameLookupEntry]:
             raw_symbol,
         }
 
-        for alias in resolved_names:
+        for alias in deduplicated_names:
             alias_keys.add(alias)
 
         for key in alias_keys:
