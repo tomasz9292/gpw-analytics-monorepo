@@ -940,7 +940,19 @@ const getDefaultPortfolioDraft = (): PortfolioDraftState => ({
 /** =========================
  *  Typy danych
  *  ========================= */
-type SymbolRow = { symbol: string; name: string };
+type SymbolKind = "stock" | "index";
+
+type SymbolRow = {
+    symbol: string;
+    name?: string | null;
+    raw?: string | null;
+    kind: SymbolKind;
+};
+
+type ComparisonMeta = {
+    kind: SymbolKind;
+    name?: string | null;
+};
 
 type Row = {
     date: string;
@@ -1452,10 +1464,103 @@ const portfolioPointsToRows = (points: PortfolioPoint[]): Row[] =>
 /** =========================
  *  API helpers
  *  ========================= */
-async function searchSymbols(q: string): Promise<SymbolRow[]> {
-    const r = await fetch(`${API}/symbols?q=${encodeURIComponent(q)}`);
-    if (!r.ok) throw new Error(`API /symbols ${r.status}`);
-    return r.json();
+async function searchSymbols(
+    q: string,
+    kinds: SymbolKind[] = ["stock", "index"]
+): Promise<SymbolRow[]> {
+    const query = q.trim();
+    if (!query) {
+        return [];
+    }
+
+    const wantStocks = kinds.includes("stock");
+    const wantIndices = kinds.includes("index");
+
+    const tasks: Array<Promise<SymbolRow[]>> = [];
+
+    if (wantStocks) {
+        tasks.push(
+            fetch(`${API}/symbols?q=${encodeURIComponent(query)}`)
+                .then((response) => {
+                    if (!response.ok) {
+                        throw new Error(`API /symbols ${response.status}`);
+                    }
+                    return response.json() as Promise<
+                        Array<{ symbol?: string; raw?: string }>
+                    >;
+                })
+                .then((rows): SymbolRow[] =>
+                    rows
+                        .map<SymbolRow | null>((row) => {
+                            const symbol = typeof row.symbol === "string" ? row.symbol.trim() : "";
+                            if (!symbol) return null;
+                            const normalized = symbol.toUpperCase();
+                            const raw = typeof row.raw === "string" ? row.raw.trim() : null;
+                            return {
+                                symbol: normalized,
+                                name: raw ?? null,
+                                raw: raw ?? normalized,
+                                kind: "stock" as const,
+                            } satisfies SymbolRow;
+                        })
+                        .filter((row): row is SymbolRow => row !== null)
+                )
+                .catch((): SymbolRow[] => [])
+        );
+    }
+
+    if (wantIndices) {
+        tasks.push(
+            fetch(
+                `${API}/indices/list?q=${encodeURIComponent(query)}&limit=${encodeURIComponent("50")}`
+            )
+                .then((response) => {
+                    if (!response.ok) {
+                        throw new Error(`API /indices/list ${response.status}`);
+                    }
+                    return response.json() as Promise<
+                        { items?: Array<{ code?: string; name?: string | null }> }
+                    >;
+                })
+                .then((payload): SymbolRow[] =>
+                    (payload.items ?? [])
+                        .map<SymbolRow | null>((item) => {
+                            const code = typeof item.code === "string" ? item.code.trim().toUpperCase() : "";
+                            if (!code) return null;
+                            const name = typeof item.name === "string" ? item.name.trim() : null;
+                            return {
+                                symbol: code,
+                                name: name ?? null,
+                                raw: code,
+                                kind: "index" as const,
+                            } satisfies SymbolRow;
+                        })
+                        .filter((row): row is SymbolRow => row !== null)
+                )
+                .catch((): SymbolRow[] => [])
+        );
+    }
+
+    if (!tasks.length) {
+        return [];
+    }
+
+    const settled = await Promise.allSettled(tasks);
+    const combined: SymbolRow[] = [];
+    settled.forEach((result) => {
+        if (result.status === "fulfilled") {
+            combined.push(...result.value);
+        }
+    });
+
+    const unique = new Map<string, SymbolRow>();
+    combined.forEach((row) => {
+        if (!unique.has(row.symbol)) {
+            unique.set(row.symbol, row);
+        }
+    });
+
+    return Array.from(unique.values());
 }
 
 async function fetchQuotes(symbol: string, start = "2015-01-01"): Promise<Row[]> {
@@ -1466,6 +1571,79 @@ async function fetchQuotes(symbol: string, start = "2015-01-01"): Promise<Row[]>
     );
     if (!r.ok) throw new Error(`API /quotes ${r.status}`);
     return r.json();
+}
+
+const normalizeIndexSymbol = (value: string): string => {
+    const cleaned = value.trim().toUpperCase();
+    return cleaned.endsWith(".WA") ? cleaned.slice(0, -3) : cleaned;
+};
+
+async function fetchIndexQuotes(symbol: string, start = "2015-01-01"): Promise<Row[]> {
+    const normalized = normalizeIndexSymbol(symbol);
+    if (!normalized) {
+        return [];
+    }
+    const params = new URLSearchParams();
+    params.set("codes", normalized);
+    if (start) {
+        params.set("start", start);
+    }
+    const response = await fetch(`${API}/indices/history?${params.toString()}`);
+    if (!response.ok) {
+        throw new Error(`API /indices/history ${response.status}`);
+    }
+    const payload = (await response.json()) as GpwBenchmarkHistoryResponse;
+    const series = payload.items.find((item) => item.index_code === normalized) ?? payload.items[0];
+    if (!series) {
+        return [];
+    }
+    return series.points
+        .filter((point) => point.date && point.value != null)
+        .map((point) => {
+            const value = Number(point.value ?? 0);
+            return {
+                date: point.date,
+                open: value,
+                high: value,
+                low: value,
+                close: value,
+                volume: 0,
+            } satisfies Row;
+        });
+}
+
+type InstrumentSeriesResult = { rows: Row[]; kind: SymbolKind };
+
+async function fetchInstrumentSeries(
+    symbol: string,
+    kindHint: SymbolKind | undefined,
+    start: string
+): Promise<InstrumentSeriesResult> {
+    const normalized = symbol.trim().toUpperCase();
+    if (!normalized) {
+        return { rows: [], kind: kindHint ?? "stock" };
+    }
+
+    if (kindHint === "index") {
+        const rows = await fetchIndexQuotes(normalized, start);
+        return { rows, kind: "index" };
+    }
+
+    if (kindHint === "stock") {
+        const rows = await fetchQuotes(normalized, start);
+        return { rows, kind: "stock" };
+    }
+
+    try {
+        const rows = await fetchQuotes(normalized, start);
+        return { rows, kind: "stock" };
+    } catch (error) {
+        const indexRows = await fetchIndexQuotes(normalized, start);
+        if (!indexRows.length) {
+            throw error;
+        }
+        return { rows: indexRows, kind: "index" };
+    }
 }
 
 async function backtestPortfolio(
@@ -7028,11 +7206,15 @@ function TickerAutosuggest({
     placeholder = "Dodaj ticker (np. CDR.WA)",
     inputClassName = "",
     disabled = false,
+    allowedKinds,
+    autoFocus = false,
 }: {
-    onPick: (symbol: string) => void;
+    onPick: (symbol: string, meta?: SymbolRow) => void;
     placeholder?: string;
     inputClassName?: string;
     disabled?: boolean;
+    allowedKinds?: SymbolKind[];
+    autoFocus?: boolean;
 }) {
     const [q, setQ] = useState("");
     const [list, setList] = useState<SymbolRow[]>([]);
@@ -7040,7 +7222,27 @@ function TickerAutosuggest({
     const [idx, setIdx] = useState(-1);
     const [loading, setLoading] = useState(false);
 
-    // debounce
+    const allowedKindsSignature = (allowedKinds ?? [])
+        .filter((kind): kind is SymbolKind => kind === "stock" || kind === "index")
+        .join("|");
+    const allowedKindsList = useMemo<SymbolKind[]>(() => {
+        if (!allowedKindsSignature) {
+            return ["stock"];
+        }
+        const seen = new Set<SymbolKind>();
+        const result: SymbolKind[] = [];
+        for (const raw of allowedKindsSignature.split("|")) {
+            const kind = raw === "index" ? "index" : "stock";
+            if (!seen.has(kind)) {
+                seen.add(kind);
+                result.push(kind);
+            }
+        }
+        return result.length ? result : ["stock"];
+    }, [allowedKindsSignature]);
+
+    const containerRef = useRef<HTMLDivElement | null>(null);
+
     useEffect(() => {
         if (disabled) {
             setList([]);
@@ -7048,65 +7250,113 @@ function TickerAutosuggest({
             setIdx(-1);
             return;
         }
-        if (!q.trim()) {
+
+        const query = q.trim();
+        if (!query) {
             setList([]);
             setOpen(false);
             setIdx(-1);
             return;
         }
+
+        let cancelled = false;
         setLoading(true);
-        const h = setTimeout(async () => {
+        const handle = setTimeout(async () => {
             try {
-                const rows = await searchSymbols(q.trim());
-                setList(rows);
+                const rows = await searchSymbols(query, allowedKindsList);
+                if (cancelled) return;
+                const allowedSet = new Set(allowedKindsList);
+                const filtered = rows.filter((row) => allowedSet.has(row.kind));
+                setList(filtered);
                 setOpen(true);
-                setIdx(rows.length ? 0 : -1);
+                setIdx(filtered.length ? 0 : -1);
+            } catch {
+                if (!cancelled) {
+                    setList([]);
+                    setIdx(-1);
+                }
             } finally {
-                setLoading(false);
+                if (!cancelled) {
+                    setLoading(false);
+                }
             }
         }, 200);
-        return () => clearTimeout(h);
-    }, [disabled, q]);
+
+        return () => {
+            cancelled = true;
+            clearTimeout(handle);
+        };
+    }, [allowedKindsList, disabled, q]);
 
     useEffect(() => {
         if (!disabled) return;
         setQ("");
     }, [disabled]);
 
-    function choose(s: string) {
-        onPick(s);
-        setQ("");
-        setList([]);
-        setOpen(false);
-        setIdx(-1);
-    }
-
-    function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-        if (!open || !list.length) return;
-        if (e.key === "ArrowDown") {
-            e.preventDefault();
-            setIdx((i) => Math.min(i + 1, list.length - 1));
-        } else if (e.key === "ArrowUp") {
-            e.preventDefault();
-            setIdx((i) => Math.max(i - 1, 0));
-        } else if (e.key === "Enter") {
-            e.preventDefault();
-            if (idx >= 0) choose(list[idx].symbol);
-        } else if (e.key === "Escape") {
+    useEffect(() => {
+        if (!open) return;
+        const onClickOutside = (event: MouseEvent) => {
+            if (!containerRef.current) return;
+            if (containerRef.current.contains(event.target as Node)) return;
             setOpen(false);
+        };
+        document.addEventListener("mousedown", onClickOutside);
+        return () => {
+            document.removeEventListener("mousedown", onClickOutside);
+        };
+    }, [open]);
+
+    const choose = useCallback(
+        (row: SymbolRow) => {
+            onPick(row.symbol, row);
+            setQ("");
+            setList([]);
+            setOpen(false);
+            setIdx(-1);
+        },
+        [onPick]
+    );
+
+    const onKeyDown = useCallback(
+        (e: React.KeyboardEvent<HTMLInputElement>) => {
+            if (!open || !list.length) return;
+            if (e.key === "ArrowDown") {
+                e.preventDefault();
+                setIdx((i) => Math.min(i + 1, list.length - 1));
+            } else if (e.key === "ArrowUp") {
+                e.preventDefault();
+                setIdx((i) => Math.max(i - 1, 0));
+            } else if (e.key === "Enter") {
+                e.preventDefault();
+                if (idx >= 0) {
+                    choose(list[idx]);
+                }
+            } else if (e.key === "Escape") {
+                setOpen(false);
+            }
+        },
+        [choose, idx, list, open]
+    );
+
+    useEffect(() => {
+        if (!open) return;
+        if (idx >= list.length) {
+            setIdx(list.length ? list.length - 1 : -1);
         }
-    }
+    }, [idx, list.length, open]);
 
     return (
-        <div className="relative">
+        <div className="relative" ref={containerRef}>
             <input
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
                 onFocus={() => !disabled && list.length && setOpen(true)}
                 onKeyDown={onKeyDown}
+                onBlur={() => setIdx((current) => (current >= list.length ? list.length - 1 : current))}
                 placeholder={placeholder}
                 disabled={disabled}
                 aria-disabled={disabled}
+                autoFocus={autoFocus}
                 className={[
                     inputBaseClasses,
                     inputClassName || "w-56",
@@ -7115,7 +7365,7 @@ function TickerAutosuggest({
                     .join(" ")}
             />
             {open && (
-                <div className="absolute z-20 mt-1 w-full rounded-xl border border-soft bg-surface shadow-lg max-h-72 overflow-auto">
+                <div className="absolute z-20 mt-1 w-full max-h-72 overflow-auto rounded-xl border border-soft bg-surface shadow-lg">
                     {loading && (
                         <div className="px-3 py-2 text-sm text-subtle">Szukam…</div>
                     )}
@@ -7123,27 +7373,45 @@ function TickerAutosuggest({
                         <div className="px-3 py-2 text-sm text-subtle">Brak wyników</div>
                     )}
                     {!loading &&
-                        list.map((row, i) => (
-                            <button
-                                key={row.symbol}
-                                onMouseDown={(e) => {
-                                    e.preventDefault();
-                                    choose(row.symbol);
-                                }}
-                                className={`w-full text-left px-3 py-2 text-sm hover:bg-[#EEF3F7] ${i === idx ? "bg-[#E3ECF5]" : ""
-                                    }`}
-                            >
-                                <div className="flex items-center justify-between">
-                                    <span className="font-medium">{row.symbol}</span>
-                                    <span className="text-subtle">{row.name}</span>
-                                </div>
-                            </button>
-                        ))}
+                        list.map((row, i) => {
+                            const isActive = i === idx;
+                            const subtitle = row.name && row.name !== row.symbol ? row.name : row.raw;
+                            const kindLabel = row.kind === "index" ? "Indeks" : "Spółka";
+                            return (
+                                <button
+                                    key={`${row.kind}-${row.symbol}`}
+                                    type="button"
+                                    onMouseDown={(event) => {
+                                        event.preventDefault();
+                                        choose(row);
+                                    }}
+                                    className={[
+                                        "w-full px-3 py-2 text-left text-sm transition",
+                                        isActive ? "bg-[#E3ECF5]" : "hover:bg-[#EEF3F7]",
+                                    ]
+                                        .filter(Boolean)
+                                        .join(" ")}
+                                >
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div>
+                                            <div className="font-semibold text-primary">{row.symbol}</div>
+                                            {subtitle && (
+                                                <div className="text-xs text-muted">{subtitle}</div>
+                                            )}
+                                        </div>
+                                        <span className="rounded-full border border-soft px-2 py-0.5 text-[11px] uppercase tracking-wide text-subtle">
+                                            {kindLabel}
+                                        </span>
+                                    </div>
+                                </button>
+                            );
+                        })}
                 </div>
             )}
         </div>
     );
 }
+
 
 /** =========================
  *  Wykresy
@@ -7997,6 +8265,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
     const [comparisonSymbols, setComparisonSymbols] = useState<string[]>([]);
     const [comparisonAllRows, setComparisonAllRows] = useState<Record<string, Row[]>>({});
     const [comparisonErrors, setComparisonErrors] = useState<Record<string, string>>({});
+    const [comparisonMeta, setComparisonMeta] = useState<Record<string, ComparisonMeta>>({});
     const [loading, setLoading] = useState(false);
     const [err, setErr] = useState("");
 
@@ -8731,6 +9000,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
     );
     const [pfComparisonAllRows, setPfComparisonAllRows] = useState<Record<string, Row[]>>({});
     const [pfComparisonErrors, setPfComparisonErrors] = useState<Record<string, string>>({});
+    const [pfComparisonMeta, setPfComparisonMeta] = useState<Record<string, ComparisonMeta>>({});
     const [pfPeriod, setPfPeriod] = useState<ChartPeriod>("max");
     const pfTotal = pfRows.reduce((a, b) => a + (Number(b.weight) || 0), 0);
     const pfRangeInvalid = pfStart > pfEnd;
@@ -9149,6 +9419,24 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
         if (!symbol) return;
         const normalized = symbol.toUpperCase();
         setComparisonSymbols((prev) => prev.filter((sym) => sym !== normalized));
+        setComparisonMeta((prev) => {
+            if (!(normalized in prev)) return prev;
+            const next = { ...prev };
+            delete next[normalized];
+            return next;
+        });
+        setComparisonAllRows((prev) => {
+            if (!(normalized in prev)) return prev;
+            const next = { ...prev };
+            delete next[normalized];
+            return next;
+        });
+        setComparisonErrors((prev) => {
+            if (!(normalized in prev)) return prev;
+            const next = { ...prev };
+            delete next[normalized];
+            return next;
+        });
     }, [symbol]);
 
     useEffect(() => {
@@ -9166,19 +9454,26 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
         (async () => {
             const results = await Promise.allSettled(
                 comparisonSymbols.map((sym) =>
-                    fetchQuotes(sym, startISO).then((data) => ({ symbol: sym, data }))
+                    fetchInstrumentSeries(sym, comparisonMeta[sym]?.kind, startISO).then(
+                        (result) => ({ symbol: sym, result })
+                    )
                 )
             );
             if (!live) return;
 
             const nextAll: Record<string, Row[]> = {};
             const nextErrors: Record<string, string> = {};
+            const nextMeta: Record<string, ComparisonMeta> = {};
 
             results.forEach((result, idx) => {
                 const sym = comparisonSymbols[idx];
                 if (!sym) return;
                 if (result.status === "fulfilled") {
-                    nextAll[sym] = result.value.data;
+                    nextAll[sym] = result.value.result.rows;
+                    nextMeta[sym] = {
+                        ...(comparisonMeta[sym] ?? { kind: result.value.result.kind }),
+                        kind: result.value.result.kind,
+                    };
                 } else {
                     const reason = result.reason;
                     const message =
@@ -9193,12 +9488,26 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
 
             setComparisonAllRows(nextAll);
             setComparisonErrors(nextErrors);
+            if (Object.keys(nextMeta).length) {
+                setComparisonMeta((prev) => {
+                    const merged = { ...prev };
+                    for (const [sym, meta] of Object.entries(nextMeta)) {
+                        const existing = merged[sym];
+                        merged[sym] = {
+                            ...(existing ?? meta),
+                            kind: meta.kind,
+                            name: existing?.name ?? meta.name ?? existing?.name ?? null,
+                        };
+                    }
+                    return merged;
+                });
+            }
         })();
 
         return () => {
             live = false;
         };
-    }, [comparisonSymbols, period, symbol]);
+    }, [comparisonSymbols, comparisonMeta, period, symbol]);
 
     const withSma: RowSMA[] = useMemo(
         () => (smaOn ? sma(rows, 20) : rows.map((r) => ({ ...r, sma: undefined }))),
@@ -9221,13 +9530,20 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
 
     const comparisonSeriesForChart: ComparisonSeries[] = useMemo(
         () =>
-            comparisonSymbols.map((sym, idx) => ({
-                symbol: sym,
-                label: sym,
-                color: COMPARISON_COLORS[idx % COMPARISON_COLORS.length],
-                rows: visibleComparisonRows[sym] ?? [],
-            })),
-        [comparisonSymbols, visibleComparisonRows]
+            comparisonSymbols.map((sym, idx) => {
+                const meta = comparisonMeta[sym];
+                const hasName = meta?.name && meta.name.trim().length > 0;
+                const baseLabel = hasName ? `${sym} – ${meta?.name}` : sym;
+                const label =
+                    meta?.kind === "index" && !hasName ? `${sym} (indeks)` : baseLabel;
+                return {
+                    symbol: sym,
+                    label,
+                    color: COMPARISON_COLORS[idx % COMPARISON_COLORS.length],
+                    rows: visibleComparisonRows[sym] ?? [],
+                };
+            }),
+        [comparisonMeta, comparisonSymbols, visibleComparisonRows]
     );
 
     const comparisonColorMap = useMemo(() => {
@@ -9244,16 +9560,27 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
     );
 
     const handleAddComparison = useCallback(
-        (candidate: string) => {
+        (candidate: string, meta?: SymbolRow) => {
             const normalized = candidate.trim().toUpperCase();
             if (!normalized || !symbol) return;
             if (normalized === symbol.toUpperCase()) return;
+            let added = false;
             setComparisonSymbols((prev) => {
                 if (prev.includes(normalized) || prev.length >= MAX_COMPARISONS) {
                     return prev;
                 }
+                added = true;
                 return [...prev, normalized];
             });
+            if (added) {
+                setComparisonMeta((prev) => ({
+                    ...prev,
+                    [normalized]: {
+                        kind: meta?.kind ?? "stock",
+                        name: meta?.name ?? meta?.raw ?? prev[normalized]?.name ?? null,
+                    },
+                }));
+            }
         },
         [symbol]
     );
@@ -9272,19 +9599,36 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
             delete next[sym];
             return next;
         });
+        setComparisonMeta((prev) => {
+            if (!(sym in prev)) return prev;
+            const next = { ...prev };
+            delete next[sym];
+            return next;
+        });
     }, []);
 
     const handleAddPfComparison = useCallback(
-        (candidate: string) => {
+        (candidate: string, meta?: SymbolRow) => {
             const normalized = candidate.trim().toUpperCase();
             if (!normalized) return;
             if (pfLastBenchmark && normalized === pfLastBenchmark.toUpperCase()) return;
+            let added = false;
             setPfComparisonSymbols((prev) => {
                 if (prev.includes(normalized) || prev.length >= MAX_COMPARISONS) {
                     return prev;
                 }
+                added = true;
                 return [...prev, normalized];
             });
+            if (added) {
+                setPfComparisonMeta((prev) => ({
+                    ...prev,
+                    [normalized]: {
+                        kind: meta?.kind ?? "stock",
+                        name: meta?.name ?? meta?.raw ?? prev[normalized]?.name ?? null,
+                    },
+                }));
+            }
         },
         [pfLastBenchmark]
     );
@@ -9298,6 +9642,12 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
             return next;
         });
         setPfComparisonErrors((prev) => {
+            if (!(sym in prev)) return prev;
+            const next = { ...prev };
+            delete next[sym];
+            return next;
+        });
+        setPfComparisonMeta((prev) => {
             if (!(sym in prev)) return prev;
             const next = { ...prev };
             delete next[sym];
@@ -9402,7 +9752,9 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
         (async () => {
             const results = await Promise.allSettled(
                 pfComparisonSymbols.map((sym) =>
-                    fetchQuotes(sym, startISO).then((data) => ({ symbol: sym, data }))
+                    fetchInstrumentSeries(sym, pfComparisonMeta[sym]?.kind, startISO).then(
+                        (result) => ({ symbol: sym, result })
+                    )
                 )
             );
 
@@ -9410,12 +9762,17 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
 
             const nextAll: Record<string, Row[]> = {};
             const nextErrors: Record<string, string> = {};
+            const nextMeta: Record<string, ComparisonMeta> = {};
 
             results.forEach((result, idx) => {
                 const sym = pfComparisonSymbols[idx];
                 if (!sym) return;
                 if (result.status === "fulfilled") {
-                    nextAll[sym] = result.value.data;
+                    nextAll[sym] = result.value.result.rows;
+                    nextMeta[sym] = {
+                        ...(pfComparisonMeta[sym] ?? { kind: result.value.result.kind }),
+                        kind: result.value.result.kind,
+                    };
                 } else {
                     const reason = result.reason;
                     const message =
@@ -9430,12 +9787,26 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
 
             setPfComparisonAllRows(nextAll);
             setPfComparisonErrors(nextErrors);
+            if (Object.keys(nextMeta).length) {
+                setPfComparisonMeta((prev) => {
+                    const merged = { ...prev };
+                    for (const [sym, meta] of Object.entries(nextMeta)) {
+                        const existing = merged[sym];
+                        merged[sym] = {
+                            ...(existing ?? meta),
+                            kind: meta.kind,
+                            name: existing?.name ?? meta.name ?? existing?.name ?? null,
+                        };
+                    }
+                    return merged;
+                });
+            }
         })();
 
         return () => {
             live = false;
         };
-    }, [pfComparisonSymbols, pfRes, pfStart]);
+    }, [pfComparisonMeta, pfComparisonSymbols, pfRes, pfStart]);
 
     const pfComparisonVisibleRows = useMemo(() => {
         if (!pfVisibleRange) return {} as Record<string, Row[]>;
@@ -9457,15 +9828,20 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
         }
         const offset = pfBenchmarkSeries ? 1 : 0;
         pfComparisonSymbols.forEach((sym, idx) => {
+            const meta = pfComparisonMeta[sym];
+            const hasName = meta?.name && meta.name.trim().length > 0;
+            const baseLabel = hasName ? `${sym} – ${meta?.name}` : sym;
+            const label =
+                meta?.kind === "index" && !hasName ? `${sym} (indeks)` : baseLabel;
             series.push({
                 symbol: sym,
-                label: sym,
+                label,
                 color: COMPARISON_COLORS[(idx + offset) % COMPARISON_COLORS.length],
                 rows: pfComparisonVisibleRows[sym] ?? [],
             });
         });
         return series;
-    }, [pfBenchmarkSeries, pfComparisonSymbols, pfComparisonVisibleRows]);
+    }, [pfBenchmarkSeries, pfComparisonMeta, pfComparisonSymbols, pfComparisonVisibleRows]);
 
     const pfComparisonColorMap = useMemo(() => {
         const map: Record<string, string> = {};
@@ -10256,14 +10632,15 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                                 placeholder={
                                                                     comparisonLimitReached
                                                                         ? "Osiągnięto limit porównań"
-                                                                        : "Dodaj spółkę do porównania"
+                                                                        : "Dodaj spółkę lub indeks"
                                                                 }
                                                                 inputClassName="w-56"
                                                                 disabled={comparisonLimitReached}
+                                                                allowedKinds={["stock", "index"]}
                                                             />
                                                             {comparisonLimitReached && (
                                                                 <span className="text-[11px] text-subtle">
-                                                                    Maksymalnie {MAX_COMPARISONS} spółek.
+                                                                    Maksymalnie {MAX_COMPARISONS} instrumentów.
                                                                 </span>
                                                             )}
                                                         </div>
@@ -10272,16 +10649,26 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                                 <div className="flex flex-wrap gap-2">
                                                                     {comparisonSymbols.map((sym) => {
                                                                         const color = comparisonColorMap[sym] ?? "#475569";
+                                                                        const meta = comparisonMeta[sym];
+                                                                        const hasName = meta?.name && meta.name.trim().length > 0;
+                                                                        const label = hasName
+                                                                            ? `${sym} – ${meta?.name}`
+                                                                            : meta?.kind === "index"
+                                                                            ? `${sym} (indeks)`
+                                                                            : sym;
                                                                         return (
                                                                             <span
                                                                                 key={sym}
                                                                                 className="inline-flex items-center gap-2 rounded-full border border-soft bg-white/80 px-3 py-1 text-xs font-medium text-neutral shadow-sm"
+                                                                                title={label}
                                                                             >
                                                                                 <span
                                                                                     className="h-2.5 w-2.5 rounded-full"
                                                                                     style={{ backgroundColor: color }}
                                                                                 />
-                                                                                {sym}
+                                                                                <span className="whitespace-nowrap">
+                                                                                    {label}
+                                                                                </span>
                                                                                 <button
                                                                                     type="button"
                                                                                     onClick={() => handleRemoveComparison(sym)}
@@ -11685,14 +12072,15 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                             placeholder={
                                                                 pfComparisonLimitReached
                                                                     ? "Osiągnięto limit porównań"
-                                                                    : "Dodaj benchmark (np. WIG20.WA)"
+                                                                    : "Dodaj benchmark (spółka lub indeks)"
                                                             }
                                                             inputClassName="w-60"
                                                             disabled={pfComparisonLimitReached}
+                                                            allowedKinds={["stock", "index"]}
                                                         />
                                                         {pfComparisonLimitReached && (
                                                             <span className="text-[11px] text-subtle">
-                                                                Maksymalnie {MAX_COMPARISONS} serii.
+                                                                Maksymalnie {MAX_COMPARISONS} instrumentów.
                                                             </span>
                                                         )}
                                                     </div>
@@ -11711,16 +12099,26 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                             <div className="flex flex-wrap gap-2">
                                                                 {pfComparisonSymbols.map((sym) => {
                                                                     const color = pfComparisonColorMap[sym] ?? "#475569";
+                                                                    const meta = pfComparisonMeta[sym];
+                                                                    const hasName = meta?.name && meta.name.trim().length > 0;
+                                                                    const label = hasName
+                                                                        ? `${sym} – ${meta?.name}`
+                                                                        : meta?.kind === "index"
+                                                                        ? `${sym} (indeks)`
+                                                                        : sym;
                                                                     return (
                                                                         <span
                                                                             key={sym}
                                                                             className="inline-flex items-center gap-2 rounded-full border border-soft bg-white/80 px-3 py-1 text-xs font-medium text-neutral shadow-sm"
+                                                                            title={label}
                                                                         >
                                                                             <span
                                                                                 className="h-2.5 w-2.5 rounded-full"
                                                                                 style={{ backgroundColor: color }}
                                                                             />
-                                                                            {sym}
+                                                                            <span className="whitespace-nowrap">
+                                                                                {label}
+                                                                            </span>
                                                                             <button
                                                                                 type="button"
                                                                                 onClick={() => handleRemovePfComparison(sym)}
