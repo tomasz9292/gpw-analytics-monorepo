@@ -332,6 +332,7 @@ def test_fetch_gpw_profiles_uses_stooq_when_rest_fallback_fails():
     assert rows == [
         {
             "stockTicker": "AAA",
+            "symbol_stooq": "AAA",
             "companyName": "AAA Corp",
             "shortName": "AAA Corp",
             "isin": "PLAAA0000001",
@@ -392,8 +393,18 @@ def test_fetch_gpw_profiles_stooq_combines_multiple_pages():
     rows = harvester.fetch_gpw_profiles(limit=None, page_size=1)
 
     assert rows == [
-        {"stockTicker": "AAA", "companyName": "AAA Corp", "shortName": "AAA Corp"},
-        {"stockTicker": "BBB", "companyName": "BBB Spółka", "shortName": "BBB Spółka"},
+        {
+            "stockTicker": "AAA",
+            "symbol_stooq": "AAA",
+            "companyName": "AAA Corp",
+            "shortName": "AAA Corp",
+        },
+        {
+            "stockTicker": "BBB",
+            "symbol_stooq": "BBB",
+            "companyName": "BBB Spółka",
+            "shortName": "BBB Spółka",
+        },
     ]
     stooq_calls = session.calls[2:]
     assert [call["url"] for call in stooq_calls] == [
