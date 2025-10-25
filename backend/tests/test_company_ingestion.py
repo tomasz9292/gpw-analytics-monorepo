@@ -10,6 +10,7 @@ from socketserver import TCPServer
 from typing import Any, Dict, List, Optional, Sequence
 from types import SimpleNamespace
 import sys
+from urllib.error import URLError
 
 import pytest
 from fastapi import HTTPException
@@ -99,6 +100,36 @@ class FakeSession:
 
     def get_history(self) -> List[HttpRequestLog]:
         return list(self._history)
+
+
+class _FakeOpenerResponse:
+    def __init__(self, *, status: int = 200, body: bytes = b"{}") -> None:
+        self.status = status
+        self._body = body
+
+    def read(self) -> bytes:
+        return self._body
+
+    def __enter__(self) -> "_FakeOpenerResponse":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:  # noqa: D401, ANN001, ANN201
+        return False
+
+
+class _RetryingOpener:
+    def __init__(self, responses: List[Any]) -> None:
+        self._responses = list(responses)
+        self.calls: List[Any] = []
+
+    def open(self, request, timeout: Optional[int] = None):  # noqa: ANN001, D401
+        self.calls.append((request, timeout))
+        if not self._responses:
+            raise AssertionError("Brak przygotowanych odpowiedzi")
+        next_response = self._responses.pop(0)
+        if isinstance(next_response, Exception):
+            raise next_response
+        return next_response
 
 
 @pytest.fixture(autouse=True)
@@ -200,6 +231,38 @@ def test_simple_http_response_json_extracts_xml_error_message():
     assert "HandlerMappingException" in message
     assert "Brak dopasowania akcji" in message
     assert "fragment" not in message
+
+
+def test_simple_http_session_retries_on_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    opener = _RetryingOpener([URLError("timed out"), _FakeOpenerResponse(body=b"{}")])
+    session = SimpleHttpSession(opener=opener, max_retries=2)
+    monkeypatch.setattr(company_ingestion.time, "sleep", lambda *_: None)
+
+    response = session.get("https://example.com")
+
+    assert isinstance(response, SimpleHttpResponse)
+    assert len(opener.calls) == 2
+
+
+def test_simple_http_session_uses_random_user_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured_headers: List[str] = []
+
+    class _CapturingOpener:
+        def open(self, request, timeout: Optional[int] = None):  # noqa: ANN001, D401
+            header_map = {key: value for key, value in request.header_items()}
+            captured_headers.append(header_map.get("User-agent"))
+            return _FakeOpenerResponse()
+
+    session = SimpleHttpSession(
+        opener=_CapturingOpener(),
+        user_agents=["AgentA", "AgentB"],
+    )
+    monkeypatch.setattr(company_ingestion.time, "sleep", lambda *_: None)
+
+    response = session.get("https://example.com")
+
+    assert isinstance(response, SimpleHttpResponse)
+    assert captured_headers[0] in {"AgentA", "AgentB"}
 
 
 def test_simple_http_session_handles_cookie_redirect():
