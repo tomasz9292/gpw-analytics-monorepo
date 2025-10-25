@@ -1080,6 +1080,7 @@ class CompanyDataHarvester:
         yahoo_url_template: Optional[str] = None,
         google_url_template: Optional[str] = None,
         stooq_request_delayer: Optional[Callable[[], None]] = None,
+        gpw_request_delayer: Optional[Callable[[], None]] = None,
     ) -> None:
         self.session = session or SimpleHttpSession()
         self.gpw_url = gpw_url
@@ -1102,6 +1103,10 @@ class CompanyDataHarvester:
             self._stooq_request_delayer = self._make_stooq_request_delayer()
         else:
             self._stooq_request_delayer = stooq_request_delayer
+        if gpw_request_delayer is None:
+            self._gpw_request_delayer = self._make_gpw_request_delayer()
+        else:
+            self._gpw_request_delayer = gpw_request_delayer
 
     # ---------------------------
     # HTTP helpers
@@ -1142,6 +1147,15 @@ class CompanyDataHarvester:
     def _delay_stooq_request(self) -> None:
         self._stooq_request_delayer()
 
+    def _make_gpw_request_delayer(self) -> Callable[[], None]:
+        def _delay() -> None:
+            time.sleep(random.uniform(1.0, 3.0))
+
+        return _delay
+
+    def _delay_gpw_request(self) -> None:
+        self._gpw_request_delayer()
+
     # ---------------------------
     # Fetchers
     # ---------------------------
@@ -1181,6 +1195,8 @@ class CompanyDataHarvester:
         start = 0
         collected: List[Dict[str, Any]] = []
         while True:
+            if start > 0:
+                self._delay_gpw_request()
             params = {
                 "action": "GPWCompanyProfiles",
                 "start": start,
@@ -1208,6 +1224,8 @@ class CompanyDataHarvester:
         page = 0
         collected: List[Dict[str, Any]] = []
         while True:
+            if page > 0:
+                self._delay_gpw_request()
             params = {"page": page, "size": page_size}
             payload = self._get(self.gpw_fallback_url, params=params)
             rows = _extract_company_rows(payload)
