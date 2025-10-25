@@ -441,7 +441,7 @@ def test_fetch_gpw_profiles_uses_stooq_when_rest_fallback_fails():
     ]
     assert session.calls[0]["url"].startswith("https://legacy.example")
     assert session.calls[1]["url"].startswith("https://fallback.example")
-    assert session.calls[2]["url"] == "https://stooq.example?v=0"
+    assert session.calls[2]["url"] == "https://stooq.example"
 
 
 def test_fetch_gpw_profiles_stooq_combines_multiple_pages():
@@ -508,7 +508,7 @@ def test_fetch_gpw_profiles_stooq_combines_multiple_pages():
     ]
     stooq_calls = session.calls[2:]
     assert [call["url"] for call in stooq_calls] == [
-        "https://stooq.example?v=0",
+        "https://stooq.example",
         "https://stooq.example?v=0&l=2",
         "https://stooq.example?v=0&l=3",
         "https://stooq.example?v=0&l=4",
@@ -649,6 +649,7 @@ def test_harvester_sync_inserts_expected_rows():
     rows = [dict(zip(used_columns, row)) for row in insert_call["data"]]
     first = rows[0]
     assert first["symbol"] == "CD PROJEKT"
+    assert first["name"] == "CDR"
     assert first["short_name"] == "CDR"
     assert first["symbol_gpw"] == "CDR"
     assert first["website"] == "https://www.cdprojekt.com"
@@ -662,6 +663,7 @@ def test_harvester_sync_inserts_expected_rows():
 
     second = rows[1]
     assert second["symbol"] == "PKN ORLEN"
+    assert second["name"] == "PKN"
     assert second["short_name"] == "PKN"
     assert second["symbol_gpw"] == "PKN"
     assert second["website"] == "https://www.orlen.pl"
@@ -751,7 +753,7 @@ def test_harvester_sync_merges_existing_records_and_removes_duplicates():
             "employees",
             "raw_payload",
         ],
-        rows=[["CDR", "CD PROJEKT", "CD PROJEKT", None, None, 1500, "{\"old\": true}"]],
+        rows=[["CDR", "CD PROJEKT", "CDR", None, None, 1500, "{\"old\": true}"]],
     )
 
     columns = [
@@ -782,6 +784,7 @@ def test_harvester_sync_merges_existing_records_and_removes_duplicates():
     rows = [dict(zip(used_columns, row)) for row in insert_call["data"]]
     cdr_row = next(row for row in rows if row["short_name"] == "CDR")
     assert cdr_row["symbol"] == "CD PROJEKT"
+    assert cdr_row["name"] == "CDR"
     assert cdr_row["symbol_gpw"] == "CDR"
     assert cdr_row["employees"] == 1500
     assert cdr_row["logo_url"] == "https://logo.clearbit.com/cdprojekt.com"
