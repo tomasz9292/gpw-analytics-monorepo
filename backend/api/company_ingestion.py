@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import random
+import socket
 from http.cookiejar import CookieJar
 from html import unescape as html_unescape
 from html.parser import HTMLParser
@@ -101,6 +102,10 @@ class SimpleHttpSession:
         headers: Optional[Dict[str, str]] = None,
         *,
         opener: Optional[Any] = None,
+        max_retries: int = 3,
+        retry_backoff: Optional[Sequence[float]] = None,
+        retry_status_codes: Optional[Sequence[int]] = None,
+        user_agents: Optional[Sequence[str]] = None,
     ) -> None:
         self.headers = dict(self.DEFAULT_HEADERS)
         if headers:
@@ -108,6 +113,24 @@ class SimpleHttpSession:
         self.history: List[HttpRequestLog] = []
         self.cookie_jar = CookieJar()
         self._opener = opener or build_opener(HTTPCookieProcessor(self.cookie_jar))
+        self.max_retries = max(1, int(max_retries))
+        if retry_backoff is None:
+            self._retry_backoff = (1.0, 3.0)
+        else:
+            backoff = list(retry_backoff)
+            if len(backoff) != 2:
+                raise ValueError("retry_backoff musi zawierać dwie wartości: (min, max)")
+            self._retry_backoff = (float(backoff[0]), float(backoff[1]))
+        self._retry_status_codes = {
+            429,
+            500,
+            502,
+            503,
+            504,
+        }
+        if retry_status_codes:
+            self._retry_status_codes.update(int(code) for code in retry_status_codes)
+        self._user_agent_pool = list(user_agents) if user_agents else None
 
     def get(
         self,
@@ -115,30 +138,65 @@ class SimpleHttpSession:
         params: Optional[Dict[str, Any]] = None,
         timeout: int = 15,
     ) -> SimpleHttpResponse:
+        request_url = url
         if params:
             query = urlencode(params, doseq=True)
-            separator = "&" if "?" in url else "?"
-            url = f"{url}{separator}{query}"
-        log_entry = HttpRequestLog(url=url, params=params or {})
-        self.history.append(log_entry)
-        try:
-            request = Request(url, headers=self.headers)
-            with self._opener.open(request, timeout=timeout) as response:  # type: ignore[arg-type]
-                status = getattr(response, "status", 200)
-                body = response.read()
-            log_entry.status_code = status
-            log_entry.finished_at = datetime.utcnow()
-            return SimpleHttpResponse(status_code=status, body=body)
-        except Exception as exc:
-            log_entry.error = str(exc)
-            log_entry.finished_at = datetime.utcnow()
-            raise
+            separator = "&" if "?" in request_url else "?"
+            request_url = f"{request_url}{separator}{query}"
+
+        last_error: Optional[Exception] = None
+        for attempt in range(1, self.max_retries + 1):
+            log_entry = HttpRequestLog(url=request_url, params=params or {})
+            self.history.append(log_entry)
+            try:
+                headers = dict(self.headers)
+                if self._user_agent_pool:
+                    headers["User-Agent"] = random.choice(self._user_agent_pool)
+                request = Request(request_url, headers=headers)
+                with self._opener.open(request, timeout=timeout) as response:  # type: ignore[arg-type]
+                    status = getattr(response, "status", 200)
+                    body = response.read()
+                log_entry.status_code = status
+                log_entry.finished_at = datetime.utcnow()
+                if self._should_retry_status(status) and attempt < self.max_retries:
+                    log_entry.error = f"HTTP {status} (ponowna próba)"
+                    self._sleep_before_retry(attempt)
+                    continue
+                return SimpleHttpResponse(status_code=status, body=body)
+            except Exception as exc:
+                log_entry.error = str(exc)
+                log_entry.finished_at = datetime.utcnow()
+                if attempt >= self.max_retries or not self._should_retry_exception(exc):
+                    raise
+                last_error = exc
+                self._sleep_before_retry(attempt)
+
+        if last_error:
+            raise last_error
+        raise RuntimeError("Nie udało się zrealizować zapytania HTTP")
 
     def clear_history(self) -> None:
         self.history.clear()
 
     def get_history(self) -> List["HttpRequestLog"]:
         return list(self.history)
+
+    def _sleep_before_retry(self, attempt: int) -> None:
+        delay_min, delay_max = self._retry_backoff
+        multiplier = max(1.0, 2 ** (attempt - 1))
+        sleep_time = random.uniform(delay_min * multiplier, delay_max * multiplier)
+        time.sleep(sleep_time)
+
+    def _should_retry_exception(self, exc: Exception) -> bool:
+        retryable = (URLError, socket.timeout, TimeoutError)
+        if isinstance(exc, retryable):
+            return True
+        message = str(exc).lower()
+        transient_markers = ["timed out", "temporarily unavailable", "connection reset"]
+        return any(marker in message for marker in transient_markers)
+
+    def _should_retry_status(self, status: int) -> bool:
+        return status in self._retry_status_codes
 
 
 def _clean_string(value: Any) -> Optional[str]:
