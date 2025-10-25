@@ -633,6 +633,7 @@ def _extract_stooq_company_rows(document: str) -> List[Dict[str, Any]]:
 
             row: Dict[str, Any] = {
                 "stockTicker": symbol.upper(),
+                "symbol_stooq": symbol.upper(),
                 "companyName": name,
                 "shortName": short_name_value or name,
             }
@@ -1306,6 +1307,13 @@ class CompanyDataHarvester:
             raw_stooq_fields.get("Symbol") if isinstance(raw_stooq_fields, dict) else None,
         )
 
+        base_stooq_symbol = _first_symbol_candidate(
+            base.get("symbol_stooq"),
+            base.get("stooq_symbol"),
+        )
+        if not stooq_symbol:
+            stooq_symbol = base_stooq_symbol
+
         yahoo_symbol = _first_symbol_candidate(
             price_info.get("symbol") if isinstance(price_info, dict) else None,
             fundamentals.get("symbol") if isinstance(fundamentals, dict) else None,
@@ -1742,7 +1750,8 @@ class CompanyDataHarvester:
                     failed_count = len(errors)
             if self.stooq_profile_url_template:
                 try:
-                    stooq_data = self.fetch_stooq_profile(symbol)
+                    stooq_lookup_symbol = _clean_symbol_value(base.get("symbol_stooq"))
+                    stooq_data = self.fetch_stooq_profile(stooq_lookup_symbol or symbol)
                 except Exception as exc:  # pragma: no cover - network/API specific
                     errors.append(f"{symbol} [Stooq]: {exc}")
                     failed_count = len(errors)
