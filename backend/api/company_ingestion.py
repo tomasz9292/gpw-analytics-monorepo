@@ -1400,8 +1400,10 @@ class CompanyDataHarvester:
 
         logo_url = _logo_url_from_website(website)
 
+        swapped_symbol = short_name or company_name or raw_symbol
+
         row: Dict[str, Any] = {
-            "symbol": raw_symbol,
+            "symbol": swapped_symbol,
             "ticker": raw_symbol,
             "code": raw_symbol,
             "symbol_gpw": raw_symbol,
@@ -1413,7 +1415,7 @@ class CompanyDataHarvester:
             "name": company_name,
             "company_name": company_name,
             "full_name": company_name,
-            "short_name": short_name,
+            "short_name": raw_symbol,
             "sector": sector,
             "industry": industry,
             "country": country,
@@ -1605,6 +1607,7 @@ class CompanyDataHarvester:
         ch_client: Any,
         table_name: str,
         symbols: Sequence[str],
+        symbol_column: str,
     ) -> Dict[str, Dict[str, Any]]:
         if not symbols or not hasattr(ch_client, "query"):
             return {}
@@ -1613,7 +1616,7 @@ class CompanyDataHarvester:
         if not placeholders:
             return {}
 
-        query = f"SELECT * FROM {table_name} WHERE symbol IN ({placeholders})"
+        query = f"SELECT * FROM {table_name} WHERE {symbol_column} IN ({placeholders})"
         result = ch_client.query(query)
         columns = getattr(result, "column_names", None)
         rows = getattr(result, "result_rows", None)
@@ -1623,7 +1626,7 @@ class CompanyDataHarvester:
         existing: Dict[str, Dict[str, Any]] = {}
         for values in rows:
             record = dict(zip(columns, values))
-            symbol = record.get("symbol")
+            symbol = record.get(symbol_column)
             if not symbol:
                 continue
             current = existing.get(symbol)
@@ -1638,6 +1641,7 @@ class CompanyDataHarvester:
         ch_client: Any,
         table_name: str,
         symbols: Sequence[str],
+        symbol_column: str,
     ) -> None:
         if not symbols or not hasattr(ch_client, "command"):
             return
@@ -1647,7 +1651,7 @@ class CompanyDataHarvester:
             return
 
         ch_client.command(
-            f"ALTER TABLE {table_name} DELETE WHERE symbol IN ({placeholders})"
+            f"ALTER TABLE {table_name} DELETE WHERE {symbol_column} IN ({placeholders})"
         )
 
     # ---------------------------
@@ -1755,12 +1759,14 @@ class CompanyDataHarvester:
         final_rows: List[Dict[str, Any]] = []
         synced = 0
 
+        storage_symbol_column = "short_name" if "short_name" in columns else "symbol"
+
         existing_rows: Dict[str, Dict[str, Any]] = {}
         if normalized_rows:
             symbols_for_lookup = sorted(deduplicated.keys())
             try:
                 existing_rows = self._load_existing_rows(
-                    ch_client, table_name, symbols_for_lookup
+                    ch_client, table_name, symbols_for_lookup, storage_symbol_column
                 )
             except Exception as exc:  # pragma: no cover - zależy od konfiguracji DB
                 errors.append(f"Nie udało się odczytać istniejących spółek: {exc}")
@@ -1769,14 +1775,17 @@ class CompanyDataHarvester:
                 if existing_rows:
                     try:
                         self._delete_existing_symbols(
-                            ch_client, table_name, sorted(existing_rows.keys())
+                            ch_client,
+                            table_name,
+                            sorted(existing_rows.keys()),
+                            storage_symbol_column,
                         )
                     except Exception as exc:  # pragma: no cover - zależy od konfiguracji DB
                         errors.append(f"Nie udało się usunąć duplikatów: {exc}")
                         failed_count = len(errors)
 
         for row in normalized_rows:
-            symbol = row.get("symbol")
+            symbol = row.get(storage_symbol_column)
             if symbol and symbol in existing_rows:
                 merged = _merge_company_rows(existing_rows[symbol], row)
             else:

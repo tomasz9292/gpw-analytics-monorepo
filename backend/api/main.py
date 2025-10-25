@@ -1313,6 +1313,7 @@ _OHLC_SCHEDULE_STATE = OhlcSyncScheduleStatus()
 # =========================
 
 COMPANY_SYMBOL_CANDIDATES = [
+    "short_name",
     "symbol",
     "symbol_gpw",
     "ticker",
@@ -1328,7 +1329,7 @@ COMPANY_NAME_CANDIDATES = [
     "name",
     "company_name",
     "full_name",
-    "short_name",
+    "symbol",
 ]
 
 CompanyFieldTarget = Tuple[str, str, str]
@@ -1336,7 +1337,7 @@ CompanyFieldTarget = Tuple[str, str, str]
 
 COMPANY_COLUMN_MAP: Dict[str, CompanyFieldTarget] = {
     # podstawowe informacje identyfikacyjne
-    "symbol": ("company", "raw_symbol", "text"),
+    "symbol": ("company", "short_name", "text"),
     "ticker": ("company", "raw_symbol", "text"),
     "code": ("company", "raw_symbol", "text"),
     "symbol_gpw": ("company", "symbol_gpw", "text"),
@@ -1347,7 +1348,7 @@ COMPANY_COLUMN_MAP: Dict[str, CompanyFieldTarget] = {
     "name": ("company", "name", "text"),
     "company_name": ("company", "name", "text"),
     "full_name": ("company", "name", "text"),
-    "short_name": ("company", "short_name", "text"),
+    "short_name": ("company", "raw_symbol", "text"),
     "sector": ("company", "sector", "text"),
     "industry": ("company", "industry", "text"),
     "branch": ("company", "industry", "text"),
