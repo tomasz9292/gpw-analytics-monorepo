@@ -370,6 +370,33 @@ def test_fetch_gpw_profiles_falls_back_to_rest_endpoint():
     assert session.calls[1]["params"] == {"page": 0, "size": 1}
     assert session.calls[2]["params"] == {"page": 1, "size": 1}
 
+
+def test_fetch_gpw_profiles_legacy_uses_delay_between_pages():
+    session = FakeSession(
+        [
+            FakeResponse({"data": [GPW_FIXTURE["data"][0]]}),
+            FakeResponse({"data": [GPW_FIXTURE["data"][1]]}),
+        ]
+    )
+    delays: List[int] = []
+
+    def fake_delay() -> None:
+        delays.append(len(delays))
+
+    harvester = CompanyDataHarvester(
+        session=session,
+        gpw_url="https://legacy.example",
+        gpw_request_delayer=fake_delay,
+    )
+
+    rows = harvester.fetch_gpw_profiles(limit=2, page_size=1)
+
+    assert rows == GPW_FIXTURE["data"]
+    assert len(delays) == 1
+    assert session.calls[0]["params"] == {"action": "GPWCompanyProfiles", "start": 0, "limit": 1}
+    assert session.calls[1]["params"] == {"action": "GPWCompanyProfiles", "start": 1, "limit": 1}
+
+
 def test_fetch_gpw_profiles_uses_stooq_when_rest_fallback_fails():
     error_message = (
         "Niepoprawna odpowiedź JSON (serwer zwrócił komunikat: "

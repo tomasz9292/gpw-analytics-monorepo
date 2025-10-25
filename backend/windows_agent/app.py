@@ -124,6 +124,7 @@ class DbConfig:
 class DownloadResults:
     ohlc: List[OhlcRow] = field(default_factory=list)
     companies: List[Dict[str, object]] = field(default_factory=list)
+    company_catalog: List[Dict[str, object]] = field(default_factory=list)
     news: List[Dict[str, object]] = field(default_factory=list)
     index_portfolios: List[IndexPortfolioRecord] = field(default_factory=list)
     index_history: List[IndexHistoryRecord] = field(default_factory=list)
@@ -133,6 +134,7 @@ class DownloadResults:
     def clear(self) -> None:
         self.ohlc.clear()
         self.companies.clear()
+        self.company_catalog.clear()
         self.news.clear()
         self.index_portfolios.clear()
         self.index_history.clear()
@@ -281,6 +283,7 @@ class App:
         self.end_date_var = StringVar(value="")
         self.fetch_history_var = BooleanVar(value=True)
         self.fetch_companies_var = BooleanVar(value=True)
+        self.fetch_gpw_catalog_var = BooleanVar(value=False)
         self.fetch_news_var = BooleanVar(value=False)
         self.news_limit_var = IntVar(value=DEFAULT_NEWS_LIMIT)
         self.random_delay_var = BooleanVar(value=True)
@@ -496,6 +499,11 @@ class App:
             text="Notowania indeksów (Stooq)",
             variable=self.fetch_index_quotes_var,
         ).grid(row=2, column=4, sticky="w", pady=2)
+        ttk.Checkbutton(
+            options,
+            text="Lista spółek GPW",
+            variable=self.fetch_gpw_catalog_var,
+        ).grid(row=2, column=5, sticky="w", pady=2)
 
         ttk.Label(options, text="Data od (RRRR-MM-DD)").grid(row=3, column=0, sticky="w", pady=(8, 2))
         ttk.Label(options, text="Data do (RRRR-MM-DD)").grid(row=3, column=1, sticky="w", pady=(8, 2))
@@ -521,6 +529,7 @@ class App:
         options.columnconfigure(2, weight=1)
         options.columnconfigure(3, weight=1)
         options.columnconfigure(4, weight=1)
+        options.columnconfigure(5, weight=1)
 
         destination = ttk.LabelFrame(container, text="Katalog wynikowy", style="Card.TLabelframe")
         destination.pack(fill="x", padx=4, pady=8)
@@ -965,6 +974,8 @@ class App:
             total_tasks += 1
         if self.fetch_index_quotes_var.get():
             total_tasks += len(index_symbols)
+        if self.fetch_gpw_catalog_var.get():
+            total_tasks += 1
         self._reset_progress(total_tasks)
         if total_tasks == 0:
             self._log("Nie wybrano żadnych danych do pobrania.")
@@ -976,6 +987,8 @@ class App:
             log_targets.append("spółki: " + ", ".join(symbols))
         if index_symbols and self.fetch_index_quotes_var.get():
             log_targets.append("indeksy: " + ", ".join(index_symbols))
+        if self.fetch_gpw_catalog_var.get():
+            log_targets.append("lista spółek GPW")
         if not log_targets and symbols:
             log_targets.append("spółki: " + ", ".join(symbols))
         self._log("Rozpoczynam pobieranie danych dla: " + " | ".join(log_targets))
@@ -1002,6 +1015,9 @@ class App:
                     self._download_index_quotes(index_symbols, start_date, end_date, output_dir)
                     or success_any
                 )
+            if self.fetch_gpw_catalog_var.get():
+                self._set_status("Synchronizacja danych o spółkach GPW")
+                success_any = self._download_company_catalog(output_dir) or success_any
         except Exception as exc:
             unexpected_error = exc
             error_message = f"Nieoczekiwany błąd pobierania: {exc}"
@@ -1126,6 +1142,55 @@ class App:
         self.results.output_files.append(json_path)
         self._register_output_file()
         self._log(f"Zapisano profile spółek do pliku {json_path}")
+        return True
+
+    def _download_company_catalog(self, output_dir: Path) -> bool:
+        harvester = CompanyDataHarvester()
+        self._log("Pobieram listę spółek z GPW")
+        try:
+            rows = harvester.fetch_gpw_profiles()
+        except Exception as exc:
+            error_message = f"Błąd pobierania listy spółek GPW: {exc}"
+            self._log(error_message)
+            self._append_error_message(error_message)
+            self._increment_progress(1, 0)
+            return False
+        if not rows:
+            message = "Serwis GPW nie zwrócił żadnych danych spółek."
+            self._log(message)
+            self._append_error_message(message)
+            self._increment_progress(1, 0)
+            return False
+
+        enriched_rows: List[Dict[str, object]] = []
+        timestamp_iso = datetime.utcnow().isoformat()
+        for row in rows:
+            enriched = dict(row)
+            if "retrieved_at" not in enriched:
+                enriched["retrieved_at"] = timestamp_iso
+            symbol_candidates = [
+                row.get("stockTicker"),
+                row.get("symbol"),
+                row.get("ticker"),
+                row.get("code"),
+            ]
+            for candidate in symbol_candidates:
+                if not candidate:
+                    continue
+                normalized = normalize_input_symbol(str(candidate))
+                if normalized:
+                    enriched.setdefault("symbol", normalized)
+                    break
+            enriched_rows.append(enriched)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        json_path = output_dir / f"gpw_companies_{timestamp}.json"
+        json_path.write_text(json.dumps(enriched_rows, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.results.company_catalog = enriched_rows
+        self.results.output_files.append(json_path)
+        self._register_output_file()
+        self._increment_progress(1, len(enriched_rows))
+        self._log(f"Zapisano listę {len(enriched_rows)} spółek GPW do pliku {json_path}")
         return True
 
     def _download_news(self, symbols: List[str], output_dir: Path) -> bool:
@@ -1320,7 +1385,7 @@ class App:
 
     def _maybe_sleep(self) -> None:
         if self.random_delay_var.get():
-            delay = random.uniform(1.0, 3.5)
+            delay = random.uniform(1.0, 3.0)
             self._log(f"Oczekiwanie {delay:.1f}s aby nie przeciążać serwisu...")
             time.sleep(delay)
 
