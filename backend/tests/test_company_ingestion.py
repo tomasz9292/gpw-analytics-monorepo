@@ -537,7 +537,8 @@ def test_harvester_sync_inserts_expected_rows():
 
     rows = [dict(zip(used_columns, row)) for row in insert_call["data"]]
     first = rows[0]
-    assert first["symbol"] == "CDR"
+    assert first["symbol"] == "CD PROJEKT"
+    assert first["short_name"] == "CDR"
     assert first["symbol_gpw"] == "CDR"
     assert first["website"] == "https://www.cdprojekt.com"
     assert first["logo_url"] == "https://logo.clearbit.com/cdprojekt.com"
@@ -549,7 +550,8 @@ def test_harvester_sync_inserts_expected_rows():
     assert payload["stooq"] is None
 
     second = rows[1]
-    assert second["symbol"] == "PKN"
+    assert second["symbol"] == "PKN ORLEN"
+    assert second["short_name"] == "PKN"
     assert second["symbol_gpw"] == "PKN"
     assert second["website"] == "https://www.orlen.pl"
     assert second["description"].startswith("PKN Orlen")
@@ -626,10 +628,11 @@ def test_harvester_sync_merges_existing_records_and_removes_duplicates():
     harvester = CompanyDataHarvester(session=session, stooq_profile_url_template=None)
     fake_client = FakeClickHouseClient()
 
-    lookup_sql = "SELECT * FROM companies WHERE symbol IN ('CDR', 'PKN')"
+    lookup_sql = "SELECT * FROM companies WHERE short_name IN ('CDR', 'PKN')"
     fake_client.set_query_result(
         lookup_sql,
         columns=[
+            "short_name",
             "symbol",
             "name",
             "website",
@@ -637,7 +640,7 @@ def test_harvester_sync_merges_existing_records_and_removes_duplicates():
             "employees",
             "raw_payload",
         ],
-        rows=[["CDR", "CD PROJEKT", None, None, 1500, "{\"old\": true}"]],
+        rows=[["CDR", "CD PROJEKT", "CD PROJEKT", None, None, 1500, "{\"old\": true}"]],
     )
 
     columns = [
@@ -660,13 +663,14 @@ def test_harvester_sync_merges_existing_records_and_removes_duplicates():
     assert result.synced == 2
     assert lookup_sql in fake_client.query_calls
     assert fake_client.command_calls == [
-        "ALTER TABLE companies DELETE WHERE symbol IN ('CDR')"
+        "ALTER TABLE companies DELETE WHERE short_name IN ('CDR')"
     ]
 
     insert_call = fake_client.insert_calls[0]
     used_columns = insert_call["columns"]
     rows = [dict(zip(used_columns, row)) for row in insert_call["data"]]
-    cdr_row = next(row for row in rows if row["symbol"] == "CDR")
+    cdr_row = next(row for row in rows if row["short_name"] == "CDR")
+    assert cdr_row["symbol"] == "CD PROJEKT"
     assert cdr_row["symbol_gpw"] == "CDR"
     assert cdr_row["employees"] == 1500
     assert cdr_row["logo_url"] == "https://logo.clearbit.com/cdprojekt.com"
@@ -1012,11 +1016,11 @@ def test_get_company_profile_endpoint(monkeypatch):
 
 def test_build_company_name_lookup_prefers_human_readable_name():
     class FakeResult:
-        column_names = ["symbol", "name", "short_name"]
+        column_names = ["short_name", "name", "symbol"]
 
         def named_results(self):
             return [
-                {"symbol": "CDR", "name": "CDR", "short_name": "CD PROJEKT"},
+                {"short_name": "CDR", "name": "CDR", "symbol": "CD PROJEKT"},
             ]
 
     class FakeClickHouse:
