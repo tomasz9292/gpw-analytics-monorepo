@@ -19,6 +19,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from api import main
+import api.company_ingestion as company_ingestion
 from api.company_ingestion import (
     CompanyDataHarvester,
     CompanySyncProgress,
@@ -98,6 +99,15 @@ class FakeSession:
 
     def get_history(self) -> List[HttpRequestLog]:
         return list(self._history)
+
+
+@pytest.fixture(autouse=True)
+def disable_stooq_delays(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        company_ingestion.CompanyDataHarvester,
+        "_make_stooq_request_delayer",
+        lambda self: (lambda: None),
+    )
 
 
 class FakeClickHouseClient:

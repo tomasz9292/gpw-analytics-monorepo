@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import random
 from http.cookiejar import CookieJar
 from html import unescape as html_unescape
 from html.parser import HTMLParser
 import re
+import time
 from xml.etree import ElementTree
 from datetime import date, datetime
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
@@ -1019,6 +1021,7 @@ class CompanyDataHarvester:
         stooq_profile_url_template: Optional[str] = STOOQ_COMPANY_PROFILE_URL,
         yahoo_url_template: Optional[str] = None,
         google_url_template: Optional[str] = None,
+        stooq_request_delayer: Optional[Callable[[], None]] = None,
     ) -> None:
         self.session = session or SimpleHttpSession()
         self.gpw_url = gpw_url
@@ -1036,6 +1039,11 @@ class CompanyDataHarvester:
             )
         else:
             self._yahoo_crumb_url = None
+        self._stooq_request_delayer: Callable[[], None]
+        if stooq_request_delayer is None:
+            self._stooq_request_delayer = self._make_stooq_request_delayer()
+        else:
+            self._stooq_request_delayer = stooq_request_delayer
 
     # ---------------------------
     # HTTP helpers
@@ -1066,6 +1074,15 @@ class CompanyDataHarvester:
         if isinstance(content, bytes):
             return content.decode("utf-8", errors="replace")
         raise RuntimeError(f"Brak treści w odpowiedzi z {url}")
+
+    def _make_stooq_request_delayer(self) -> Callable[[], None]:
+        def _delay() -> None:
+            time.sleep(random.uniform(1.0, 3.0))
+
+        return _delay
+
+    def _delay_stooq_request(self) -> None:
+        self._stooq_request_delayer()
 
     # ---------------------------
     # Fetchers
@@ -1157,6 +1174,7 @@ class CompanyDataHarvester:
         collected: List[Dict[str, Any]] = []
         seen: set[str] = set()
         for url in _iter_stooq_catalog_urls(self.gpw_stooq_url):
+            self._delay_stooq_request()
             document = self._get_text(url)
             rows = _extract_stooq_company_rows(document)
             for row in rows:
@@ -1254,6 +1272,7 @@ class CompanyDataHarvester:
         normalized = _normalize_gpw_symbol(raw_symbol)
         symbol_param = normalized.lower()
         url = self.stooq_profile_url_template.format(symbol=symbol_param)
+        self._delay_stooq_request()
         document = self._get_text(url)
         parsed = _parse_stooq_profile_document(document)
         raw_fields = parsed.get("raw_fields") if isinstance(parsed, dict) else None
