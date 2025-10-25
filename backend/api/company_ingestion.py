@@ -631,31 +631,34 @@ def _iter_stooq_catalog_urls(base_url: str) -> List[str]:
     parsed = urlsplit(base_url)
     base_query = parse_qs(parsed.query, keep_blank_values=True)
 
-    if "l" in base_query:
-        return [base_url]
-
-    normalized_query = {key: list(values) for key, values in base_query.items()}
-    normalized_query.setdefault("v", ["0"])
-
-    urls: List[str] = []
-    for suffix in [None, "2", "3", "4", "5"]:
-        query = {key: list(values) for key, values in normalized_query.items()}
-        if suffix is None:
-            query.pop("l", None)
-        else:
-            query["l"] = [suffix]
-        query_string = urlencode(query, doseq=True)
-        urls.append(
-            urlunsplit(
-                (
-                    parsed.scheme,
-                    parsed.netloc,
-                    parsed.path,
-                    query_string,
-                    parsed.fragment,
-                )
+    def _build_url(query: Dict[str, List[str]]) -> str:
+        return urlunsplit(
+            (
+                parsed.scheme,
+                parsed.netloc,
+                parsed.path,
+                urlencode(query, doseq=True),
+                parsed.fragment,
             )
         )
+
+    if "l" in base_query:
+        normalized = {key: list(values) for key, values in base_query.items()}
+        normalized.setdefault("v", ["0"])
+        return [_build_url(normalized)]
+
+    normalized_query = {key: list(values) for key, values in base_query.items()}
+
+    urls: List[str] = []
+    # Zachowujemy oryginalny adres (bez wymuszonego parametru v)
+    urls.append(_build_url(normalized_query))
+
+    normalized_query.setdefault("v", ["0"])
+    for suffix in ["2", "3", "4", "5"]:
+        query = {key: list(values) for key, values in normalized_query.items()}
+        query["l"] = [suffix]
+        urls.append(_build_url(query))
+
     return urls
 
 
@@ -1515,7 +1518,8 @@ class CompanyDataHarvester:
             "symbol_google": google_symbol,
             "isin": _clean_string(base.get("isin"))
             or _clean_string(stooq_data.get("isin")),
-            "name": company_name,
+            "name": _first_symbol_candidate(raw_symbol, stooq_symbol, yahoo_symbol, google_symbol)
+            or swapped_symbol,
             "company_name": company_name,
             "full_name": company_name,
             "short_name": raw_symbol,
