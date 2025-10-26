@@ -957,6 +957,12 @@ type SymbolRow = {
     name?: string | null;
     raw?: string | null;
     kind: SymbolKind;
+    ticker?: string | null;
+    code?: string | null;
+    isin?: string | null;
+    company_name?: string | null;
+    full_name?: string | null;
+    short_name?: string | null;
 };
 
 type ComparisonMeta = {
@@ -1489,15 +1495,25 @@ async function searchSymbols(
     const tasks: Array<Promise<SymbolRow[]>> = [];
 
     if (wantStocks) {
+        type SymbolsApiRow = {
+            symbol?: string;
+            raw?: string | null;
+            ticker?: string | null;
+            code?: string | null;
+            isin?: string | null;
+            name?: string | null;
+            company_name?: string | null;
+            full_name?: string | null;
+            short_name?: string | null;
+        };
+
         tasks.push(
             fetch(`${API}/symbols?q=${encodeURIComponent(query)}`)
                 .then((response) => {
                     if (!response.ok) {
                         throw new Error(`API /symbols ${response.status}`);
                     }
-                    return response.json() as Promise<
-                        Array<{ symbol?: string; raw?: string }>
-                    >;
+                    return response.json() as Promise<SymbolsApiRow[]>;
                 })
                 .then((rows): SymbolRow[] =>
                     rows
@@ -1506,11 +1522,30 @@ async function searchSymbols(
                             if (!symbol) return null;
                             const normalized = symbol.toUpperCase();
                             const raw = typeof row.raw === "string" ? row.raw.trim() : null;
+                            const resolvedName =
+                                typeof row.name === "string" && row.name.trim()
+                                    ? row.name.trim()
+                                    : typeof row.company_name === "string" && row.company_name.trim()
+                                      ? row.company_name.trim()
+                                      : typeof row.full_name === "string" && row.full_name.trim()
+                                        ? row.full_name.trim()
+                                        : raw ?? null;
+                            const normalizeOptional = (value: unknown): string | null => {
+                                if (typeof value !== "string") return null;
+                                const trimmed = value.trim();
+                                return trimmed ? trimmed : null;
+                            };
                             return {
                                 symbol: normalized,
-                                name: raw ?? null,
+                                name: resolvedName,
                                 raw: raw ?? normalized,
                                 kind: "stock" as const,
+                                ticker: normalizeOptional(row.ticker),
+                                code: normalizeOptional(row.code),
+                                isin: normalizeOptional(row.isin),
+                                company_name: normalizeOptional(row.company_name),
+                                full_name: normalizeOptional(row.full_name),
+                                short_name: normalizeOptional(row.short_name),
                             } satisfies SymbolRow;
                         })
                         .filter((row): row is SymbolRow => row !== null)
@@ -7440,6 +7475,30 @@ function TickerAutosuggest({
                             const isActive = i === idx;
                             const subtitle = row.name && row.name !== row.symbol ? row.name : row.raw;
                             const kindLabel = row.kind === "index" ? "Indeks" : "Spółka";
+                            const metadataEntries: Array<{ label: string; value: string }> = [];
+
+                            if (row.kind === "stock") {
+                                const rawEntries: Array<[string, string | null | undefined]> = [
+                                    ["Ticker", row.ticker ?? row.raw ?? null],
+                                    ["Kod", row.code],
+                                    ["ISIN", row.isin],
+                                    ["Nazwa", row.name],
+                                    ["Nazwa spółki", row.company_name],
+                                    ["Pełna nazwa", row.full_name],
+                                    ["Skrót", row.short_name],
+                                ];
+                                const seen = new Set<string>();
+                                for (const [label, value] of rawEntries) {
+                                    if (!value) continue;
+                                    const trimmed = value.trim();
+                                    if (!trimmed) continue;
+                                    const dedupeKey = trimmed.toUpperCase();
+                                    if (seen.has(dedupeKey)) continue;
+                                    seen.add(dedupeKey);
+                                    metadataEntries.push({ label, value: trimmed });
+                                }
+                            }
+
                             return (
                                 <button
                                     key={`${row.kind}-${row.symbol}`}
@@ -7455,16 +7514,28 @@ function TickerAutosuggest({
                                         .filter(Boolean)
                                         .join(" ")}
                                 >
-                                    <div className="flex items-start justify-between gap-3">
-                                        <div>
-                                            <div className="font-semibold text-primary">{row.symbol}</div>
-                                            {subtitle && (
-                                                <div className="text-xs text-muted">{subtitle}</div>
-                                            )}
+                                    <div className="flex flex-col gap-2">
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div>
+                                                <div className="font-semibold text-primary">{row.symbol}</div>
+                                                {subtitle && (
+                                                    <div className="text-xs text-muted">{subtitle}</div>
+                                                )}
+                                            </div>
+                                            <span className="rounded-full border border-soft px-2 py-0.5 text-[11px] uppercase tracking-wide text-subtle">
+                                                {kindLabel}
+                                            </span>
                                         </div>
-                                        <span className="rounded-full border border-soft px-2 py-0.5 text-[11px] uppercase tracking-wide text-subtle">
-                                            {kindLabel}
-                                        </span>
+                                        {metadataEntries.length > 0 && (
+                                            <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] text-subtle sm:grid-cols-3">
+                                                {metadataEntries.map(({ label, value }) => (
+                                                    <React.Fragment key={`${row.symbol}-${label}`}>
+                                                        <dt className="uppercase tracking-wide text-[10px]">{label}</dt>
+                                                        <dd className="text-right font-medium text-primary">{value}</dd>
+                                                    </React.Fragment>
+                                                ))}
+                                            </dl>
+                                        )}
                                     </div>
                                 </button>
                             );

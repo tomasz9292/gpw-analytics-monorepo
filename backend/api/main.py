@@ -2673,6 +2673,7 @@ def symbols(
     Zwraca listę symboli:
     - symbol: ładny ticker (np. CDR.WA)
     - raw: surowy symbol w bazie (np. CDPROJEKT)
+    - dodatkowe pola identyfikacyjne (ticker, code, isin, nazwy) jeśli dostępne
     """
     ch = get_ch()
     if q:
@@ -2697,11 +2698,98 @@ def symbols(
             parameters={"limit": limit},
         ).result_rows
 
-    out = []
+    if not rows:
+        return []
+
+    normalized_lookup: Dict[str, Dict[str, Optional[str]]] = {}
+    output_rows = []
+    lookup_keys: Set[str] = set()
+
     for r in rows:
         raw = str(r[0])
-        out.append({"symbol": pretty_symbol(raw), "raw": raw})
-    return out
+        pretty = pretty_symbol(raw)
+        normalized = normalize_input_symbol(raw)
+        output_rows.append({"symbol": pretty, "raw": raw})
+        if normalized:
+            lookup_keys.add(normalized.upper())
+        lookup_keys.add(raw.upper())
+        lookup_keys.add(pretty.upper())
+
+    # Spróbuj wzbogacić wynik o dane z tabeli spółek, jeśli są dostępne.
+    try:
+        columns = _get_company_columns(ch)
+    except HTTPException:
+        columns = []
+
+    lowered_to_original = {col.lower(): col for col in columns}
+
+    symbol_column: Optional[str] = None
+    for candidate in COMPANY_SYMBOL_CANDIDATES:
+        existing = lowered_to_original.get(candidate)
+        if existing:
+            symbol_column = existing
+            break
+
+    detail_candidates = [
+        "ticker",
+        "code",
+        "isin",
+        "name",
+        "company_name",
+        "full_name",
+        "short_name",
+    ]
+
+    selected_columns: List[str] = []
+    if symbol_column:
+        selected_columns.append(symbol_column)
+        for candidate in detail_candidates:
+            existing = lowered_to_original.get(candidate)
+            if existing and existing not in selected_columns:
+                selected_columns.append(existing)
+
+    if symbol_column and len(selected_columns) > 1 and lookup_keys:
+        select_clause = ", ".join(_quote_identifier(col) for col in selected_columns)
+        sql = (
+            f"SELECT {select_clause} FROM {TABLE_COMPANIES} "
+            f"WHERE upper({_quote_identifier(symbol_column)}) IN %(symbols)s"
+        )
+        try:
+            result = ch.query(sql, parameters={"symbols": tuple(lookup_keys)})
+        except Exception:
+            result = None
+
+        if result is not None:
+            column_names = list(getattr(result, "column_names", []))
+            for row in getattr(result, "result_rows", []):
+                raw_row = {col: value for col, value in zip(column_names, row)}
+                symbol_value = raw_row.get(symbol_column)
+                if symbol_value is None:
+                    continue
+                normalized = normalize_input_symbol(str(_convert_clickhouse_value(symbol_value)))
+                if not normalized:
+                    continue
+                key = normalized.upper()
+                entry: Dict[str, Optional[str]] = {}
+                for candidate in detail_candidates:
+                    column = lowered_to_original.get(candidate)
+                    if not column:
+                        continue
+                    value = raw_row.get(column)
+                    text = str(_convert_clickhouse_value(value)).strip() if value is not None else ""
+                    if text:
+                        entry[candidate] = text
+                if entry:
+                    normalized_lookup[key] = entry
+
+    for entry in output_rows:
+        normalized = normalize_input_symbol(entry["raw"])
+        if normalized:
+            enriched = normalized_lookup.get(normalized.upper())
+            if enriched:
+                entry.update(enriched)
+
+    return output_rows
 
 
 # =========================
