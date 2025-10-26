@@ -957,6 +957,7 @@ type SymbolRow = {
     name?: string | null;
     raw?: string | null;
     kind: SymbolKind;
+    display?: string | null;
     ticker?: string | null;
     code?: string | null;
     isin?: string | null;
@@ -1505,6 +1506,7 @@ async function searchSymbols(
             company_name?: string | null;
             full_name?: string | null;
             short_name?: string | null;
+            display?: string | null;
         };
 
         tasks.push(
@@ -1540,6 +1542,7 @@ async function searchSymbols(
                                 name: resolvedName,
                                 raw: raw ?? normalized,
                                 kind: "stock" as const,
+                                display: normalizeOptional(row.display),
                                 ticker: normalizeOptional(row.ticker),
                                 code: normalizeOptional(row.code),
                                 isin: normalizeOptional(row.isin),
@@ -6702,14 +6705,17 @@ const Chip = ({
     onClick,
     children,
     className,
+    title,
 }: {
     active?: boolean;
     onClick?: () => void;
     children: React.ReactNode;
     className?: string;
+    title?: string;
 }) => (
     <button
         onClick={onClick}
+        title={title}
         className={`inline-flex items-center justify-center rounded-full px-3 py-1 text-sm text-center border transition ${
             active
                 ? "bg-primary text-white border-[var(--color-primary)]"
@@ -7221,11 +7227,13 @@ function Watchlist({
     current,
     onPick,
     onRemove,
+    displayNames,
 }: {
     items: string[];
     current: string | null;
     onPick: (s: string) => void;
     onRemove: (s: string) => void;
+    displayNames?: Record<string, string>;
 }) {
     if (!items.length) {
         return (
@@ -7237,26 +7245,31 @@ function Watchlist({
 
     return (
         <div className="flex flex-wrap gap-2">
-            {items.map((s) => (
-                <div key={s} className="group flex items-center gap-1">
-                    <Chip active={s === current} onClick={() => onPick(s)}>
-                        {s}
-                    </Chip>
-                    <button
-                        type="button"
-                        onClick={() => onRemove(s)}
-                        className={[
-                            "opacity-0 transition-opacity",
-                            "group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100",
-                            "text-xl leading-none text-subtle hover:text-negative focus-visible:text-negative",
-                            "px-1",
-                        ].join(" ")}
-                        aria-label={`Usuń ${s} z listy`}
-                    >
-                        ×
-                    </button>
-                </div>
-            ))}
+            {items.map((s) => {
+                const label = displayNames?.[s] ?? s;
+                const removeLabel = label === s ? s : `${label} (${s})`;
+                const title = label === s ? undefined : `${label} (${s})`;
+                return (
+                    <div key={s} className="group flex items-center gap-1">
+                        <Chip active={s === current} onClick={() => onPick(s)} title={title}>
+                            {label}
+                        </Chip>
+                        <button
+                            type="button"
+                            onClick={() => onRemove(s)}
+                            className={[
+                                "opacity-0 transition-opacity",
+                                "group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100",
+                                "text-xl leading-none text-subtle hover:text-negative focus-visible:text-negative",
+                                "px-1",
+                            ].join(" ")}
+                            aria-label={`Usuń ${removeLabel} z listy`}
+                        >
+                            ×
+                        </button>
+                    </div>
+                );
+            })}
         </div>
     );
 }
@@ -7299,6 +7312,43 @@ function Stats({ data }: { data: Row[] }) {
 /** =========================
  *  Komponent: Autosuggest
  *  ========================= */
+const tickerDisplayPattern = /^[0-9A-Z][0-9A-Z._-]{0,15}$/;
+
+const normalizeUpper = (value: string | null | undefined): string =>
+    typeof value === "string" ? value.trim().toUpperCase() : "";
+
+const getPreferredDisplayForRow = (row: SymbolRow): string => {
+    const symbolUpper = normalizeUpper(row.symbol);
+    const rawUpper = normalizeUpper(row.raw);
+    const candidates = [row.display, row.short_name, row.name, row.company_name, row.full_name];
+    for (const candidate of candidates) {
+        if (typeof candidate !== "string") continue;
+        const trimmed = candidate.trim();
+        if (!trimmed) continue;
+        const normalizedCandidate = trimmed.toUpperCase();
+        if (normalizedCandidate === symbolUpper || normalizedCandidate === rawUpper) {
+            continue;
+        }
+        if (!tickerDisplayPattern.test(normalizedCandidate)) {
+            continue;
+        }
+        return trimmed;
+    }
+    return row.symbol;
+};
+
+const extractDisplayName = (symbol: string, meta?: SymbolRow): string | null => {
+    if (!meta) return null;
+    const preferred = getPreferredDisplayForRow(meta);
+    if (!preferred) return null;
+    const normalizedPreferred = normalizeUpper(preferred);
+    const normalizedSymbol = normalizeUpper(symbol);
+    if (normalizedPreferred === normalizedSymbol) {
+        return null;
+    }
+    return preferred;
+};
+
 function TickerAutosuggest({
     onPick,
     placeholder = "Dodaj ticker (np. CDR.WA)",
@@ -7473,7 +7523,9 @@ function TickerAutosuggest({
                     {!loading &&
                         list.map((row, i) => {
                             const isActive = i === idx;
-                            const subtitle = row.name && row.name !== row.symbol ? row.name : row.raw;
+                            const displaySymbol = getPreferredDisplayForRow(row);
+                            const displayUpper = normalizeUpper(displaySymbol);
+                            const symbolUpper = normalizeUpper(row.symbol);
                             const kindLabel = row.kind === "index" ? "Indeks" : "Spółka";
                             const metadataEntries: Array<{ label: string; value: string }> = [];
 
@@ -7499,6 +7551,28 @@ function TickerAutosuggest({
                                 }
                             }
 
+                            const secondaryDetails: string[] = [];
+                            if (displayUpper !== symbolUpper) {
+                                secondaryDetails.push(row.symbol);
+                            }
+                            const addDetail = (value?: string | null) => {
+                                if (typeof value !== "string") return;
+                                const trimmed = value.trim();
+                                if (!trimmed) return;
+                                const normalized = normalizeUpper(trimmed);
+                                if (normalized === displayUpper || normalized === symbolUpper) return;
+                                if (
+                                    secondaryDetails.some(
+                                        (detail) => normalizeUpper(detail) === normalized
+                                    )
+                                ) {
+                                    return;
+                                }
+                                secondaryDetails.push(trimmed);
+                            };
+                            addDetail(row.name);
+                            addDetail(row.raw);
+
                             return (
                                 <button
                                     key={`${row.kind}-${row.symbol}`}
@@ -7517,10 +7591,17 @@ function TickerAutosuggest({
                                     <div className="flex flex-col gap-2">
                                         <div className="flex items-start justify-between gap-3">
                                             <div>
-                                                <div className="font-semibold text-primary">{row.symbol}</div>
-                                                {subtitle && (
-                                                    <div className="text-xs text-muted">{subtitle}</div>
-                                                )}
+                                                <div className="font-semibold text-primary">
+                                                    {displaySymbol}
+                                                </div>
+                                                {secondaryDetails.map((detail) => (
+                                                    <div
+                                                        key={`${row.symbol}-${detail}`}
+                                                        className="text-xs text-muted"
+                                                    >
+                                                        {detail}
+                                                    </div>
+                                                ))}
                                             </div>
                                             <span className="rounded-full border border-soft px-2 py-0.5 text-[11px] uppercase tracking-wide text-subtle">
                                                 {kindLabel}
@@ -8387,8 +8468,10 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
     const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
     const [sidebarMobileOpen, setSidebarMobileOpen] = useState(false);
 
+    const [symbolDisplayNames, setSymbolDisplayNames] = useState<Record<string, string>>({});
     const [watch, setWatch] = useState<string[]>(() => [...DEFAULT_WATCHLIST]);
     const [symbol, setSymbolState] = useState<string | null>(DEFAULT_WATCHLIST[0] ?? null);
+    const activeSymbolLabel = symbol ? symbolDisplayNames[symbol] ?? symbol : null;
     const [period, setPeriod] = useState<ChartPeriod>(365);
     const [area, setArea] = useState(true);
     const [smaOn, setSmaOn] = useState(true);
@@ -10785,9 +10868,19 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                         description="Dodawaj tickery z GPW do listy obserwacyjnej i analizuj wykres wraz z kluczowymi statystykami, wskaźnikami momentum oraz podglądem fundamentów."
                         actions={
                             <TickerAutosuggest
-                                onPick={(sym) => {
+                                onPick={(sym, meta) => {
                                     const normalized = sym.trim().toUpperCase();
                                     if (!normalized) return;
+                                    setSymbolDisplayNames((prev) => {
+                                        const displayName = extractDisplayName(normalized, meta);
+                                        if (!displayName) {
+                                            return prev;
+                                        }
+                                        if (prev[normalized] === displayName) {
+                                            return prev;
+                                        }
+                                        return { ...prev, [normalized]: displayName };
+                                    });
                                     setWatch((w) => (w.includes(normalized) ? w : [normalized, ...w]));
                                     setSymbol(normalized);
                                 }}
@@ -10808,6 +10901,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                         current={symbol}
                                         onPick={(sym) => setSymbol(sym)}
                                         onRemove={removeFromWatch}
+                                        displayNames={symbolDisplayNames}
                                     />
                                 </div>
                             </Card>
@@ -10815,7 +10909,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                             <div className="grid md:grid-cols-3 gap-6">
                                 <div className="md:col-span-2 space-y-6">
                                     <Card
-                                        title={symbol ? `${symbol} – wykres cenowy` : "Wykres cenowy"}
+                                        title={symbol ? `${activeSymbolLabel ?? symbol} – wykres cenowy` : "Wykres cenowy"}
                                         right={
                                             <>
                                                 {PERIOD_OPTIONS.map(({ label, value }) => (
