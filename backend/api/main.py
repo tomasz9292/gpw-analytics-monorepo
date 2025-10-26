@@ -3649,7 +3649,7 @@ def _normalize_index_member_symbol(
 
     candidates: List[str] = []
 
-    for source in (symbol_base_raw, symbol_raw):
+    for source in (symbol_raw, symbol_base_raw):
         if not source:
             continue
         text = str(source).strip()
@@ -5219,13 +5219,23 @@ def list_index_portfolios(codes: Optional[List[str]] = Query(default=None)) -> I
         display_symbol = (
             str(symbol_display_raw).strip().upper() if symbol_display_raw else ""
         )
-        base_candidate = symbol_base_raw if symbol_base_raw else display_symbol
-        symbol = normalize_input_symbol(str(base_candidate)) if base_candidate else ""
+        base_symbol_candidate = (
+            str(symbol_base_raw).strip().upper() if symbol_base_raw else ""
+        )
+        primary_candidate = display_symbol or base_symbol_candidate
+        normalized_primary = (
+            normalize_input_symbol(primary_candidate) if primary_candidate else ""
+        )
+        normalized_base = (
+            normalize_input_symbol(base_symbol_candidate) if base_symbol_candidate else ""
+        )
+        symbol = normalized_primary or normalized_base
         if not symbol:
             continue
         pretty_candidate = display_symbol or pretty_symbol(symbol)
         pretty = pretty_candidate.strip().upper() if pretty_candidate else symbol
         pretty_base = pretty.split(".", 1)[0] if "." in pretty else pretty
+        base_symbol = normalized_base or symbol
         effective_date = date_raw
         if isinstance(effective_date, datetime):
             effective_date = effective_date.date()
@@ -5248,6 +5258,7 @@ def list_index_portfolios(codes: Optional[List[str]] = Query(default=None)) -> I
             company_name = None
         lookup_keys = [
             symbol,
+            base_symbol,
             pretty,
             pretty_base,
             str(symbol_display_raw).strip() if symbol_display_raw else None,
@@ -5278,7 +5289,7 @@ def list_index_portfolios(codes: Optional[List[str]] = Query(default=None)) -> I
             IndexConstituentResponse(
                 symbol=pretty,
                 raw_symbol=symbol,
-                symbol_base=symbol,
+                symbol_base=base_symbol,
                 company_name=company_name,
                 weight=weight,
             )
