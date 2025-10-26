@@ -1313,11 +1313,11 @@ _OHLC_SCHEDULE_STATE = OhlcSyncScheduleStatus()
 # =========================
 
 COMPANY_SYMBOL_CANDIDATES = [
-    "short_name",
     "symbol",
     "symbol_gpw",
     "ticker",
     "code",
+    "short_name",
     "symbol_stooq",
     "symbol_yahoo",
     "symbol_google",
@@ -1337,7 +1337,7 @@ CompanyFieldTarget = Tuple[str, str, str]
 
 COMPANY_COLUMN_MAP: Dict[str, CompanyFieldTarget] = {
     # podstawowe informacje identyfikacyjne
-    "symbol": ("company", "short_name", "text"),
+    "symbol": ("company", "raw_symbol", "text"),
     "ticker": ("company", "raw_symbol", "text"),
     "code": ("company", "raw_symbol", "text"),
     "symbol_gpw": ("company", "symbol_gpw", "text"),
@@ -1404,6 +1404,15 @@ COMPANY_COLUMN_MAP: Dict[str, CompanyFieldTarget] = {
     "gross_margin": ("fundamentals", "gross_margin", "float"),
     "operating_margin": ("fundamentals", "operating_margin", "float"),
     "profit_margin": ("fundamentals", "profit_margin", "float"),
+}
+
+RAW_SYMBOL_PRIORITIES: Dict[str, int] = {
+    "symbol": 500,
+    "ticker": 400,
+    "code": 300,
+    "short_name": 200,
+    "company_symbol": 150,
+    "company_code": 100,
 }
 
 _COMPANY_COLUMNS_CACHE: Optional[List[str]] = None
@@ -1588,6 +1597,8 @@ def _normalize_company_row(row: Dict[str, Any], symbol_column: str) -> Optional[
     }
     fundamentals: Dict[str, Optional[float]] = {}
     extra: Dict[str, Any] = {}
+    raw_symbol_candidate: Optional[str] = None
+    raw_symbol_priority = -1
 
     for column, raw_value in row.items():
         key = column.lower()
@@ -1604,7 +1615,17 @@ def _normalize_company_row(row: Dict[str, Any], symbol_column: str) -> Optional[
             if field_type == "text":
                 if converted_value is None:
                     continue
-                canonical[field_name] = str(converted_value)
+                text_value = str(converted_value)
+                if field_name == "raw_symbol":
+                    candidate = text_value.strip()
+                    if not candidate:
+                        continue
+                    priority = RAW_SYMBOL_PRIORITIES.get(key, 0)
+                    if priority >= raw_symbol_priority:
+                        raw_symbol_candidate = candidate
+                        raw_symbol_priority = priority
+                    continue
+                canonical[field_name] = text_value
             elif field_type == "int":
                 coerced = _coerce_int(converted_value)
                 if coerced is not None:
@@ -1618,6 +1639,9 @@ def _normalize_company_row(row: Dict[str, Any], symbol_column: str) -> Optional[
         else:
             # fundamentals -> zawsze liczby
             fundamentals[field_name] = _coerce_float(converted_value)
+
+    if raw_symbol_candidate:
+        canonical["raw_symbol"] = raw_symbol_candidate
 
     raw_symbol_value = canonical.get("raw_symbol")
     if not raw_symbol_value:
@@ -1754,17 +1778,50 @@ def _build_company_name_lookup(ch_client) -> Dict[str, _CompanyNameLookupEntry]:
             base,
             raw_symbol,
         }
+        for alias_column in ("short_name", "ticker", "code"):
+            alias_value = row.get(alias_column)
+            alias_text = str(_convert_clickhouse_value(alias_value)).strip()
+            if not alias_text:
+                continue
+            symbol_keys.add(alias_text)
+            normalized_alias = normalize_input_symbol(alias_text)
+            if normalized_alias:
+                symbol_keys.add(normalized_alias)
+                symbol_keys.add(pretty_symbol(normalized_alias))
         normalized_symbol_keys = {
             key.strip().upper() for key in symbol_keys if key and key.strip()
         }
 
         preferred_name: Optional[str] = None
         for candidate in deduplicated_names:
-            if candidate.strip().upper() not in normalized_symbol_keys:
-                preferred_name = candidate
-                break
+            cleaned_candidate = candidate.strip()
+            if not cleaned_candidate:
+                continue
+            candidate_upper = cleaned_candidate.upper()
+            normalized_candidate = normalize_input_symbol(cleaned_candidate)
+            normalized_candidate_upper = (
+                normalized_candidate.strip().upper()
+                if normalized_candidate
+                else ""
+            )
+            pretty_candidate_upper = (
+                pretty_symbol(normalized_candidate).strip().upper()
+                if normalized_candidate
+                else ""
+            )
+            if candidate_upper in normalized_symbol_keys:
+                continue
+            if normalized_candidate_upper and normalized_candidate_upper in normalized_symbol_keys:
+                continue
+            if pretty_candidate_upper and pretty_candidate_upper in normalized_symbol_keys:
+                continue
+            preferred_name = candidate
+            break
         if preferred_name is None and deduplicated_names:
-            preferred_name = deduplicated_names[0]
+            preferred_name = max(
+                deduplicated_names,
+                key=lambda value: (len(value or ""), value),
+            )
 
         entry: _CompanyNameLookupEntry = {
             "raw_symbol": normalized_raw,

@@ -1134,7 +1134,7 @@ def test_build_company_name_lookup_prefers_human_readable_name():
 
         def named_results(self):
             return [
-                {"short_name": "CDR", "name": "CDR", "symbol": "CD PROJEKT"},
+                {"short_name": "CDR", "name": "CD PROJEKT", "symbol": "CDR"},
             ]
 
     class FakeClickHouse:
