@@ -3124,20 +3124,25 @@ const CompanySyncPanel = ({ symbol, setSymbol }: CompanySyncPanelProps) => {
                     throw new Error(await parseApiError(response));
                 }
                 const data = (await response.json()) as CompanyProfileResponse[];
-                setCompanies(data);
+                const sortedData = [...data].sort((a, b) => {
+                    const symbolA = (a?.symbol ?? a?.raw_symbol ?? "").trim().toUpperCase();
+                    const symbolB = (b?.symbol ?? b?.raw_symbol ?? "").trim().toUpperCase();
+                    return symbolA.localeCompare(symbolB);
+                });
+                setCompanies(sortedData);
                 setCompaniesError(null);
                 const current = selectedSymbolRef.current;
                 let nextSymbol: string | null = null;
                 if (
                     current &&
-                    data.some(
+                    sortedData.some(
                         (item) =>
                             item.symbol === current || item.raw_symbol === current
                     )
                 ) {
                     nextSymbol = current;
-                } else if (data.length > 0) {
-                    nextSymbol = data[0].symbol;
+                } else if (sortedData.length > 0) {
+                    nextSymbol = sortedData[0].symbol ?? sortedData[0].raw_symbol ?? null;
                 }
 
                 const normalizedNextSymbol =
@@ -3154,7 +3159,7 @@ const CompanySyncPanel = ({ symbol, setSymbol }: CompanySyncPanelProps) => {
 
                 const lookupSymbol = selectedSymbolRef.current;
                 if (lookupSymbol) {
-                    const local = data.find(
+                    const local = sortedData.find(
                         (item) =>
                             item.symbol === lookupSymbol ||
                             item.raw_symbol === lookupSymbol
