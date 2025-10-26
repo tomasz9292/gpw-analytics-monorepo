@@ -7227,11 +7227,13 @@ function Watchlist({
     current,
     onPick,
     onRemove,
+    displayNames,
 }: {
     items: string[];
     current: string | null;
     onPick: (s: string) => void;
     onRemove: (s: string) => void;
+    displayNames?: Record<string, string>;
 }) {
     if (!items.length) {
         return (
