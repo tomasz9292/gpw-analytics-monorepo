@@ -2782,12 +2782,46 @@ def symbols(
                 if entry:
                     normalized_lookup[key] = entry
 
+    ticker_like_pattern = re.compile(r"^[0-9A-Z]{1,8}(?:[._-][0-9A-Z]{1,8})?$")
+
+    def _clean_text(value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
     for entry in output_rows:
         normalized = normalize_input_symbol(entry["raw"])
         if normalized:
             enriched = normalized_lookup.get(normalized.upper())
             if enriched:
                 entry.update(enriched)
+
+        symbol_value = _clean_text(entry.get("symbol")) or ""
+        raw_value = _clean_text(entry.get("raw")) or ""
+        symbol_upper = symbol_value.upper()
+        raw_upper = raw_value.upper()
+
+        preferred: Optional[str] = None
+        candidates = (
+            entry.get("display"),
+            entry.get("ticker"),
+            entry.get("code"),
+            entry.get("short_name"),
+        )
+        for candidate in candidates:
+            cleaned = _clean_text(candidate)
+            if not cleaned:
+                continue
+            normalized_candidate = cleaned.upper()
+            if normalized_candidate in {symbol_upper, raw_upper}:
+                continue
+            if not ticker_like_pattern.fullmatch(normalized_candidate):
+                continue
+            preferred = cleaned
+            break
+
+        entry["display"] = preferred or symbol_value or raw_value
 
     return output_rows
 
