@@ -2431,7 +2431,6 @@ const CompanySyncPanel = () => {
     const [companies, setCompanies] = useState<CompanyProfileResponse[]>([]);
     const [companiesError, setCompaniesError] = useState<string | null>(null);
     const [companiesLoading, setCompaniesLoading] = useState(false);
-    const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null);
     const [selectedCompany, setSelectedCompany] = useState<CompanyProfileResponse | null>(null);
     const [detailsError, setDetailsError] = useState<string | null>(null);
     const [detailsLoading, setDetailsLoading] = useState(false);
@@ -2506,11 +2505,8 @@ const CompanySyncPanel = () => {
         useState(false);
 
     const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
-    const selectedSymbolRef = useRef<string | null>(null);
+    const selectedSymbolRef = useRef<string | null>(DEFAULT_WATCHLIST[0] ?? null);
 
-    useEffect(() => {
-        selectedSymbolRef.current = selectedSymbol;
-    }, [selectedSymbol]);
 
     useEffect(() => {
         try {
@@ -3115,26 +3111,31 @@ const CompanySyncPanel = () => {
             setCompanies(data);
             setCompaniesError(null);
             const current = selectedSymbolRef.current;
-            let nextSymbol: string | null = null;
-            if (
-                current &&
-                data.some((item) => item.symbol === current || item.raw_symbol === current)
-            ) {
-                nextSymbol = current;
-            } else if (data.length > 0) {
+            let nextSymbol: string | null = current ?? null;
+            if (!current && data.length > 0) {
                 nextSymbol = data[0].symbol;
             }
-            if (nextSymbol !== current) {
-                setSelectedSymbol(nextSymbol);
+
+            const normalizedNextSymbol =
+                nextSymbol && nextSymbol.trim().length > 0
+                    ? nextSymbol.trim().toUpperCase()
+                    : null;
+
+            if (!current) {
+                setSymbol(normalizedNextSymbol);
+                selectedSymbolRef.current = normalizedNextSymbol;
+            } else {
+                selectedSymbolRef.current = current;
             }
-            selectedSymbolRef.current = nextSymbol;
-            if (nextSymbol) {
+
+            const lookupSymbol = selectedSymbolRef.current;
+            if (lookupSymbol) {
                 const local = data.find(
-                    (item) => item.symbol === nextSymbol || item.raw_symbol === nextSymbol
+                    (item) =>
+                        item.symbol === lookupSymbol ||
+                        item.raw_symbol === lookupSymbol
                 );
-                if (local) {
-                    setSelectedCompany(local);
-                }
+                setSelectedCompany(local ?? null);
             } else {
                 setSelectedCompany(null);
             }
@@ -3780,19 +3781,6 @@ const CompanySyncPanel = () => {
         void fetchAdmins();
     }, [fetchAdmins]);
 
-    const handleSelectCompany = useCallback(
-        (symbol: string) => {
-            setSelectedSymbol(symbol);
-            selectedSymbolRef.current = symbol;
-            const local = companies.find(
-                (item) => item.symbol === symbol || item.raw_symbol === symbol
-            );
-            if (local) {
-                setSelectedCompany(local);
-            }
-        },
-        [companies]
-    );
 
     useEffect(() => {
         void fetchOhlcProgress();
@@ -3912,8 +3900,9 @@ const CompanySyncPanel = () => {
         setOhlcScheduleRunAsAdmin(options?.run_as_admin ?? true);
     }, [ohlcSchedule, toLocalDateTimeInputValue]);
 
+    /* eslint-disable react-hooks/exhaustive-deps */
     useEffect(() => {
-        if (!selectedSymbol) {
+        if (!symbol) {
             setSelectedCompany(null);
             setDetailsLoading(false);
             return;
@@ -3921,7 +3910,7 @@ const CompanySyncPanel = () => {
         let cancelled = false;
         setDetailsLoading(true);
         setDetailsError(null);
-        fetchCompanyDetails(selectedSymbol)
+        fetchCompanyDetails(symbol)
             .then((data) => {
                 if (!cancelled) {
                     setSelectedCompany(data);
@@ -3944,7 +3933,8 @@ const CompanySyncPanel = () => {
         return () => {
             cancelled = true;
         };
-    }, [selectedSymbol, fetchCompanyDetails, status?.status]);
+    }, [symbol, fetchCompanyDetails, status?.status]);
+    /* eslint-enable react-hooks/exhaustive-deps */
 
     const fundamentalEntries = useMemo(() => {
         if (!selectedCompany) return [] as [string, number | null][];
@@ -5520,8 +5510,8 @@ const CompanySyncPanel = () => {
                             <div className="max-h-80 space-y-1 overflow-y-auto pr-1">
                                 {companies.map((company) => {
                                     const isActive =
-                                        company.symbol === selectedSymbol ||
-                                        company.raw_symbol === selectedSymbol;
+                                        company.symbol === symbol ||
+                                        company.raw_symbol === symbol;
                                     const marketCap = company.fundamentals?.market_cap ?? null;
                                     return (
                                         <button
@@ -8268,7 +8258,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
     const [sidebarMobileOpen, setSidebarMobileOpen] = useState(false);
 
     const [watch, setWatch] = useState<string[]>(() => [...DEFAULT_WATCHLIST]);
-    const [symbol, setSymbol] = useState<string | null>(DEFAULT_WATCHLIST[0] ?? null);
+    const [symbol, setSymbolState] = useState<string | null>(DEFAULT_WATCHLIST[0] ?? null);
     const [period, setPeriod] = useState<ChartPeriod>(365);
     const [area, setArea] = useState(true);
     const [smaOn, setSmaOn] = useState(true);
@@ -8282,6 +8272,50 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
     const [comparisonMeta, setComparisonMeta] = useState<Record<string, ComparisonMeta>>({});
     const [loading, setLoading] = useState(false);
     const [err, setErr] = useState("");
+
+    const setSymbol = (
+        value: string | null | ((prev: string | null) => string | null)
+    ) => {
+        setSymbolState((prev) => {
+            const resolved =
+                typeof value === "function"
+                    ? (value as (prev: string | null) => string | null)(prev)
+                    : value;
+            const normalized =
+                resolved && resolved.trim().length > 0
+                    ? resolved.trim().toUpperCase()
+                    : null;
+            return normalized === prev ? prev : normalized;
+        });
+    };
+
+    useEffect(() => {
+        selectedSymbolRef.current = symbol;
+    }, [symbol]);
+
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    function handleSelectCompany(candidate: string) {
+        const normalized = candidate.trim().toUpperCase();
+        if (!normalized) {
+            setSymbol(null);
+            selectedSymbolRef.current = null;
+            setSelectedCompany(null);
+            return;
+        }
+
+        setSymbol(normalized);
+        selectedSymbolRef.current = normalized;
+
+        const local = companies.find(
+            (item) =>
+                item.symbol === normalized ||
+                item.raw_symbol === normalized ||
+                item.symbol === candidate ||
+                item.raw_symbol === candidate
+        );
+
+        setSelectedCompany(local ?? null);
+    }
 
     useEffect(() => {
         if (typeof document === "undefined") {
