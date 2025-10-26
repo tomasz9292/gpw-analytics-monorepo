@@ -5582,10 +5582,10 @@ const CompanySyncPanel = ({ symbol, setSymbol }: CompanySyncPanelProps) => {
                                             <div className="flex items-start justify-between gap-3">
                                                 <div className="space-y-1">
                                                     <div className="text-sm font-semibold text-primary">
-                                                        {company.name ?? company.short_name ?? company.symbol}
+                                                        {company.name ?? company.short_name ?? company.raw_symbol ?? company.symbol}
                                                     </div>
                                                     <div className="text-xs text-subtle">
-                                                        {company.symbol}
+                                                        {company.raw_symbol ?? company.symbol}
                                                         {company.sector ? ` • ${company.sector}` : ""}
                                                         {company.industry ? ` • ${company.industry}` : ""}
                                                     </div>
@@ -5609,6 +5609,7 @@ const CompanySyncPanel = ({ symbol, setSymbol }: CompanySyncPanelProps) => {
                             ? `Szczegóły ${
                                   selectedCompany.name ??
                                   selectedCompany.short_name ??
+                                  selectedCompany.raw_symbol ??
                                   selectedCompany.symbol
                               }`
                             : "Wybierz spółkę z listy"
@@ -5628,7 +5629,10 @@ const CompanySyncPanel = ({ symbol, setSymbol }: CompanySyncPanelProps) => {
                                         {selectedCompany.raw_symbol}
                                     </p>
                                     <h3 className="text-xl font-semibold text-primary">
-                                        {selectedCompany.name ?? selectedCompany.short_name ?? selectedCompany.symbol}
+                                        {selectedCompany.name ??
+                                            selectedCompany.short_name ??
+                                            selectedCompany.raw_symbol ??
+                                            selectedCompany.symbol}
                                     </h3>
                                     <p className="text-sm text-muted">
                                         {selectedCompany.sector}
@@ -5648,7 +5652,7 @@ const CompanySyncPanel = ({ symbol, setSymbol }: CompanySyncPanelProps) => {
                                         Symbol
                                     </span>
                                     <span className="text-base font-semibold text-primary">
-                                        {selectedCompany.symbol}
+                                        {selectedCompany.raw_symbol ?? selectedCompany.symbol}
                                     </span>
                                 </div>
                                 <div>
