@@ -5176,7 +5176,7 @@ const CompanySyncPanel = ({ symbol, setSymbol }: CompanySyncPanelProps) => {
                                     w ClickHouse.
                                 </p>
                                 <p>
-                                    Jeżeli pozostawisz pole symboli puste, aplikacja spróbuje zsynchronizować wszystkie tickery dostępne w bazie spółek oraz w istniejącej tabeli notowań.
+                                    Jeżeli pozostawisz pole symboli puste, aplikacja spróbuje zsynchronizować wszystkie symbole dostępne w bazie spółek oraz w istniejącej tabeli notowań.
                                 </p>
                                 <p>
                                     Tryb administratora umożliwia czyszczenie tabeli przed ponownym załadowaniem danych. Używaj go ostrożnie, aby nie utracić historycznych notowań.
@@ -7351,7 +7351,7 @@ const extractDisplayName = (symbol: string, meta?: SymbolRow): string | null => 
 
 function TickerAutosuggest({
     onPick,
-    placeholder = "Dodaj ticker (np. CDR.WA)",
+    placeholder = "Dodaj symbol (np. CDR.WA)",
     inputClassName = "",
     disabled = false,
     allowedKinds,
@@ -7531,7 +7531,7 @@ function TickerAutosuggest({
 
                             if (row.kind === "stock") {
                                 const rawEntries: Array<[string, string | null | undefined]> = [
-                                    ["Ticker", row.ticker ?? row.raw ?? null],
+                                    ["Symbol", row.ticker ?? row.raw ?? null],
                                     ["Kod", row.code],
                                     ["ISIN", row.isin],
                                     ["Nazwa", row.name],
@@ -10865,7 +10865,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                         <Section
                             id="analysis"
                         title="Analiza techniczna i kontekst"
-                        description="Dodawaj tickery z GPW do listy obserwacyjnej i analizuj wykres wraz z kluczowymi statystykami, wskaźnikami momentum oraz podglądem fundamentów."
+                        description="Dodawaj symbole z GPW do listy obserwacyjnej i analizuj wykres wraz z kluczowymi statystykami, wskaźnikami momentum oraz podglądem fundamentów."
                         actions={
                             <TickerAutosuggest
                                 onPick={(sym, meta) => {
@@ -10894,7 +10894,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                         Monitoruj swoje spółki
                                     </h3>
                                     <p className="text-sm text-muted">
-                                        Kliknij na ticker, aby przełączyć moduły analizy poniżej. Usuń zbędne pozycje przyciskiem ×.
+                                        Kliknij na symbol, aby przełączyć moduły analizy poniżej. Usuń zbędne pozycje przyciskiem ×.
                                     </p>
                                     <Watchlist
                                         items={watch}
