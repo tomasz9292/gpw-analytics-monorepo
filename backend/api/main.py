@@ -3462,6 +3462,34 @@ def _sanitize_index_code(value: str) -> str:
     return cleaned
 
 
+def _normalize_index_member_symbol(
+    symbol_raw: object,
+    symbol_base_raw: object = None,
+) -> str:
+    """Return the normalized GPW ticker for index membership entries."""
+
+    candidates: List[str] = []
+
+    for source in (symbol_base_raw, symbol_raw):
+        if not source:
+            continue
+        text = str(source).strip()
+        if not text:
+            continue
+        candidates.append(text)
+        if text.upper().endswith(".WA"):
+            stripped = text[:-3].strip()
+            if stripped:
+                candidates.append(stripped)
+
+    for candidate in candidates:
+        normalized = normalize_input_symbol(candidate)
+        if normalized:
+            return normalized
+
+    return ""
+
+
 def _collect_latest_index_membership(
     ch_client, index_codes: Iterable[str]
 ) -> Dict[str, List[str]]:
@@ -3481,7 +3509,8 @@ def _collect_latest_index_membership(
         )
         SELECT
             p.index_code,
-            p.symbol
+            p.symbol,
+            p.symbol_base
         FROM {TABLE_INDEX_PORTFOLIOS} AS p
         INNER JOIN latest AS l
             ON p.index_code = l.index_code AND p.effective_date = l.max_date
@@ -3494,18 +3523,24 @@ def _collect_latest_index_membership(
         rows = None
     if rows is None:
         rows = [
-            {"index_code": row[0], "symbol": row[1]}
+            {"index_code": row[0], "symbol": row[1], "symbol_base": row[2] if len(row) > 2 else None}
             for row in ch_client.query(query).result_rows
         ]
 
     membership: Dict[str, List[str]] = {}
     for row in rows:
-        code_raw = row.get("index_code") if isinstance(row, dict) else row[0]
-        symbol_raw = row.get("symbol") if isinstance(row, dict) else row[1]
+        if isinstance(row, dict):
+            code_raw = row.get("index_code")
+            symbol_raw = row.get("symbol")
+            symbol_base_raw = row.get("symbol_base")
+        else:
+            code_raw = row[0]
+            symbol_raw = row[1]
+            symbol_base_raw = row[2] if len(row) > 2 else None
         if not code_raw or not symbol_raw:
             continue
         code = str(code_raw).upper()
-        normalized_symbol = normalize_input_symbol(str(symbol_raw))
+        normalized_symbol = _normalize_index_member_symbol(symbol_raw, symbol_base_raw)
         if not normalized_symbol:
             continue
         bucket = membership.setdefault(code, [])
@@ -3661,7 +3696,7 @@ def _fetch_index_portfolio_history_map(
     _ensure_index_tables(ch_client)
     in_clause = ", ".join(f"'{code}'" for code in cleaned)
     query = f"""
-        SELECT index_code, index_name, effective_date, symbol
+        SELECT index_code, index_name, effective_date, symbol, symbol_base
         FROM {TABLE_INDEX_PORTFOLIOS}
         WHERE upper(index_code) IN ({in_clause})
         ORDER BY index_code, effective_date, symbol
@@ -3678,6 +3713,7 @@ def _fetch_index_portfolio_history_map(
                 "index_name": row[1],
                 "effective_date": row[2],
                 "symbol": row[3],
+                "symbol_base": row[4] if len(row) > 4 else None,
             }
             for row in ch_client.query(query).result_rows
         ]
@@ -3691,14 +3727,16 @@ def _fetch_index_portfolio_history_map(
             name_raw = row.get("index_name")
             effective_raw = row.get("effective_date")
             symbol_raw = row.get("symbol")
+            symbol_base_raw = row.get("symbol_base")
         else:
-            code_raw, name_raw, effective_raw, symbol_raw = row
+            code_raw, name_raw, effective_raw, symbol_raw, *rest = row
+            symbol_base_raw = rest[0] if rest else None
 
         if not code_raw or not symbol_raw:
             continue
 
         code = str(code_raw).upper()
-        symbol = normalize_input_symbol(str(symbol_raw))
+        symbol = _normalize_index_member_symbol(symbol_raw, symbol_base_raw)
         if not symbol:
             continue
 
