@@ -4722,7 +4722,7 @@ def _run_score_preview(req: ScorePreviewRequest) -> ScorePreviewResponse:
     else:
         prepared.sort(key=lambda item: item["score"], reverse=True)  # type: ignore[index]
 
-    limit = req.limit or auto_config.top_n
+    limit = req.limit or len(candidates)
     if limit:
         prepared = prepared[:limit]
 
