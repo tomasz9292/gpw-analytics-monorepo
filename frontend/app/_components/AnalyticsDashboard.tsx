@@ -129,6 +129,8 @@ type ScoreComponentRequest = {
     label?: string;
     min_value?: number;
     max_value?: number;
+    scoring?: { type: "linear_clamped"; worst: number; best: number };
+    normalize?: "none" | "percentile";
 };
 
 const PERCENT_BASED_SCORE_METRICS = new Set<ScoreComponentRequest["metric"]>([
@@ -247,6 +249,44 @@ const buildScoreComponents = (rules: ScoreBuilderRule[]): ScoreComponentRequest[
         const lookbackDays = resolveLookbackDays(option, rule.lookbackDays);
         const label = computeMetricLabel(option, lookbackDays, rule.label);
 
+        if (option.backendMetric === "price_change") {
+            const worstInput = parseOptionalNumber(rule.min);
+            const bestInput = parseOptionalNumber(rule.max);
+            let worst = clampNumber(
+                typeof worstInput === "number" && Number.isFinite(worstInput)
+                    ? worstInput
+                    : 0,
+                -1000,
+                1000
+            );
+            let best = clampNumber(
+                typeof bestInput === "number" && Number.isFinite(bestInput)
+                    ? bestInput
+                    : 100,
+                -1000,
+                1000
+            );
+            if (best <= worst) {
+                if (worst >= 1000) {
+                    worst = 999.999;
+                    best = 1000;
+                } else {
+                    best = Math.min(1000, worst + 0.0001);
+                }
+            }
+
+            acc.push({
+                metric: option.backendMetric,
+                lookback_days: lookbackDays,
+                weight: Number(weightNumeric),
+                direction,
+                label,
+                scoring: { type: "linear_clamped", worst, best },
+                normalize: rule.transform === "percentile" ? "percentile" : "none",
+            });
+            return acc;
+        }
+
         const rawMinValue = parseOptionalNumber(rule.min);
         const rawMaxValue = parseOptionalNumber(rule.max);
         const hasScale =
@@ -280,6 +320,9 @@ const buildScoreComponents = (rules: ScoreBuilderRule[]): ScoreComponentRequest[
                       max_value: maxValue,
                   }
                 : {}),
+            ...(rule.transform === "percentile"
+                ? { normalize: "percentile" as const }
+                : {}),
         });
         return acc;
     }, []);
@@ -302,7 +345,7 @@ type ScoreMetricLookbackConfig = {
 type ScoreMetricOption = {
     value: string;
     label: string;
-    backendMetric: "total_return" | "volatility" | "max_drawdown" | "sharpe";
+    backendMetric: "total_return" | "volatility" | "max_drawdown" | "sharpe" | "price_change";
     lookback: number;
     defaultDirection: "asc" | "desc";
     description?: string;
@@ -361,7 +404,7 @@ const SCORE_METRIC_OPTIONS: ScoreMetricOption[] = [
     {
         value: "total_return_custom",
         label: "Zmiana ceny (dowolny okres)",
-        backendMetric: "total_return",
+        backendMetric: "price_change",
         lookback: 252,
         defaultDirection: "desc",
         description: "Wybierz liczbę dni wstecz, aby policzyć zmianę ceny.",
@@ -406,6 +449,40 @@ const clampNumber = (value: number, min: number, max: number): number => {
     if (value < min) return min;
     if (value > max) return max;
     return value;
+};
+
+const buildLinearClampPreview = (
+    worst: number,
+    best: number,
+    direction: "asc" | "desc"
+) => {
+    let adjustedWorst = Number.isFinite(worst) ? worst : 0;
+    let adjustedBest = Number.isFinite(best) ? best : 100;
+    if (adjustedBest <= adjustedWorst) {
+        adjustedBest = adjustedWorst + 0.0001;
+    }
+    const span = Math.max(adjustedBest - adjustedWorst, 1);
+    const margin = span * 0.25;
+    const start = adjustedWorst - margin;
+    const end = adjustedBest + margin;
+    const steps = 24;
+    const data: { value: number; score: number }[] = [];
+    for (let i = 0; i <= steps; i += 1) {
+        const value = start + ((end - start) * i) / steps;
+        let score: number;
+        if (value <= adjustedWorst) {
+            score = 0;
+        } else if (value >= adjustedBest) {
+            score = 1;
+        } else {
+            score = (value - adjustedWorst) / (adjustedBest - adjustedWorst);
+        }
+        if (direction === "asc") {
+            score = 1 - score;
+        }
+        data.push({ value: Number(value.toFixed(2)), score: Number(score.toFixed(3)) });
+    }
+    return data;
 };
 
 const resolveLookbackDays = (
@@ -1147,6 +1224,8 @@ type ScorePreviewRulePayload = {
     lookbackDays?: number | null;
     min_value?: number;
     max_value?: number;
+    scoring?: { type: "linear_clamped"; worst: number; best: number };
+    normalize?: "none" | "percentile";
 };
 
 type ScorePreviewRequest = {
@@ -1168,6 +1247,8 @@ type ScoreTemplateRule = {
     lookbackDays?: number | null;
     min?: number | null;
     max?: number | null;
+    scoring?: { type: "linear_clamped"; worst: number; best: number } | null;
+    normalize?: "none" | "percentile" | null;
 };
 
 type ScoreTemplate = {
@@ -1900,6 +1981,8 @@ async function backtestPortfolioByScore(
             direction: component.direction,
             min_value: component.min_value,
             max_value: component.max_value,
+            ...(component.scoring ? { scoring: component.scoring } : {}),
+            normalize: component.normalize ?? "none",
         })),
         filters: buildUniverseFiltersPayload(resolvedUniverse),
     });
@@ -2430,15 +2513,23 @@ async function previewScoreRanking(payload: ScorePreviewRequest): Promise<ScoreP
         throw new Error("Dodaj co najmniej jedną metrykę scoringową.");
     }
 
-    const prepared = removeUndefined({
-        name: payload.name,
-        description: payload.description,
-        rules: payload.rules.map((rule) => ({
+    const preparedRules = payload.rules.map((rule) =>
+        removeUndefined({
             metric: rule.metric,
             weight: rule.weight,
             direction: rule.direction,
             label: rule.label,
-        })),
+            min_value: rule.min_value,
+            max_value: rule.max_value,
+            scoring: rule.scoring,
+            normalize: rule.normalize ?? "none",
+        })
+    );
+
+    const prepared = removeUndefined({
+        name: payload.name,
+        description: payload.description,
+        rules: preparedRules,
         limit: payload.limit,
         universe: payload.universe ?? undefined,
         sort: payload.sort ?? undefined,
@@ -10934,6 +11025,8 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                 lookbackDays: component.lookback_days,
                 min_value: component.min_value,
                 max_value: component.max_value,
+                ...(component.scoring ? { scoring: component.scoring } : {}),
+                normalize: component.normalize ?? "none",
             }));
 
             const limitValue = !scoreLimitInvalid && Number.isFinite(scoreLimit)
@@ -11882,6 +11975,45 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                             rule.metric;
                                         const isCustomTotalReturn =
                                             metricOption?.value === "total_return_custom";
+                                        const rawWorstValue = parseOptionalNumber(rule.min);
+                                        const rawBestValue = parseOptionalNumber(rule.max);
+                                        let previewWorst = clampNumber(
+                                            typeof rawWorstValue === "number" &&
+                                                Number.isFinite(rawWorstValue)
+                                                ? rawWorstValue
+                                                : 0,
+                                            -1000,
+                                            1000
+                                        );
+                                        let previewBest = clampNumber(
+                                            typeof rawBestValue === "number" &&
+                                                Number.isFinite(rawBestValue)
+                                                ? rawBestValue
+                                                : 100,
+                                            -1000,
+                                            1000
+                                        );
+                                        if (previewBest <= previewWorst) {
+                                            if (previewWorst >= 1000) {
+                                                previewWorst = 999.999;
+                                                previewBest = 1000;
+                                            } else {
+                                                previewBest = Math.min(1000, previewWorst + 0.0001);
+                                            }
+                                        }
+                                        const scalePreviewData = isCustomTotalReturn
+                                            ? buildLinearClampPreview(
+                                                  previewWorst,
+                                                  previewBest,
+                                                  rule.direction
+                                              )
+                                            : [];
+                                        const clampScaleInput = (value: string): string => {
+                                            const parsed = parseOptionalNumber(value);
+                                            if (typeof parsed !== "number") return value;
+                                            const clamped = clampNumber(parsed, -1000, 1000);
+                                            return `${clamped}`;
+                                        };
 
                                         return (
                                             <div
@@ -11920,7 +12052,13 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                                                     selectedOption,
                                                                                     lookbackDays
                                                                                 ) ?? value;
-                                                                            return {
+                                                                            const isPriceChangeSelected =
+                                                                                selectedOption?.value ===
+                                                                                "total_return_custom";
+                                                                            const wasPriceChange =
+                                                                                metricOption?.value ===
+                                                                                "total_return_custom";
+                                                                            const next: ScoreBuilderRule = {
                                                                                 ...r,
                                                                                 metric: value,
                                                                                 label,
@@ -11929,6 +12067,31 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                                                     r.direction,
                                                                                 lookbackDays,
                                                                             };
+                                                                            if (isPriceChangeSelected) {
+                                                                                next.min =
+                                                                                    typeof r.min === "string" &&
+                                                                                    r.min.trim().length > 0
+                                                                                        ? clampScaleInput(r.min)
+                                                                                        : "0";
+                                                                                next.max =
+                                                                                    typeof r.max === "string" &&
+                                                                                    r.max.trim().length > 0
+                                                                                        ? clampScaleInput(r.max)
+                                                                                        : "100";
+                                                                                if (next.transform !== "percentile") {
+                                                                                    next.transform = "raw";
+                                                                                }
+                                                                            } else if (wasPriceChange &&
+                                                                                !isPriceChangeSelected
+                                                                            ) {
+                                                                                if (
+                                                                                    next.transform !== "percentile" &&
+                                                                                    next.transform !== "zscore"
+                                                                                ) {
+                                                                                    next.transform = "raw";
+                                                                                }
+                                                                            }
+                                                                            return next;
                                                                         })
                                                                     );
                                                                 }}
@@ -12117,16 +12280,20 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                             </div>
                                                         </div>
                                                         {isCustomTotalReturn ? (
-                                                            <div className="md:col-span-2 rounded-2xl border border-soft bg-surface p-4">
-                                                                <div className="text-sm font-medium text-primary">
+                                                            <div className="md:col-span-2 space-y-3 rounded-2xl border border-soft bg-surface p-4">
+                                                                <div className="flex items-center gap-2 text-sm font-medium text-primary">
                                                                     Skala punktacji
+                                                                    <span
+                                                                        className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-soft text-[10px] text-muted"
+                                                                        title="Skala liniowa, obcięta do [0,1]. r ≤ najgorszy → 0; r ≥ najlepszy → 1; pomiędzy → liniowo."
+                                                                    >
+                                                                        i
+                                                                    </span>
                                                                 </div>
                                                                 <div className="text-xs text-subtle">
-                                                                    0 punktów, jeśli metryka jest mniejsza lub równa wartości
-                                                                    „Najgorszy wynik”. Maksimum punktów otrzymasz powyżej
-                                                                    wartości „Najlepszy wynik”.
+                                                                    Skala liniowa, obcięta do [0,1]. Wartości r poniżej „Najgorszego wyniku” dostają 0, powyżej „Najlepszego” otrzymują 1.
                                                                 </div>
-                                                                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                                                                <div className="grid gap-3 sm:grid-cols-2">
                                                                     <label className="flex flex-col gap-2">
                                                                         <span className="text-xs uppercase tracking-wide text-muted">
                                                                             Najgorszy wynik
@@ -12134,6 +12301,9 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                                         <div className="relative">
                                                                             <input
                                                                                 type="number"
+                                                                                min={-1000}
+                                                                                max={1000}
+                                                                                step={0.1}
                                                                                 value={rule.min ?? ""}
                                                                                 onChange={(e) =>
                                                                                     setScoreRules((prev) =>
@@ -12144,6 +12314,16 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                                                         )
                                                                                     )
                                                                                 }
+                                                                                onBlur={(e) => {
+                                                                                    const sanitized = clampScaleInput(e.target.value);
+                                                                                    if (sanitized !== e.target.value) {
+                                                                                        setScoreRules((prev) =>
+                                                                                            prev.map((r) =>
+                                                                                                r.id === rule.id ? { ...r, min: sanitized } : r
+                                                                                            )
+                                                                                        );
+                                                                                    }
+                                                                                }}
                                                                                 className={`${inputBaseClasses} pr-10`}
                                                                             />
                                                                             <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-muted">
@@ -12158,6 +12338,9 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                                         <div className="relative">
                                                                             <input
                                                                                 type="number"
+                                                                                min={-1000}
+                                                                                max={1000}
+                                                                                step={0.1}
                                                                                 value={rule.max ?? ""}
                                                                                 onChange={(e) =>
                                                                                     setScoreRules((prev) =>
@@ -12168,6 +12351,16 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                                                         )
                                                                                     )
                                                                                 }
+                                                                                onBlur={(e) => {
+                                                                                    const sanitized = clampScaleInput(e.target.value);
+                                                                                    if (sanitized !== e.target.value) {
+                                                                                        setScoreRules((prev) =>
+                                                                                            prev.map((r) =>
+                                                                                                r.id === rule.id ? { ...r, max: sanitized } : r
+                                                                                            )
+                                                                                        );
+                                                                                    }
+                                                                                }}
                                                                                 className={`${inputBaseClasses} pr-10`}
                                                                             />
                                                                             <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-muted">
@@ -12175,6 +12368,20 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                                             </span>
                                                                         </div>
                                                                     </label>
+                                                                </div>
+                                                                {scalePreviewData.length > 0 && (
+                                                                    <div className="h-24 w-full rounded-xl bg-soft-surface/60 p-2">
+                                                                        <ResponsiveContainer width="100%" height="100%">
+                                                                            <LineChart data={scalePreviewData} margin={{ top: 4, right: 8, left: 8, bottom: 4 }}>
+                                                                                <XAxis dataKey="value" type="number" domain={["auto", "auto"]} hide />
+                                                                                <YAxis dataKey="score" domain={[0, 1]} hide />
+                                                                                <Line type="monotone" dataKey="score" stroke="#4F46E5" strokeWidth={2} dot={false} isAnimationActive={false} />
+                                                                            </LineChart>
+                                                                        </ResponsiveContainer>
+                                                                    </div>
+                                                                )}
+                                                                <div className="text-[10px] uppercase tracking-wide text-muted">
+                                                                    r [%] → score
                                                                 </div>
                                                             </div>
                                                         ) : (
@@ -12221,35 +12428,61 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                         )}
                                                     </div>
                                                     <div className="grid gap-3 md:grid-cols-2">
-                                                        <label className="flex flex-col gap-2">
-                                                            <span className="text-xs uppercase tracking-wide text-muted">
-                                                                Normalizacja
-                                                            </span>
-                                                            <select
-                                                                value={rule.transform ?? "raw"}
-                                                                onChange={(e) =>
-                                                                    setScoreRules((prev) =>
-                                                                        prev.map((r) =>
-                                                                            r.id === rule.id
-                                                                                ? {
-                                                                                      ...r,
-                                                                                      transform: e.target
-                                                                                          .value as ScoreBuilderRule["transform"],
-                                                                                  }
-                                                                                : r
+                                                        {isCustomTotalReturn ? (
+                                                            <label className="flex items-center gap-3 rounded-xl border border-soft bg-soft-surface px-3 py-2 text-sm text-primary">
+                                                                <input
+                                                                    type="checkbox"
+                                                                    checked={rule.transform === "percentile"}
+                                                                    onChange={(e) =>
+                                                                        setScoreRules((prev) =>
+                                                                            prev.map((r) =>
+                                                                                r.id === rule.id
+                                                                                    ? {
+                                                                                          ...r,
+                                                                                          transform: e.target.checked
+                                                                                              ? "percentile"
+                                                                                              : "raw",
+                                                                                      }
+                                                                                    : r
+                                                                            )
                                                                         )
-                                                                    )
-                                                                }
-                                                                className={inputBaseClasses}
-                                                            >
-                                                                <option value="raw">Bez zmian</option>
-                                                                <option value="zscore">Z-score</option>
-                                                                <option value="percentile">Percentyl</option>
-                                                            </select>
-                                                        </label>
+                                                                    }
+                                                                    className="h-4 w-4 rounded border-soft text-primary focus:ring-primary"
+                                                                />
+                                                                <span className="font-medium">Zastosuj normalizację percentylową po skali</span>
+                                                            </label>
+                                                        ) : (
+                                                            <label className="flex flex-col gap-2">
+                                                                <span className="text-xs uppercase tracking-wide text-muted">
+                                                                    Normalizacja
+                                                                </span>
+                                                                <select
+                                                                    value={rule.transform ?? "raw"}
+                                                                    onChange={(e) =>
+                                                                        setScoreRules((prev) =>
+                                                                            prev.map((r) =>
+                                                                                r.id === rule.id
+                                                                                    ? {
+                                                                                          ...r,
+                                                                                          transform: e.target
+                                                                                              .value as ScoreBuilderRule["transform"],
+                                                                                      }
+                                                                                    : r
+                                                                            )
+                                                                        )
+                                                                    }
+                                                                    className={inputBaseClasses}
+                                                                >
+                                                                    <option value="raw">Bez zmian</option>
+                                                                    <option value="zscore">Z-score</option>
+                                                                    <option value="percentile">Percentyl</option>
+                                                                </select>
+                                                            </label>
+                                                        )}
                                                         <div className="text-xs text-subtle">
-                                                            Metryki korzystają z danych cenowych (zwroty, zmienność,
-                                                            Sharpe). Wagi są skalowane automatycznie.
+                                                            {isCustomTotalReturn
+                                                                ? "Percentyle liczone po score."
+                                                                : "Metryki korzystają z danych cenowych (zwroty, zmienność, Sharpe). Wagi są skalowane automatycznie."}
                                                         </div>
                                                     </div>
                                                 </div>

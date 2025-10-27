@@ -542,6 +542,126 @@ def test_score_preview_applies_point_scale(monkeypatch):
     assert response.rows[2].score == pytest.approx(0.0)
 
 
+def test_linear_clamped_scoring_higher_direction():
+    component = main.ScoreComponent(
+        metric="price_change",
+        lookback_days=252,
+        weight=1.0,
+        direction="desc",
+        scoring=main.LinearClampedScoring(type="linear_clamped", worst=0, best=100),
+    )
+
+    values = [-30.0, 0.0, 40.0, 80.0, 100.0, 120.0]
+    expected = [0.0, 0.0, 0.4, 0.8, 1.0, 1.0]
+    for value, result in zip(values, expected):
+        assert main._normalize_component_score(value, component) == pytest.approx(result)
+
+
+def test_linear_clamped_scoring_lower_direction():
+    component = main.ScoreComponent(
+        metric="price_change",
+        lookback_days=252,
+        weight=1.0,
+        direction="asc",
+        scoring=main.LinearClampedScoring(type="linear_clamped", worst=0, best=100),
+    )
+
+    values = [-30.0, 0.0, 40.0, 80.0, 100.0, 120.0]
+    expected = [1.0, 1.0, 0.6, 0.2, 0.0, 0.0]
+    for value, result in zip(values, expected):
+        assert main._normalize_component_score(value, component) == pytest.approx(result)
+
+
+def test_linear_clamped_scoring_custom_bounds():
+    component = main.ScoreComponent(
+        metric="price_change",
+        lookback_days=252,
+        weight=1.0,
+        direction="desc",
+        scoring=main.LinearClampedScoring(type="linear_clamped", worst=30, best=130),
+    )
+
+    assert main._normalize_component_score(30.0, component) == pytest.approx(0.0)
+    assert main._normalize_component_score(80.0, component) == pytest.approx(0.5)
+    assert main._normalize_component_score(130.0, component) == pytest.approx(1.0)
+
+
+def test_linear_clamped_scoring_equal_bounds_binary():
+    component = main.ScoreComponent(
+        metric="price_change",
+        lookback_days=252,
+        weight=1.0,
+        direction="desc",
+        scoring=main.LinearClampedScoring(type="linear_clamped", worst=50, best=50),
+    )
+
+    assert main._normalize_component_score(40.0, component) == 0.0
+    assert main._normalize_component_score(60.0, component) == 1.0
+
+
+def test_price_change_metric_returns_percent():
+    closes = [
+        (date(2023, 1, 1), 100.0),
+        (date(2023, 1, 5), 150.0),
+    ]
+
+    result = main._compute_metric_value(closes, "price_change", 4)
+    assert result == pytest.approx(50.0)
+
+
+def test_percentile_after_scale_changes_ranking():
+    data = {
+        "AAA": [
+            ("2023-01-01", 100.0),
+            ("2023-01-02", 100.0),
+            ("2023-01-03", 100.0),
+            ("2023-01-04", 100.0),
+            ("2023-01-05", 100.0),
+        ],
+        "BBB": [
+            ("2023-01-01", 100.0),
+            ("2023-01-02", 110.0),
+            ("2023-01-03", 120.0),
+            ("2023-01-04", 150.0),
+            ("2023-01-05", 200.0),
+        ],
+        "CCC": [
+            ("2023-01-01", 100.0),
+            ("2023-01-02", 115.0),
+            ("2023-01-03", 130.0),
+            ("2023-01-04", 170.0),
+            ("2023-01-05", 250.0),
+        ],
+    }
+
+    fake = FakeClickHouse(data)
+    components = [
+        main.ScoreComponent(
+            metric="price_change",
+            lookback_days=4,
+            weight=1.0,
+            direction="desc",
+            scoring=main.LinearClampedScoring(type="linear_clamped", worst=0, best=100),
+            normalize="none",
+        )
+    ]
+
+    ranked_plain = main._rank_symbols_by_score(fake, ["AAA", "BBB", "CCC"], components)
+    assert [row[0] for row in ranked_plain] == ["BBB", "CCC", "AAA"]
+
+    components_percentile = [
+        main.ScoreComponent(
+            metric="price_change",
+            lookback_days=4,
+            weight=1.0,
+            direction="desc",
+            scoring=main.LinearClampedScoring(type="linear_clamped", worst=0, best=100),
+            normalize="percentile",
+        )
+    ]
+
+    ranked_percentile = main._rank_symbols_by_score(fake, ["AAA", "BBB", "CCC"], components_percentile)
+    assert [row[0] for row in ranked_percentile] == ["CCC", "BBB", "AAA"]
 def test_collect_data_returns_filtered_quotes(monkeypatch):
     data = {
         "AAA": [
