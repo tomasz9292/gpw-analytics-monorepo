@@ -56,6 +56,7 @@ DEFAULT_COMPANIES_TABLE_DDL = textwrap.dedent(
         ticker String,
         code String,
         symbol_gpw LowCardinality(String),
+        symbol_gpw_benchmark LowCardinality(Nullable(String)),
         symbol_stooq LowCardinality(Nullable(String)),
         symbol_yahoo LowCardinality(Nullable(String)),
         symbol_google LowCardinality(Nullable(String)),
@@ -1315,6 +1316,7 @@ _OHLC_SCHEDULE_STATE = OhlcSyncScheduleStatus()
 COMPANY_SYMBOL_CANDIDATES = [
     "symbol",
     "symbol_gpw",
+    "symbol_gpw_benchmark",
     "ticker",
     "code",
     "short_name",
@@ -1341,6 +1343,7 @@ COMPANY_COLUMN_MAP: Dict[str, CompanyFieldTarget] = {
     "ticker": ("company", "raw_symbol", "text"),
     "code": ("company", "raw_symbol", "text"),
     "symbol_gpw": ("company", "symbol_gpw", "text"),
+    "symbol_gpw_benchmark": ("company", "symbol_gpw_benchmark", "text"),
     "symbol_stooq": ("company", "symbol_stooq", "text"),
     "symbol_yahoo": ("company", "symbol_yahoo", "text"),
     "symbol_google": ("company", "symbol_google", "text"),
@@ -1525,6 +1528,11 @@ def _quote_identifier(identifier: str) -> str:
     return f"`{escaped}`"
 
 
+def _quote_sql_string(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace("'", "''")
+    return f"'{escaped}'"
+
+
 def _get_company_columns(ch_client) -> List[str]:
     global _COMPANY_COLUMNS_CACHE
     if _COMPANY_COLUMNS_CACHE is not None:
@@ -1565,6 +1573,33 @@ def _get_company_columns(ch_client) -> List[str]:
 
         _COMPANY_COLUMNS_CACHE = columns
         return _COMPANY_COLUMNS_CACHE
+
+
+def _ensure_company_benchmark_column(ch_client, columns: Optional[Sequence[str]] = None) -> str:
+    global _COMPANY_COLUMNS_CACHE
+    target = "symbol_gpw_benchmark"
+    active_columns = list(columns) if columns is not None else _get_company_columns(ch_client)
+    lowered_to_original = {col.lower(): col for col in active_columns}
+    existing = lowered_to_original.get(target)
+    if existing:
+        return existing
+
+    try:
+        ch_client.command(
+            f"ALTER TABLE {TABLE_COMPANIES} "
+            "ADD COLUMN IF NOT EXISTS symbol_gpw_benchmark LowCardinality(Nullable(String)) "
+            "AFTER symbol_gpw"
+        )
+    except Exception:
+        ch_client.command(
+            f"ALTER TABLE {TABLE_COMPANIES} "
+            "ADD COLUMN IF NOT EXISTS symbol_gpw_benchmark LowCardinality(Nullable(String))"
+        )
+
+    _COMPANY_COLUMNS_CACHE = None
+    refreshed = _get_company_columns(ch_client)
+    lowered_to_original = {col.lower(): col for col in refreshed}
+    return lowered_to_original.get(target, "symbol_gpw_benchmark")
 
 
 def _find_company_symbol_column(columns: Sequence[str]) -> Optional[str]:
@@ -1609,6 +1644,20 @@ def _iter_symbol_aliases(value: str) -> Iterable[str]:
             continue
         seen.add(upper_candidate)
         yield candidate
+
+
+def _normalize_benchmark_symbol(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    normalized = re.sub(r"\s+", "", cleaned.upper())
+    if normalized.endswith(".WA"):
+        base = normalized[:-3].strip()
+        if base:
+            normalized = f"{base}.WA"
+    return normalized
 
 
 def _build_company_symbol_lookup(ch_client) -> Dict[str, str]:
@@ -1724,6 +1773,7 @@ def _normalize_company_row(row: Dict[str, Any], symbol_column: str) -> Optional[
     canonical: Dict[str, Any] = {
         "raw_symbol": None,
         "symbol_gpw": None,
+        "symbol_gpw_benchmark": None,
         "symbol_stooq": None,
         "symbol_yahoo": None,
         "symbol_google": None,
@@ -2194,6 +2244,7 @@ class CompanyProfile(BaseModel):
     symbol: str
     raw_symbol: str
     symbol_gpw: Optional[str] = None
+    symbol_gpw_benchmark: Optional[str] = None
     symbol_stooq: Optional[str] = None
     symbol_yahoo: Optional[str] = None
     symbol_google: Optional[str] = None
@@ -2213,6 +2264,30 @@ class CompanyProfile(BaseModel):
     fundamentals: CompanyFundamentals = Field(default_factory=CompanyFundamentals)
     extra: Dict[str, Any] = Field(default_factory=dict)
     raw: Dict[str, Any] = Field(default_factory=dict)
+
+
+class CompanyBenchmarkSymbolUpdateRequest(BaseModel):
+    symbol: str = Field(..., description="Symbol spółki w tabeli companies")
+    benchmark_symbol: Optional[str] = Field(
+        default=None,
+        description="Symbol GPW Benchmark przypisany do spółki (np. CDR.WA)",
+    )
+
+    @field_validator("symbol")
+    @classmethod
+    def _validate_symbol(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Symbol spółki nie może być pusty")
+        return cleaned
+
+    @field_validator("benchmark_symbol")
+    @classmethod
+    def _validate_benchmark_symbol(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
 
 
 class PortfolioPoint(BaseModel):
@@ -2521,6 +2596,18 @@ class IndexListResponse(BaseModel):
     items: List[IndexListItemResponse]
 
 
+class BenchmarkSymbolResponse(BaseModel):
+    symbol: str
+    symbol_base: Optional[str] = None
+    indices: List[str] = Field(default_factory=list)
+    company_name: Optional[str] = None
+
+
+class BenchmarkSymbolListResponse(BaseModel):
+    items: List[BenchmarkSymbolResponse]
+
+
+# =========================
 # =========================
 # /companies – dane o spółkach
 # =========================
@@ -2804,6 +2891,57 @@ def get_company_profile(symbol: str) -> CompanyProfile:
     fundamentals_model = CompanyFundamentals(**fundamentals_payload)
     profile = CompanyProfile(fundamentals=fundamentals_model, **normalized)
     return profile
+
+
+@api_router.post("/companies/benchmark-symbol", response_model=CompanyProfile)
+def update_company_benchmark_symbol(
+    payload: CompanyBenchmarkSymbolUpdateRequest,
+) -> CompanyProfile:
+    ch = get_ch()
+    columns = _get_company_columns(ch)
+    symbol_column = _find_company_symbol_column(columns)
+    if not symbol_column:
+        raise HTTPException(
+            500,
+            f"Tabela {TABLE_COMPANIES} musi zawierać kolumnę z symbolem (np. symbol lub ticker)",
+        )
+
+    benchmark_column = _ensure_company_benchmark_column(ch, columns)
+    normalized_symbol = normalize_input_symbol(payload.symbol)
+    if not normalized_symbol:
+        raise HTTPException(400, "Symbol spółki nie może być pusty")
+
+    try:
+        existing_profile = get_company_profile(payload.symbol)
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            raise HTTPException(404, f"Nie znaleziono spółki o symbolu {payload.symbol}") from exc
+        raise
+
+    raw_symbol = existing_profile.raw_symbol.strip()
+    if not raw_symbol:
+        raise HTTPException(500, "Nie udało się ustalić symbolu spółki w bazie")
+
+    benchmark_symbol = _normalize_benchmark_symbol(payload.benchmark_symbol)
+    value_expr = "NULL" if benchmark_symbol is None else _quote_sql_string(benchmark_symbol)
+    where_expr = _quote_sql_string(raw_symbol)
+    update_sql = (
+        f"ALTER TABLE {TABLE_COMPANIES} UPDATE {_quote_identifier(benchmark_column)} = {value_expr} "
+        f"WHERE {_quote_identifier(symbol_column)} = {where_expr}"
+    )
+
+    try:
+        ch.command(update_sql)
+    except Exception as exc:  # pragma: no cover - zależy od konfiguracji DB
+        raise HTTPException(
+            500,
+            f"Nie udało się zaktualizować symbolu GPW Benchmark: {exc}",
+        ) from exc
+
+    global _COMPANY_SYMBOL_LOOKUP
+    _COMPANY_SYMBOL_LOOKUP = None
+
+    return get_company_profile(raw_symbol)
 
 
 # =========================
@@ -5495,6 +5633,77 @@ def list_index_portfolios(codes: Optional[List[str]] = Query(default=None)) -> I
     for portfolio in portfolios:
         portfolio.constituents.sort(key=lambda item: item.symbol)
     return IndexPortfoliosResponse(portfolios=portfolios)
+
+
+@api_router.get("/indices/benchmark/symbols", response_model=BenchmarkSymbolListResponse)
+def list_benchmark_symbols(
+    q: Optional[str] = Query(
+        default=None,
+        description="Fragment symbolu, nazwy spółki lub kodu indeksu",
+    ),
+    limit: int = Query(default=1000, ge=1, le=10000),
+) -> BenchmarkSymbolListResponse:
+    ch = get_ch()
+    _ensure_index_tables(ch)
+
+    conditions: List[str] = []
+    params: Dict[str, Any] = {"limit": limit}
+    if q:
+        params["q"] = q
+        conditions.append("positionCaseInsensitive(symbol, %(q)s) > 0")
+        conditions.append("positionCaseInsensitive(coalesce(symbol_base, ''), %(q)s) > 0")
+        conditions.append("positionCaseInsensitive(coalesce(company_name, ''), %(q)s) > 0")
+        conditions.append("positionCaseInsensitive(index_code, %(q)s) > 0")
+
+    where_clause = ""
+    if conditions:
+        where_clause = "WHERE " + " OR ".join(conditions)
+
+    query = f"""
+        SELECT
+            symbol,
+            anyHeavy(symbol_base) AS symbol_base,
+            groupUniqArray(index_code) AS indices,
+            anyHeavy(company_name) AS company_name
+        FROM {TABLE_INDEX_PORTFOLIOS}
+        {where_clause}
+        GROUP BY symbol
+        ORDER BY symbol
+        LIMIT %(limit)s
+    """
+
+    try:
+        result = ch.query(query, parameters=params)
+    except Exception as exc:  # pragma: no cover - zależy od konfiguracji DB
+        raise HTTPException(500, f"Nie udało się pobrać symboli GPW Benchmark: {exc}") from exc
+
+    column_names = list(result.column_names)
+    items: List[BenchmarkSymbolResponse] = []
+
+    for row in result.result_rows:
+        payload = {col: value for col, value in zip(column_names, row)}
+        symbol_raw = _convert_clickhouse_value(payload.get("symbol"))
+        if not symbol_raw:
+            continue
+        symbol_text = str(symbol_raw)
+        indices_raw = _convert_clickhouse_value(payload.get("indices"))
+        if isinstance(indices_raw, (list, tuple)):
+            indices_list = [
+                str(item)
+                for item in indices_raw
+                if item is not None and str(item).strip()
+            ]
+        else:
+            indices_list = []
+        item = BenchmarkSymbolResponse(
+            symbol=symbol_text,
+            symbol_base=_convert_clickhouse_value(payload.get("symbol_base")) or None,
+            indices=indices_list,
+            company_name=_convert_clickhouse_value(payload.get("company_name")) or None,
+        )
+        items.append(item)
+
+    return BenchmarkSymbolListResponse(items=items)
 
 
 @api_router.get("/indices/list", response_model=IndexListResponse)
