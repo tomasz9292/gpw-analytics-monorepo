@@ -12,7 +12,7 @@ import unicodedata
 from datetime import date, datetime, timedelta, timezone
 from math import isfinite, sqrt
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple, TypedDict
-from typing import Literal
+from typing import Literal, cast
 from uuid import uuid4
 
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
@@ -167,7 +167,7 @@ _OHLC_IMPORT_REQUIRED_COLUMNS = ("symbol", "date", "open", "high", "low", "close
 _OHLC_IMPORT_OPTIONAL_COLUMNS = ("volume",)
 _MAX_OHLC_IMPORT_ERRORS = 50
 
-ALLOWED_SCORE_METRICS = {"total_return", "volatility", "max_drawdown", "sharpe"}
+ALLOWED_SCORE_METRICS = {"total_return", "volatility", "max_drawdown", "sharpe", "price_change"}
 
 
 SHAREHOLDER_KEYWORDS = [
@@ -2369,6 +2369,20 @@ class PortfolioScoreItem(BaseModel):
     score: float
 
 
+class LinearClampedScoring(BaseModel):
+    type: Literal["linear_clamped"]
+    worst: float
+    best: float
+
+    @model_validator(mode="after")
+    def _validate_bounds(self):  # type: ignore[override]
+        if not isfinite(self.worst) or not isfinite(self.best):
+            raise ValueError("worst and best must be finite numbers")
+        if self.best < self.worst:
+            raise ValueError("best must be greater than or equal to worst")
+        return self
+
+
 class ScoreComponent(BaseModel):
     lookback_days: int = Field(..., ge=1, le=3650)
     metric: str = Field(..., description="Typ metryki score'u (np. total_return)")
@@ -2376,6 +2390,8 @@ class ScoreComponent(BaseModel):
     direction: str = Field("desc", pattern="^(asc|desc)$")
     min_value: Optional[float] = Field(default=None)
     max_value: Optional[float] = Field(default=None)
+    scoring: Optional[LinearClampedScoring] = None
+    normalize: Literal["none", "percentile"] = "none"
 
     @field_validator("metric")
     @classmethod
@@ -2537,6 +2553,8 @@ class ScoreRulePayload(BaseModel):
     lookback: int | None = Field(None, ge=5, le=3650)
     min_value: float | None = None
     max_value: float | None = None
+    scoring: LinearClampedScoring | None = None
+    normalize: Literal["none", "percentile"] | None = None
 
 
 class ScorePreviewRequest(BaseModel):
@@ -3799,7 +3817,7 @@ def _compute_metric_value(
     if not closes:
         return None
 
-    if metric == "total_return":
+    if metric in {"total_return", "price_change"}:
         last_dt, last_close = closes[-1]
         if last_close <= 0:
             return None
@@ -3812,7 +3830,10 @@ def _compute_metric_value(
                 break
         if base_close is None or base_close <= 0:
             return None
-        return (last_close / base_close) - 1.0
+        result = (last_close / base_close) - 1.0
+        if metric == "price_change":
+            return result * 100.0
+        return result
 
     window = _slice_closes_window(closes, lookback_days)
     if len(window) < 2:
@@ -3853,6 +3874,26 @@ def _compute_metric_value(
 
 
 def _normalize_component_score(value: float, component: ScoreComponent) -> float:
+    scoring = component.scoring
+    if scoring and scoring.type == "linear_clamped":
+        worst = scoring.worst
+        best = scoring.best
+        if best == worst:
+            if component.direction == "asc":
+                return 1.0 if value < best else 0.0
+            return 1.0 if value > best else 0.0
+
+        if value <= worst:
+            score = 0.0
+        elif value >= best:
+            score = 1.0
+        else:
+            score = (value - worst) / (best - worst)
+
+        if component.direction == "asc":
+            return 1.0 - score
+        return score
+
     min_value = component.min_value
     max_value = component.max_value
     if (
@@ -3876,36 +3917,56 @@ def _normalize_component_score(value: float, component: ScoreComponent) -> float
     return direction * value
 
 
-def _calculate_score_from_prepared(
+def _evaluate_components_for_prepared(
     closes: Sequence[Tuple[date, float]],
     components: List[ScoreComponent],
+    *,
     include_metrics: bool = False,
-) -> Optional[Tuple[float, Dict[str, float]] | float]:
+) -> Optional[Tuple[List[float], Optional[Dict[str, float]]]]:
     if not closes:
         return None
 
-    total_weight = 0.0
-    weighted = 0.0
-    metrics: Dict[str, float] = {}
+    metrics: Optional[Dict[str, float]] = {} if include_metrics else None
+    adjusted_scores: List[float] = []
 
     for comp in components:
         value = _compute_metric_value(closes, comp.metric, comp.lookback_days)
         if value is None:
             return None
 
-        key = f"{comp.metric}_{comp.lookback_days}"
-        metrics[key] = value
+        if metrics is not None:
+            key = f"{comp.metric}_{comp.lookback_days}"
+            metrics[key] = value
 
         adjusted = _normalize_component_score(value, comp)
-        weighted += comp.weight * adjusted
-        total_weight += comp.weight
+        adjusted_scores.append(adjusted)
 
+    return adjusted_scores, metrics
+
+
+def _calculate_score_from_prepared(
+    closes: Sequence[Tuple[date, float]],
+    components: List[ScoreComponent],
+    include_metrics: bool = False,
+) -> Optional[Tuple[float, Dict[str, float]] | float]:
+    evaluated = _evaluate_components_for_prepared(
+        closes, components, include_metrics=include_metrics
+    )
+    if evaluated is None:
+        return None
+
+    adjusted_scores, metrics = evaluated
+    total_weight = sum(comp.weight for comp in components)
     if total_weight <= 0:
         return None
 
+    weighted = 0.0
+    for idx, comp in enumerate(components):
+        weighted += comp.weight * adjusted_scores[idx]
+
     score = weighted / total_weight
     if include_metrics:
-        return score, metrics
+        return score, metrics or {}
     return score
 
 
@@ -4531,22 +4592,62 @@ def _rank_symbols_by_score(
     history_map = _collect_close_history_bulk(
         ch_client, candidates, components, as_of=as_of
     )
-    ranked: List[Tuple[str, float] | Tuple[str, float, Dict[str, float]]] = []
+    evaluated: Dict[str, Dict[str, object]] = {}
     for sym in candidates:
-        result = _calculate_symbol_score(
-            ch_client,
-            sym,
+        closes_raw = history_map.get(sym)
+        closes_prepared = _prepare_metric_series(closes_raw or [])
+        result = _evaluate_components_for_prepared(
+            closes_prepared,
             components,
             include_metrics=include_metrics,
-            preloaded_closes=history_map.get(sym),
         )
         if result is None:
             continue
+        adjusted_scores, metrics = result
+        evaluated[sym] = {
+            "scores": adjusted_scores,
+        }
+        if include_metrics and metrics is not None:
+            evaluated[sym]["metrics"] = metrics
+
+    if not evaluated:
+        return []
+
+    total_weight = sum(comp.weight for comp in components)
+    if total_weight <= 0:
+        return []
+
+    for idx, component in enumerate(components):
+        if component.normalize != "percentile":
+            continue
+        values = [
+            (sym, float(cast(List[float], data["scores"])[idx]))
+            for sym, data in evaluated.items()
+        ]
+        if not values:
+            continue
+        sorted_values = sorted(values, key=lambda item: item[1])
+        n = len(sorted_values)
+        if n == 1:
+            sym, _ = sorted_values[0]
+            cast(List[float], evaluated[sym]["scores"])[idx] = 1.0
+            continue
+        for rank, (sym, _) in enumerate(sorted_values):
+            percentile = rank / (n - 1)
+            cast(List[float], evaluated[sym]["scores"])[idx] = percentile
+
+    ranked: List[Tuple[str, float] | Tuple[str, float, Dict[str, float]]] = []
+    for sym, data in evaluated.items():
+        scores = cast(List[float], data["scores"])
+        weighted = 0.0
+        for idx, component in enumerate(components):
+            weighted += component.weight * scores[idx]
+        score = weighted / total_weight
         if include_metrics:
-            score, metrics = result  # type: ignore[misc]
+            metrics = cast(Dict[str, float], data.get("metrics", {}))
             ranked.append((sym, score, metrics))
         else:
-            ranked.append((sym, result))  # type: ignore[arg-type]
+            ranked.append((sym, score))
 
     ranked.sort(key=lambda item: item[1], reverse=True)
     return ranked
@@ -4594,6 +4695,8 @@ def _build_components_from_rules(rules: List[ScoreRulePayload]) -> List[ScoreCom
                 direction=direction,
                 min_value=rule.min_value,
                 max_value=rule.max_value,
+                scoring=rule.scoring,
+                normalize=rule.normalize or "none",
             )
         except ValidationError as exc:
             raise HTTPException(400, exc.errors()) from exc
