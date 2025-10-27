@@ -542,6 +542,30 @@ def test_score_preview_applies_point_scale(monkeypatch):
     assert response.rows[2].score == pytest.approx(0.0)
 
 
+def test_score_preview_without_limit_returns_full_universe(monkeypatch):
+    base_date = date(2023, 1, 1)
+    data = {}
+    for idx in range(80):
+        symbol = f"SYM{idx:02d}"
+        history = []
+        for offset in range(5):
+            day = (base_date + timedelta(days=offset)).isoformat()
+            history.append((day, 100.0 + idx + offset))
+        data[symbol] = history
+
+    fake = FakeClickHouse(data)
+    monkeypatch.setattr(main, "get_ch", lambda: fake)
+
+    request = main.ScorePreviewRequest(
+        rules=[main.ScoreRulePayload(metric="total_return_4", weight=1, direction="desc")],
+    )
+
+    response = main.score_preview(request)
+
+    assert response.meta["universe_count"] == 80
+    assert len(response.rows) == 80
+
+
 def test_linear_clamped_scoring_higher_direction():
     component = main.ScoreComponent(
         metric="price_change",
