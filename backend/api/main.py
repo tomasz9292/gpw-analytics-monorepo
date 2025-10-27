@@ -2542,6 +2542,7 @@ class ScorePreviewRequest(BaseModel):
     limit: Optional[int] = Field(None, ge=1, le=5000)
     universe: Optional[List[str]] = None
     sort: Optional[str] = Field(None, pattern="^(asc|desc)$")
+    as_of: Optional[date] = Field(default=None)
 
     @field_validator("universe", mode="before")
     @classmethod
@@ -3678,6 +3679,8 @@ def _collect_close_history_bulk(
     ch_client,
     symbols: Sequence[str],
     components: Sequence[ScoreComponent],
+    *,
+    as_of: Optional[date] = None,
 ) -> Dict[str, List[Tuple[str, float]]]:
     """Fetches close history for a batch of symbols using a single ClickHouse query."""
 
@@ -3696,22 +3699,29 @@ def _collect_close_history_bulk(
     # sufficient history for metrics relying on older prices.
     window = int(max_lookback + 30)
 
+    params: Dict[str, object] = {"symbols": tuple(unique_symbols), "window": window}
+    date_filter = ""
+    if as_of is not None:
+        params["as_of"] = as_of.isoformat()
+        date_filter = " AND date <= %(as_of)s"
+
     rows = ch_client.query(
         f"""
         WITH latest AS (
             SELECT symbol, max(date) AS last_date
             FROM {TABLE_OHLC}
-            WHERE symbol IN %(symbols)s
+            WHERE symbol IN %(symbols)s{date_filter}
             GROUP BY symbol
         )
         SELECT o.symbol, toString(o.date) AS date, o.close
         FROM {TABLE_OHLC} AS o
         INNER JOIN latest AS l ON o.symbol = l.symbol
         WHERE o.symbol IN %(symbols)s
+          AND o.date <= l.last_date
           AND o.date >= addDays(l.last_date, -%(window)s)
         ORDER BY o.symbol, o.date
         """,
-        parameters={"symbols": tuple(unique_symbols), "window": window},
+        parameters=params,
     ).result_rows
 
     history: Dict[str, List[Tuple[str, float]]] = {sym: [] for sym in unique_symbols}
@@ -4487,8 +4497,12 @@ def _rank_symbols_by_score(
     candidates: List[str],
     components: List[ScoreComponent],
     include_metrics: bool = False,
+    *,
+    as_of: Optional[date] = None,
 ) -> List[Tuple[str, float] | Tuple[str, float, Dict[str, float]]]:
-    history_map = _collect_close_history_bulk(ch_client, candidates, components)
+    history_map = _collect_close_history_bulk(
+        ch_client, candidates, components, as_of=as_of
+    )
     ranked: List[Tuple[str, float] | Tuple[str, float, Dict[str, float]]] = []
     for sym in candidates:
         result = _calculate_symbol_score(
@@ -5274,12 +5288,18 @@ def _run_score_preview(req: ScorePreviewRequest) -> ScorePreviewResponse:
     auto_config = _build_auto_config_from_preview(req)
     ch = get_ch()
 
+    as_of_date = req.as_of or date.today()
+
     candidates = _list_candidate_symbols(ch, auto_config.filters)
     if not candidates:
         raise HTTPException(404, "Brak symboli do oceny")
 
     ranked = _rank_symbols_by_score(
-        ch, candidates, auto_config.components, include_metrics=True
+        ch,
+        candidates,
+        auto_config.components,
+        include_metrics=True,
+        as_of=as_of_date,
     )
     if not ranked:
         raise HTTPException(404, "Brak symboli ze wszystkimi wymaganymi danymi")
@@ -5315,7 +5335,7 @@ def _run_score_preview(req: ScorePreviewRequest) -> ScorePreviewResponse:
         for idx, item in enumerate(prepared)
     ]
 
-    as_of = date.today().isoformat()
+    as_of = as_of_date.isoformat()
     meta: Dict[str, object] = {
         "name": req.name,
         "as_of": as_of,

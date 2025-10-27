@@ -47,16 +47,30 @@ class FakeClickHouse:
         ):
             symbols = parameters.get("symbols") or ()
             window = int(parameters.get("window", 0))
+            as_of_param = parameters.get("as_of")
+            as_of_date = None
+            if as_of_param is not None:
+                if isinstance(as_of_param, date):
+                    as_of_date = as_of_param
+                else:
+                    as_of_date = date.fromisoformat(str(as_of_param))
             rows = []
             for sym in symbols:
                 history = self.data.get(sym, [])
                 if not history:
                     continue
-                last_date = max(date.fromisoformat(ds) for ds, _ in history)
-                cutoff = (last_date - timedelta(days=window)).isoformat()
-                for ds, close in history:
-                    if ds >= cutoff:
-                        rows.append((sym, ds, close))
+                parsed_history = [
+                    (date.fromisoformat(ds), close)
+                    for ds, close in history
+                    if as_of_date is None or date.fromisoformat(ds) <= as_of_date
+                ]
+                if not parsed_history:
+                    continue
+                last_date = max(dt for dt, _ in parsed_history)
+                cutoff = last_date - timedelta(days=window)
+                for dt, close in parsed_history:
+                    if dt >= cutoff:
+                        rows.append((sym, dt.isoformat(), close))
             return FakeResult(rows)
 
         if "SELECT toString(date) as date, open, high, low, close, volume" in normalized_sql:
@@ -147,6 +161,42 @@ def test_rank_symbols_with_multiple_components():
     history_queries = [q for q in fake.queries if "symbol IN %(symbols)s" in q]
     assert history_queries, "expected bulk history query to be used"
     assert all("WHERE symbol = %(sym)s" not in q for q in fake.queries)
+
+
+def test_rank_symbols_respects_as_of_parameter():
+    data = {
+        "AAA": [
+            ("2023-01-01", 100.0),
+            ("2023-01-02", 80.0),
+            ("2023-01-03", 60.0),
+            ("2023-01-04", 120.0),
+        ],
+        "BBB": [
+            ("2023-01-01", 100.0),
+            ("2023-01-02", 102.0),
+            ("2023-01-03", 104.0),
+            ("2023-01-04", 106.0),
+        ],
+    }
+    fake = FakeClickHouse(data)
+
+    component = main.ScoreComponent(lookback_days=1, metric="total_return", weight=1)
+
+    ranked_latest = main._rank_symbols_by_score(fake, ["AAA", "BBB"], [component])
+    assert ranked_latest[0][0] == "AAA"
+
+    fake.queries.clear()
+
+    ranked_historic = main._rank_symbols_by_score(
+        fake,
+        ["AAA", "BBB"],
+        [component],
+        as_of=date(2023, 1, 3),
+    )
+    assert ranked_historic[0][0] == "BBB"
+
+    history_queries = [q for q in fake.queries if "date <= %(as_of)s" in q]
+    assert history_queries, "expected as_of filter to be applied in history query"
 
 
 def test_backtest_portfolio_auto_uses_dynamic_scores(monkeypatch):
