@@ -3977,7 +3977,20 @@ def _list_candidate_symbols(
             ORDER BY symbol
             """
         ).result_rows
-        symbols = [str(r[0]) for r in rows]
+        normalized: List[str] = []
+        seen: Set[str] = set()
+        for row in rows:
+            if not row:
+                continue
+            raw_value = row[0]
+            if raw_value is None:
+                continue
+            normalized_symbol = normalize_input_symbol(str(raw_value))
+            if not normalized_symbol or normalized_symbol in seen:
+                continue
+            seen.add(normalized_symbol)
+            normalized.append(normalized_symbol)
+        symbols = normalized
 
     if not filters:
         return symbols
