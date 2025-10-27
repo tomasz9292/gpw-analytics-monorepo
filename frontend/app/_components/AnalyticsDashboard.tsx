@@ -1196,6 +1196,7 @@ type CompanyProfileResponse = {
     symbol: string;
     raw_symbol: string;
     symbol_gpw?: string | null;
+    symbol_gpw_benchmark?: string | null;
     symbol_stooq?: string | null;
     symbol_yahoo?: string | null;
     symbol_google?: string | null;
@@ -1215,6 +1216,17 @@ type CompanyProfileResponse = {
     fundamentals: CompanyFundamentalsResponse;
     extra: Record<string, unknown>;
     raw: Record<string, unknown>;
+};
+
+type BenchmarkSymbolOption = {
+    symbol: string;
+    symbol_base?: string | null;
+    indices: string[];
+    company_name?: string | null;
+};
+
+type BenchmarkSymbolListResponse = {
+    items: BenchmarkSymbolOption[];
 };
 
 type JsonValue =
@@ -2548,6 +2560,18 @@ const CompanySyncPanel = ({ symbol, setSymbol }: CompanySyncPanelProps) => {
         useState<LocalClickhouseConfigState | null>(null);
     const [localClickhouseBackendReachable, setLocalClickhouseBackendReachable] =
         useState(false);
+    const [benchmarkSymbols, setBenchmarkSymbols] = useState<BenchmarkSymbolOption[]>([]);
+    const [benchmarkSymbolsLoading, setBenchmarkSymbolsLoading] = useState(false);
+    const [benchmarkSymbolsError, setBenchmarkSymbolsError] = useState<string | null>(
+        null
+    );
+    const [benchmarkInputs, setBenchmarkInputs] = useState<Record<string, string>>({});
+    const [benchmarkOriginals, setBenchmarkOriginals] =
+        useState<Record<string, string>>({});
+    const [benchmarkStatuses, setBenchmarkStatuses] = useState<
+        Record<string, { status: "idle" | "saving" | "success" | "error"; message: string | null }>
+    >({});
+    const benchmarkOriginalsRef = useRef<Record<string, string>>({});
 
     const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const selectedSymbolRef = useRef<string | null>(
@@ -3217,6 +3241,27 @@ const CompanySyncPanel = ({ symbol, setSymbol }: CompanySyncPanelProps) => {
         [setSymbol]
     );
 
+    const fetchBenchmarkSymbols = useCallback(async () => {
+        setBenchmarkSymbolsLoading(true);
+        setBenchmarkSymbolsError(null);
+        try {
+            const response = await fetch(`${ADMIN_API}/indices/benchmark/symbols`, {
+                cache: "no-store",
+            });
+            if (!response.ok) {
+                throw new Error(await parseApiError(response));
+            }
+            const payload = (await response.json()) as BenchmarkSymbolListResponse;
+            setBenchmarkSymbols(payload.items ?? []);
+        } catch (error) {
+            setBenchmarkSymbolsError(
+                resolveErrorMessage(error, "Nie udało się pobrać symboli GPW Benchmark")
+            );
+        } finally {
+            setBenchmarkSymbolsLoading(false);
+        }
+    }, []);
+
     const runCompanySync = useCallback(
         async (
             baseUrl: string,
@@ -3305,6 +3350,101 @@ const CompanySyncPanel = ({ symbol, setSymbol }: CompanySyncPanelProps) => {
             setSelectedCompany(local ?? null);
         },
         [companies, setSymbol]
+    );
+
+    const handleBenchmarkInputChange = useCallback(
+        (key: string, value: string) => {
+            setBenchmarkInputs((prev) => ({ ...prev, [key]: value }));
+        },
+        []
+    );
+
+    const handleBenchmarkSave = useCallback(
+        async (company: CompanyProfileResponse) => {
+            const baseSymbol = company.raw_symbol ?? company.symbol ?? "";
+            const key = baseSymbol.trim().toUpperCase();
+            if (!key) {
+                return;
+            }
+            const currentValue = (benchmarkInputs[key] ?? "").trim();
+            const payload = {
+                symbol: baseSymbol,
+                benchmark_symbol: currentValue.length > 0 ? currentValue : null,
+            };
+            setBenchmarkStatuses((prev) => ({
+                ...prev,
+                [key]: { status: "saving", message: null },
+            }));
+            try {
+                const response = await fetch(`${ADMIN_API}/companies/benchmark-symbol`, {
+                    method: "POST",
+                    cache: "no-store",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload),
+                });
+                let responseBody: unknown = null;
+                try {
+                    responseBody = await response.json();
+                } catch {
+                    responseBody = null;
+                }
+                if (!response.ok) {
+                    const message =
+                        responseBody &&
+                        typeof responseBody === "object" &&
+                        "detail" in responseBody &&
+                        typeof (responseBody as { detail?: unknown }).detail === "string"
+                            ? ((responseBody as { detail: string }).detail ||
+                              "Nie udało się zapisać symbolu")
+                            : responseBody &&
+                              typeof responseBody === "object" &&
+                              "error" in responseBody &&
+                              typeof (responseBody as { error?: unknown }).error === "string"
+                            ? ((responseBody as { error: string }).error ||
+                              "Nie udało się zapisać symbolu")
+                            : "Nie udało się zapisać symbolu";
+                    throw new Error(message);
+                }
+                const updated = (responseBody ?? {}) as CompanyProfileResponse;
+                const savedValue = updated.symbol_gpw_benchmark ?? "";
+                setBenchmarkInputs((prev) => ({ ...prev, [key]: savedValue }));
+                setBenchmarkOriginals((prev) => {
+                    const next = { ...prev, [key]: savedValue };
+                    benchmarkOriginalsRef.current = next;
+                    return next;
+                });
+                setBenchmarkStatuses((prev) => ({
+                    ...prev,
+                    [key]: { status: "success", message: "Zapisano" },
+                }));
+                setCompanies((prev) =>
+                    prev.map((item) => {
+                        const itemKey = (item.raw_symbol ?? item.symbol ?? "").trim().toUpperCase();
+                        if (itemKey === key) {
+                            return { ...item, symbol_gpw_benchmark: savedValue };
+                        }
+                        return item;
+                    })
+                );
+                setSelectedCompany((prev) => {
+                    if (!prev) {
+                        return prev;
+                    }
+                    const prevKey = (prev.raw_symbol ?? prev.symbol ?? "").trim().toUpperCase();
+                    if (prevKey === key) {
+                        return { ...prev, symbol_gpw_benchmark: savedValue };
+                    }
+                    return prev;
+                });
+            } catch (error) {
+                const message = resolveErrorMessage(error, "Nie udało się zapisać symbolu");
+                setBenchmarkStatuses((prev) => ({
+                    ...prev,
+                    [key]: { status: "error", message },
+                }));
+            }
+        },
+        [benchmarkInputs]
     );
 
     const runOhlcSync = useCallback(
@@ -3887,6 +4027,7 @@ const CompanySyncPanel = ({ symbol, setSymbol }: CompanySyncPanelProps) => {
         fetchSchedule();
         fetchAdmins();
         fetchOhlcSchedule();
+        fetchBenchmarkSymbols();
         return () => stopPolling();
     }, [
         fetchStatus,
@@ -3894,8 +4035,67 @@ const CompanySyncPanel = ({ symbol, setSymbol }: CompanySyncPanelProps) => {
         fetchSchedule,
         fetchAdmins,
         fetchOhlcSchedule,
+        fetchBenchmarkSymbols,
         stopPolling,
     ]);
+
+    useEffect(() => {
+        const nextOriginals: Record<string, string> = {};
+        const seenKeys: string[] = [];
+        companies.forEach((company) => {
+            const rawKey = company.raw_symbol ?? company.symbol ?? "";
+            const key = rawKey.trim().toUpperCase();
+            if (!key) {
+                return;
+            }
+            seenKeys.push(key);
+            nextOriginals[key] = company.symbol_gpw_benchmark ?? "";
+        });
+        const previousOriginals = benchmarkOriginalsRef.current;
+
+        setBenchmarkInputs((prevInputs) => {
+            const nextInputs: Record<string, string> = {};
+            seenKeys.forEach((key) => {
+                const savedValue = nextOriginals[key] ?? "";
+                const previousInput = prevInputs[key];
+                const previousOriginal = previousOriginals[key];
+                if (
+                    previousInput !== undefined &&
+                    previousOriginal !== undefined &&
+                    previousInput.trim() !== previousOriginal.trim()
+                ) {
+                    nextInputs[key] = previousInput;
+                } else {
+                    nextInputs[key] = savedValue;
+                }
+            });
+            return nextInputs;
+        });
+
+        setBenchmarkStatuses((prevStatuses) => {
+            const nextStatuses: typeof prevStatuses = {};
+            seenKeys.forEach((key) => {
+                nextStatuses[key] = prevStatuses[key] ?? {
+                    status: "idle",
+                    message: null,
+                };
+            });
+            return nextStatuses;
+        });
+
+        setBenchmarkOriginals((prev) => {
+            const prevKeys = Object.keys(prev);
+            if (
+                prevKeys.length === seenKeys.length &&
+                prevKeys.every((key) => prev[key] === nextOriginals[key])
+            ) {
+                return prev;
+            }
+            return nextOriginals;
+        });
+
+        benchmarkOriginalsRef.current = nextOriginals;
+    }, [companies]);
 
     useEffect(() => {
         if (status?.status === "running") {
@@ -4071,6 +4271,10 @@ const CompanySyncPanel = ({ symbol, setSymbol }: CompanySyncPanelProps) => {
                       {
                           label: "GPW",
                           value: selectedCompany.symbol_gpw ?? selectedCompany.raw_symbol,
+                      },
+                      {
+                          label: "GPW Benchmark",
+                          value: selectedCompany.symbol_gpw_benchmark ?? null,
                       },
                       { label: "Stooq", value: selectedCompany.symbol_stooq ?? null },
                       { label: "Yahoo Finance", value: selectedCompany.symbol_yahoo ?? null },
@@ -5638,6 +5842,112 @@ const CompanySyncPanel = ({ symbol, setSymbol }: CompanySyncPanelProps) => {
                                     );
                                 })}
                             </div>
+                        </div>
+                    </Card>
+                    <Card title="Mapowanie symboli GPW Benchmark">
+                        <div className="space-y-3 text-sm text-subtle">
+                            <p>
+                                Powiąż spółki z symbolami używanymi w indeksach GPW Benchmark. Wpisz
+                                oznaczenie tak, jak występuje w indeksie (np. <span className="font-semibold">CDR.WA</span>) i zapisz zmiany.
+                            </p>
+                            {benchmarkSymbolsLoading && (
+                                <p className="text-xs">Ładowanie listy symboli benchmarku…</p>
+                            )}
+                            {benchmarkSymbolsError && (
+                                <p className="text-xs text-amber-500">{benchmarkSymbolsError}</p>
+                            )}
+                            <datalist id="benchmark-symbols-list">
+                                {benchmarkSymbols.map((option) => {
+                                    const labelParts: string[] = [];
+                                    if (option.company_name) {
+                                        labelParts.push(option.company_name);
+                                    }
+                                    if (option.indices.length > 0) {
+                                        labelParts.push(option.indices.join(", "));
+                                    }
+                                    return (
+                                        <option
+                                            key={option.symbol}
+                                            value={option.symbol}
+                                            label={labelParts.length ? labelParts.join(" • ") : undefined}
+                                        />
+                                    );
+                                })}
+                            </datalist>
+                            {companies.length > 0 ? (
+                                <div className="max-h-96 space-y-2 overflow-y-auto pr-1">
+                                    {companies.map((company) => {
+                                        const baseSymbol = company.raw_symbol ?? company.symbol ?? "";
+                                        const key = baseSymbol.trim().toUpperCase();
+                                        if (!key) {
+                                            return null;
+                                        }
+                                        const inputValue = benchmarkInputs[key] ?? "";
+                                        const savedValue = benchmarkOriginals[key] ?? "";
+                                        const status = benchmarkStatuses[key] ?? {
+                                            status: "idle" as const,
+                                            message: null,
+                                        };
+                                        const isDirty = inputValue.trim() !== savedValue.trim();
+                                        const statusClasses =
+                                            status.status === "error"
+                                                ? "text-rose-600"
+                                                : status.status === "success"
+                                                    ? "text-emerald-600"
+                                                    : "text-subtle";
+                                        return (
+                                            <div
+                                                key={`${key}-benchmark-mapping`}
+                                                className="rounded-xl border border-soft bg-white/70 p-3 shadow-sm"
+                                            >
+                                                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                                    <div className="space-y-1">
+                                                        <div className="text-sm font-semibold text-primary">
+                                                            {company.name ?? company.short_name ?? baseSymbol}
+                                                        </div>
+                                                        <div className="text-xs text-subtle">
+                                                            {baseSymbol}
+                                                            {company.sector ? ` • ${company.sector}` : ""}
+                                                        </div>
+                                                    </div>
+                                                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                                                        <input
+                                                            type="text"
+                                                            list="benchmark-symbols-list"
+                                                            value={inputValue}
+                                                            onChange={(event) =>
+                                                                handleBenchmarkInputChange(
+                                                                    key,
+                                                                    event.target.value
+                                                                )
+                                                            }
+                                                            placeholder="np. CDR.WA"
+                                                            className="w-full rounded-xl border border-soft bg-white px-3 py-2 text-sm text-primary shadow-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/40 sm:w-40"
+                                                        />
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleBenchmarkSave(company)}
+                                                            disabled={status.status === "saving" || (!isDirty && status.status !== "error")}
+                                                            className="rounded-full bg-primary px-4 py-2 text-xs font-semibold text-white shadow transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+                                                        >
+                                                            {status.status === "saving" ? "Zapisywanie…" : "Zapisz"}
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                                {status.status !== "idle" && status.message && (
+                                                    <p className={`mt-2 text-xs ${statusClasses}`}>
+                                                        {status.message}
+                                                    </p>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            ) : (
+                                <p className="text-xs">
+                                    Brak spółek do zmapowania. Uruchom synchronizację, aby pobrać dane.
+                                </p>
+                            )}
                         </div>
                     </Card>
                 </div>
