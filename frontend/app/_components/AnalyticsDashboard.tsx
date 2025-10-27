@@ -1229,6 +1229,19 @@ type BenchmarkSymbolListResponse = {
     items: BenchmarkSymbolOption[];
 };
 
+type UniverseCandidateItem = {
+    symbol: string;
+    name?: string | null;
+    isin?: string | null;
+    sector?: string | null;
+    industry?: string | null;
+};
+
+type UniverseCandidateListResponse = {
+    total: number;
+    items: UniverseCandidateItem[];
+};
+
 type JsonValue =
     | string
     | number
@@ -2507,6 +2520,13 @@ const CompanySyncPanel = ({ symbol, setSymbol }: CompanySyncPanelProps) => {
     const [adminsSuccess, setAdminsSuccess] = useState<string | null>(null);
     const [isAddingAdmin, setIsAddingAdmin] = useState(false);
     const [newAdminEmail, setNewAdminEmail] = useState("");
+    const [universeFiltersInput, setUniverseFiltersInput] = useState("index:WIG40");
+    const [universeIncludeMetadata, setUniverseIncludeMetadata] = useState(true);
+    const [universeCandidates, setUniverseCandidates] = useState<UniverseCandidateItem[]>([]);
+    const [universeTotal, setUniverseTotal] = useState<number | null>(null);
+    const [universeLoading, setUniverseLoading] = useState(false);
+    const [universeError, setUniverseError] = useState<string | null>(null);
+    const [universeFetched, setUniverseFetched] = useState(false);
     const [ohlcSymbolsInput, setOhlcSymbolsInput] = useState("");
     const [ohlcStartInput, setOhlcStartInput] = useState("");
     const [ohlcTruncate, setOhlcTruncate] = useState(false);
@@ -3325,6 +3345,68 @@ const CompanySyncPanel = ({ symbol, setSymbol }: CompanySyncPanelProps) => {
         setActiveQuery(undefined);
         fetchCompanies();
     }, [fetchCompanies]);
+
+    const fetchUniverseCandidates = useCallback(async () => {
+        const tokens = universeFiltersInput
+            .split(/[\s,;]+/)
+            .map((token) => token.trim())
+            .filter((token) => token.length > 0);
+
+        if (!tokens.length) {
+            setUniverseError("Podaj przynajmniej jeden filtr uniwersum.");
+            setUniverseCandidates([]);
+            setUniverseTotal(null);
+            setUniverseFetched(false);
+            return;
+        }
+
+        setUniverseLoading(true);
+        setUniverseError(null);
+
+        try {
+            const params = new URLSearchParams();
+            for (const token of tokens) {
+                params.append("universe", token);
+            }
+            params.append("with_company_info", universeIncludeMetadata ? "true" : "false");
+
+            const response = await fetch(
+                `${ADMIN_API}/universe/candidates?${params.toString()}`,
+                { cache: "no-store" }
+            );
+            if (!response.ok) {
+                throw new Error(await parseApiError(response));
+            }
+
+            const data = (await response.json()) as UniverseCandidateListResponse;
+            setUniverseCandidates(data.items);
+            setUniverseTotal(data.total);
+            setUniverseFetched(true);
+        } catch (error) {
+            setUniverseError(
+                resolveErrorMessage(
+                    error,
+                    "Nie udało się pobrać listy symboli uniwersum"
+                )
+            );
+            setUniverseCandidates([]);
+            setUniverseTotal(null);
+            setUniverseFetched(false);
+        } finally {
+            setUniverseLoading(false);
+        }
+    }, [
+        universeFiltersInput,
+        universeIncludeMetadata,
+    ]);
+
+    const handleUniverseSubmit = useCallback(
+        (event: React.FormEvent<HTMLFormElement>) => {
+            event.preventDefault();
+            void fetchUniverseCandidates();
+        },
+        [fetchUniverseCandidates]
+    );
 
     const handleSelectCompany = useCallback(
         (candidate: string) => {
@@ -4508,6 +4590,140 @@ const CompanySyncPanel = ({ symbol, setSymbol }: CompanySyncPanelProps) => {
 
     return (
         <div className="space-y-16">
+            <Section
+                id="universe-candidates"
+                kicker="Rankingi"
+                title="Sprawdź kandydatów uniwersum"
+                description="Pobierz listę tickerów, które backend bierze pod uwagę dla przekazanych filtrów wszechświata."
+            >
+                <div className="grid gap-6 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1.8fr)]">
+                    <Card title="Konfiguracja zapytania">
+                        <form onSubmit={handleUniverseSubmit} className="space-y-4">
+                            <p className="text-sm text-muted">
+                                Wpisz filtry dokładnie w takim formacie, w jakim przesyła je frontend
+                                (np. <code className="rounded bg-slate-100 px-1">index:WIG40</code> lub
+                                <code className="rounded bg-slate-100 px-1">isin:PLLOTOS00025</code>).
+                            </p>
+                            <label className="flex flex-col gap-2 text-sm font-medium text-primary">
+                                <span>Filtry uniwersum</span>
+                                <textarea
+                                    value={universeFiltersInput}
+                                    onChange={(event) => setUniverseFiltersInput(event.target.value)}
+                                    placeholder="np. index:WIG40"
+                                    className="min-h-[120px] rounded-xl border border-soft bg-white/70 px-3 py-2 text-sm text-primary shadow-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/40"
+                                />
+                                <span className="text-xs font-normal text-subtle">
+                                    Oddziel filtry spacją, przecinkiem lub nową linią. Prefiks
+                                    <code className="mx-1 rounded bg-slate-100 px-1">index:</code>
+                                    wczytuje skład indeksu z tabel GPW Benchmark.
+                                </span>
+                            </label>
+                            <div className="flex flex-wrap gap-4 text-sm font-medium text-primary">
+                                <label className="flex items-center gap-2">
+                                    <input
+                                        type="checkbox"
+                                        checked={universeIncludeMetadata}
+                                        onChange={(event) => setUniverseIncludeMetadata(event.target.checked)}
+                                    />
+                                    <span>Dołącz nazwę, ISIN, sektor i branżę spółek</span>
+                                </label>
+                            </div>
+                            {universeError && (
+                                <div className="rounded-xl border border-rose-200/60 bg-rose-50/70 px-3 py-2 text-xs text-rose-600">
+                                    {universeError}
+                                </div>
+                            )}
+                            <div className="flex flex-wrap items-center gap-3">
+                                <button
+                                    type="submit"
+                                    disabled={universeLoading}
+                                    className="rounded-full bg-primary px-4 py-2 text-sm font-semibold text-white shadow hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    {universeLoading ? "Pobieranie..." : "Pobierz listę"}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setUniverseFiltersInput("index:WIG40")}
+                                    className="rounded-full border border-soft px-4 py-2 text-sm font-semibold text-primary transition hover:border-primary/40 hover:text-primary"
+                                >
+                                    Ustaw WIG40
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setUniverseFiltersInput("")}
+                                    className="rounded-full border border-soft px-4 py-2 text-sm font-semibold text-primary transition hover:border-primary/40 hover:text-primary"
+                                >
+                                    Wyczyść
+                                </button>
+                            </div>
+                        </form>
+                    </Card>
+                    <Card
+                        title="Wynik"
+                        right={
+                            typeof universeTotal === "number" ? (
+                                <span className="text-sm text-subtle">
+                                    Liczba symboli:{" "}
+                                    <span className="font-semibold text-primary">
+                                        {integerFormatter.format(universeTotal)}
+                                    </span>
+                                </span>
+                            ) : null
+                        }
+                    >
+                        <div className="space-y-4">
+                            {universeLoading && (
+                                <div className="rounded-xl border border-soft bg-white/60 px-3 py-2 text-sm text-muted">
+                                    Pobieranie listy symboli...
+                                </div>
+                            )}
+                            {!universeLoading && universeFetched && universeCandidates.length === 0 && !universeError && (
+                                <div className="rounded-xl border border-soft bg-white/60 px-3 py-2 text-sm text-muted">
+                                    Brak symboli spełniających zadane filtry.
+                                </div>
+                            )}
+                            {universeCandidates.length > 0 && (
+                                <div className="overflow-auto rounded-xl border border-soft">
+                                    <table className="min-w-full divide-y divide-soft text-sm">
+                                        <thead className="bg-slate-50 text-xs uppercase tracking-wide text-subtle">
+                                            <tr>
+                                                <th className="px-3 py-2 text-left font-semibold">#</th>
+                                                <th className="px-3 py-2 text-left font-semibold">Symbol</th>
+                                                <th className="px-3 py-2 text-left font-semibold">Nazwa</th>
+                                                <th className="px-3 py-2 text-left font-semibold">ISIN</th>
+                                                <th className="px-3 py-2 text-left font-semibold">Sektor</th>
+                                                <th className="px-3 py-2 text-left font-semibold">Branża</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-soft bg-white/70">
+                                            {universeCandidates.map((item, index) => (
+                                                <tr key={`${item.symbol}-${index}`}>
+                                                    <td className="px-3 py-2 text-xs text-subtle">
+                                                        {index + 1}
+                                                    </td>
+                                                    <td className="px-3 py-2 font-semibold text-primary">{item.symbol}</td>
+                                                    <td className="px-3 py-2 text-sm text-muted">
+                                                        {item.name && item.name.trim() ? item.name : "—"}
+                                                    </td>
+                                                    <td className="px-3 py-2 text-sm text-muted">
+                                                        {item.isin && item.isin.trim() ? item.isin : "—"}
+                                                    </td>
+                                                    <td className="px-3 py-2 text-sm text-muted">
+                                                        {item.sector && item.sector.trim() ? item.sector : "—"}
+                                                    </td>
+                                                    <td className="px-3 py-2 text-sm text-muted">
+                                                        {item.industry && item.industry.trim() ? item.industry : "—"}
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            )}
+                        </div>
+                    </Card>
+                </div>
+            </Section>
             <Section
                 id="prices-sync"
                 kicker="Stooq"

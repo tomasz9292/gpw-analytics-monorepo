@@ -2625,6 +2625,19 @@ class BenchmarkSymbolListResponse(BaseModel):
     items: List[BenchmarkSymbolResponse]
 
 
+class UniverseCandidateResponseItem(BaseModel):
+    symbol: str
+    name: Optional[str] = None
+    isin: Optional[str] = None
+    sector: Optional[str] = None
+    industry: Optional[str] = None
+
+
+class UniverseCandidateListResponse(BaseModel):
+    total: int
+    items: List[UniverseCandidateResponseItem]
+
+
 # =========================
 # =========================
 # /companies – dane o spółkach
@@ -4370,6 +4383,105 @@ def _list_candidate_symbols(
     return filtered
 
 
+class CandidateSymbolMetadata(TypedDict, total=False):
+    name: str
+    isin: str
+    sector: str
+    industry: str
+
+
+def _collect_candidate_metadata(
+    ch_client,
+    symbols: Sequence[str],
+) -> Dict[str, CandidateSymbolMetadata]:
+    if not symbols:
+        return {}
+
+    try:
+        columns = _get_company_columns(ch_client)
+    except Exception:
+        return {}
+
+    symbol_column = _find_company_symbol_column(columns)
+    if not symbol_column:
+        return {}
+
+    lowered = {col.lower(): col for col in columns}
+    field_candidates = {
+        "name": COMPANY_NAME_CANDIDATES,
+        "isin": ["isin"],
+        "sector": ["sector"],
+        "industry": ["industry", "branch"],
+    }
+
+    resolved_columns: Dict[str, str] = {}
+    for field, candidates in field_candidates.items():
+        for candidate in candidates:
+            existing = lowered.get(candidate)
+            if existing and existing != symbol_column:
+                resolved_columns[field] = existing
+                break
+
+    if not resolved_columns:
+        return {}
+
+    selected_columns = [symbol_column, *resolved_columns.values()]
+
+    lookup_keys: Set[str] = set()
+    for symbol in symbols:
+        if not symbol:
+            continue
+        lookup_keys.add(symbol.upper())
+        normalized = normalize_input_symbol(symbol)
+        if normalized:
+            lookup_keys.add(normalized.upper())
+
+    if not lookup_keys:
+        return {}
+
+    sql = (
+        f"SELECT {', '.join(_quote_identifier(col) for col in selected_columns)} "
+        f"FROM {TABLE_COMPANIES} "
+        f"WHERE upper({_quote_identifier(symbol_column)}) IN %(symbols)s"
+    )
+
+    try:
+        result = ch_client.query(sql, parameters={"symbols": tuple(lookup_keys)})
+    except Exception:
+        return {}
+
+    column_names = list(getattr(result, "column_names", []))
+    metadata: Dict[str, CandidateSymbolMetadata] = {}
+
+    for row in getattr(result, "result_rows", []):
+        row_dict = {col: value for col, value in zip(column_names, row)}
+        raw_symbol = row_dict.get(symbol_column)
+        if raw_symbol is None:
+            continue
+        raw_text = str(_convert_clickhouse_value(raw_symbol)).strip()
+        if not raw_text:
+            continue
+        normalized = normalize_input_symbol(raw_text)
+        key = (normalized or raw_text).upper()
+
+        entry: CandidateSymbolMetadata = {}
+        for field, column in resolved_columns.items():
+            value = row_dict.get(column)
+            if value is None:
+                continue
+            text = str(_convert_clickhouse_value(value)).strip()
+            if text:
+                entry[field] = text
+
+        if not entry:
+            continue
+
+        metadata[key] = entry
+        metadata.setdefault(raw_text.upper(), entry)
+
+    return metadata
+
+
 def _rank_symbols_by_score(
     ch_client,
     candidates: List[str],
@@ -5722,6 +5834,55 @@ def list_benchmark_symbols(
         items.append(item)
 
     return BenchmarkSymbolListResponse(items=items)
+
+
+@api_router.get("/universe/candidates", response_model=UniverseCandidateListResponse)
+def list_universe_candidates(
+    universe: List[str] = Query(
+        ..., description="Filtry uniwersum, np. index:WIG40 lub isin:PLLOTOS00025",
+    ),
+    with_company_info: bool = Query(
+        default=True,
+        description="Czy dołączyć podstawowe informacje o spółkach z tabeli companies",
+    ),
+    include_index_history: bool = Query(
+        default=False,
+        description="Uwzględnij historyczne składy indeksów przy filtrowaniu po index:",
+    ),
+) -> UniverseCandidateListResponse:
+    if not universe:
+        raise HTTPException(400, "Podaj co najmniej jeden filtr uniwersum.")
+
+    filters = _build_filters_from_universe(universe)
+    if filters is None:
+        raise HTTPException(400, "Nie znaleziono poprawnych filtrów uniwersum.")
+
+    ch = get_ch()
+    symbols = _list_candidate_symbols(
+        ch,
+        filters,
+        include_index_history=include_index_history,
+    )
+
+    metadata_lookup: Dict[str, CandidateSymbolMetadata] = {}
+    if with_company_info:
+        metadata_lookup = _collect_candidate_metadata(ch, symbols)
+
+    items: List[UniverseCandidateResponseItem] = []
+    for symbol in symbols:
+        normalized = normalize_input_symbol(symbol) or symbol
+        entry = metadata_lookup.get(normalized.upper()) or metadata_lookup.get(symbol.upper()) or {}
+        items.append(
+            UniverseCandidateResponseItem(
+                symbol=symbol,
+                name=entry.get("name"),
+                isin=entry.get("isin"),
+                sector=entry.get("sector"),
+                industry=entry.get("industry"),
+            )
+        )
+
+    return UniverseCandidateListResponse(total=len(symbols), items=items)
 
 
 @api_router.get("/indices/list", response_model=IndexListResponse)
