@@ -492,6 +492,56 @@ def test_score_preview_returns_metrics(monkeypatch):
     assert "volatility_4" in row.metrics
 
 
+def test_score_preview_applies_point_scale(monkeypatch):
+    data = {
+        "AAA": [
+            ("2023-01-01", 100.0),
+            ("2023-01-02", 110.0),
+            ("2023-01-03", 120.0),
+            ("2023-01-04", 130.0),
+            ("2023-01-05", 140.0),
+        ],
+        "BBB": [
+            ("2023-01-01", 100.0),
+            ("2023-01-02", 102.0),
+            ("2023-01-03", 104.0),
+            ("2023-01-04", 106.0),
+            ("2023-01-05", 110.0),
+        ],
+        "CCC": [
+            ("2023-01-01", 100.0),
+            ("2023-01-02", 98.0),
+            ("2023-01-03", 95.0),
+            ("2023-01-04", 90.0),
+            ("2023-01-05", 80.0),
+        ],
+    }
+
+    fake = FakeClickHouse(data)
+    monkeypatch.setattr(main, "get_ch", lambda: fake)
+
+    request = main.ScorePreviewRequest(
+        name="demo",
+        rules=[
+            main.ScoreRulePayload(
+                metric="total_return_4",
+                weight=1,
+                direction="desc",
+                min_value=-0.1,
+                max_value=0.3,
+            )
+        ],
+        limit=3,
+    )
+
+    response = main.score_preview(request)
+
+    assert [row.raw for row in response.rows] == ["AAA", "BBB", "CCC"]
+    assert response.rows[0].score == pytest.approx(1.0)
+    assert response.rows[1].score == pytest.approx(0.5)
+    assert response.rows[2].score == pytest.approx(0.0)
+
+
 def test_collect_data_returns_filtered_quotes(monkeypatch):
     data = {
         "AAA": [
