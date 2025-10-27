@@ -1417,6 +1417,8 @@ RAW_SYMBOL_PRIORITIES: Dict[str, int] = {
 
 _COMPANY_COLUMNS_CACHE: Optional[List[str]] = None
 _COMPANY_COLUMNS_LOCK = threading.Lock()
+_COMPANY_SYMBOL_LOOKUP: Optional[Dict[str, str]] = None
+_COMPANY_SYMBOL_LOOKUP_LOCK = threading.Lock()
 
 
 def _is_unknown_table_error(exc: Exception) -> bool:
@@ -1573,6 +1575,150 @@ def _find_company_symbol_column(columns: Sequence[str]) -> Optional[str]:
             return existing
     return None
 
+
+def _iter_symbol_aliases(value: str) -> Iterable[str]:
+    cleaned = value.strip()
+    if not cleaned:
+        return
+
+    variants: List[str] = [cleaned]
+    upper = cleaned.upper()
+    if upper.endswith(".WA"):
+        trimmed = cleaned[:-3].strip()
+        if trimmed:
+            variants.append(trimmed)
+
+    normalized = normalize_input_symbol(cleaned)
+    if normalized:
+        variants.append(normalized)
+        pretty = pretty_symbol(normalized)
+        if pretty:
+            variants.append(pretty)
+            if "." in pretty:
+                base = pretty.split(".", 1)[0].strip()
+                if base:
+                    variants.append(base)
+
+    seen: Set[str] = set()
+    for variant in variants:
+        candidate = variant.strip()
+        if not candidate:
+            continue
+        upper_candidate = candidate.upper()
+        if upper_candidate in seen:
+            continue
+        seen.add(upper_candidate)
+        yield candidate
+
+
+def _build_company_symbol_lookup(ch_client) -> Dict[str, str]:
+    global _COMPANY_SYMBOL_LOOKUP
+    if _COMPANY_SYMBOL_LOOKUP is not None:
+        return _COMPANY_SYMBOL_LOOKUP
+
+    with _COMPANY_SYMBOL_LOOKUP_LOCK:
+        if _COMPANY_SYMBOL_LOOKUP is not None:
+            return _COMPANY_SYMBOL_LOOKUP
+
+        try:
+            columns = _get_company_columns(ch_client)
+        except HTTPException:
+            columns = []
+
+        if not columns:
+            _COMPANY_SYMBOL_LOOKUP = {}
+            return _COMPANY_SYMBOL_LOOKUP
+
+        lowered_to_original = {col.lower(): col for col in columns}
+
+        preferred_primary: List[str] = []
+        for candidate in (
+            "symbol",
+            "symbol_gpw",
+            "ticker",
+            "code",
+            "short_name",
+        ):
+            existing = lowered_to_original.get(candidate)
+            if existing and existing not in preferred_primary:
+                preferred_primary.append(existing)
+
+        symbol_columns: List[str] = []
+        for candidate in COMPANY_SYMBOL_CANDIDATES:
+            existing = lowered_to_original.get(candidate)
+            if existing and existing not in symbol_columns:
+                symbol_columns.append(existing)
+
+        name_columns: List[str] = []
+        for candidate in COMPANY_NAME_CANDIDATES:
+            existing = lowered_to_original.get(candidate)
+            if existing and existing not in symbol_columns and existing not in name_columns:
+                name_columns.append(existing)
+
+        selected_columns = [*symbol_columns, *name_columns]
+        if not selected_columns:
+            _COMPANY_SYMBOL_LOOKUP = {}
+            return _COMPANY_SYMBOL_LOOKUP
+
+        select_clause = ", ".join(_quote_identifier(col) for col in selected_columns)
+        sql = f"SELECT {select_clause} FROM {TABLE_COMPANIES}"
+
+        try:
+            result = ch_client.query(sql)
+        except Exception:  # pragma: no cover - zależy od konfiguracji DB
+            _COMPANY_SYMBOL_LOOKUP = {}
+            return _COMPANY_SYMBOL_LOOKUP
+
+        column_names = list(getattr(result, "column_names", []))
+        try:
+            rows = result.named_results()
+        except AttributeError:
+            rows = None
+
+        if rows is None:
+            rows = [
+                {col: value for col, value in zip(column_names, row)}
+                for row in getattr(result, "result_rows", [])
+            ]
+
+        lookup: Dict[str, str] = {}
+        ticker_like_pattern = re.compile(r"^[0-9A-Z]{1,8}(?:[._-][0-9A-Z]{1,8})?$")
+
+        for row in rows:
+            canonical: Optional[str] = None
+            for column in preferred_primary or symbol_columns:
+                value = row.get(column)
+                text = str(_convert_clickhouse_value(value)).strip() if value is not None else ""
+                if not text:
+                    continue
+                normalized = normalize_input_symbol(text)
+                normalized_upper = normalized.strip().upper() if normalized else ""
+                if not normalized_upper:
+                    continue
+                if not ticker_like_pattern.fullmatch(normalized_upper):
+                    continue
+                canonical = normalized
+                break
+            if not canonical:
+                continue
+
+            for column in selected_columns:
+                value = row.get(column)
+                text = str(_convert_clickhouse_value(value)).strip() if value is not None else ""
+                if not text:
+                    continue
+                for alias in _iter_symbol_aliases(text):
+                    key = alias.strip().upper()
+                    if key:
+                        lookup.setdefault(key, canonical)
+
+            for alias in _iter_symbol_aliases(canonical):
+                key = alias.strip().upper()
+                if key:
+                    lookup.setdefault(key, canonical)
+
+        _COMPANY_SYMBOL_LOOKUP = lookup
+        return _COMPANY_SYMBOL_LOOKUP
 
 def _normalize_company_row(row: Dict[str, Any], symbol_column: str) -> Optional[Dict[str, Any]]:
     canonical: Dict[str, Any] = {
@@ -3644,6 +3790,8 @@ def _sanitize_index_code(value: str) -> str:
 def _normalize_index_member_symbol(
     symbol_raw: object,
     symbol_base_raw: object = None,
+    *,
+    symbol_lookup: Optional[Dict[str, str]] = None,
 ) -> str:
     """Return the normalized GPW ticker for index membership entries."""
 
@@ -3662,8 +3810,25 @@ def _normalize_index_member_symbol(
                 candidates.append(stripped)
 
     for candidate in candidates:
-        normalized = normalize_input_symbol(candidate)
+        cleaned = candidate.strip()
+        if not cleaned:
+            continue
+        if symbol_lookup:
+            for alias in _iter_symbol_aliases(cleaned):
+                key = alias.strip().upper()
+                if key:
+                    resolved = symbol_lookup.get(key)
+                    if resolved:
+                        return resolved
+
+        normalized = normalize_input_symbol(cleaned)
         if normalized:
+            if symbol_lookup:
+                lookup_key = normalized.strip().upper()
+                if lookup_key:
+                    resolved = symbol_lookup.get(lookup_key)
+                    if resolved:
+                        return resolved
             return normalized
 
     return ""
@@ -3676,6 +3841,7 @@ def _collect_latest_index_membership(
     if not cleaned_codes:
         return {}
     _ensure_index_tables(ch_client)
+    symbol_lookup = _build_company_symbol_lookup(ch_client)
     in_clause = ", ".join(f"'{code}'" for code in cleaned_codes)
     inner_filter = f"WHERE upper(index_code) IN ({in_clause})"
     outer_filter = f"WHERE upper(p.index_code) IN ({in_clause})"
@@ -3719,7 +3885,11 @@ def _collect_latest_index_membership(
         if not code_raw or not symbol_raw:
             continue
         code = str(code_raw).upper()
-        normalized_symbol = _normalize_index_member_symbol(symbol_raw, symbol_base_raw)
+        normalized_symbol = _normalize_index_member_symbol(
+            symbol_raw,
+            symbol_base_raw,
+            symbol_lookup=symbol_lookup,
+        )
         if not normalized_symbol:
             continue
         bucket = membership.setdefault(code, [])
@@ -3873,6 +4043,7 @@ def _fetch_index_portfolio_history_map(
         return {}, {}
 
     _ensure_index_tables(ch_client)
+    symbol_lookup = _build_company_symbol_lookup(ch_client)
     in_clause = ", ".join(f"'{code}'" for code in cleaned)
     query = f"""
         SELECT index_code, index_name, effective_date, symbol, symbol_base
@@ -3915,7 +4086,11 @@ def _fetch_index_portfolio_history_map(
             continue
 
         code = str(code_raw).upper()
-        symbol = _normalize_index_member_symbol(symbol_raw, symbol_base_raw)
+        symbol = _normalize_index_member_symbol(
+            symbol_raw,
+            symbol_base_raw,
+            symbol_lookup=symbol_lookup,
+        )
         if not symbol:
             continue
 
@@ -3977,7 +4152,20 @@ def _list_candidate_symbols(
             ORDER BY symbol
             """
         ).result_rows
-        symbols = [str(r[0]) for r in rows]
+        normalized: List[str] = []
+        seen: Set[str] = set()
+        for row in rows:
+            if not row:
+                continue
+            raw_value = row[0]
+            if raw_value is None:
+                continue
+            normalized_symbol = normalize_input_symbol(str(raw_value))
+            if not normalized_symbol or normalized_symbol in seen:
+                continue
+            seen.add(normalized_symbol)
+            normalized.append(normalized_symbol)
+        symbols = normalized
 
     if not filters:
         return symbols
