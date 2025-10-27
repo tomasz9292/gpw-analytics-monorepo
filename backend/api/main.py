@@ -10,7 +10,7 @@ import statistics
 import textwrap
 import unicodedata
 from datetime import date, datetime, timedelta, timezone
-from math import sqrt
+from math import isfinite, sqrt
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple, TypedDict
 from typing import Literal
 from uuid import uuid4
@@ -2374,6 +2374,8 @@ class ScoreComponent(BaseModel):
     metric: str = Field(..., description="Typ metryki score'u (np. total_return)")
     weight: float = Field(..., gt=0)
     direction: str = Field("desc", pattern="^(asc|desc)$")
+    min_value: Optional[float] = Field(default=None)
+    max_value: Optional[float] = Field(default=None)
 
     @field_validator("metric")
     @classmethod
@@ -2533,6 +2535,8 @@ class ScoreRulePayload(BaseModel):
     direction: str | None = Field(None, pattern="^(asc|desc)$")
     lookback_days: int | None = Field(None, ge=5, le=3650)
     lookback: int | None = Field(None, ge=5, le=3650)
+    min_value: float | None = None
+    max_value: float | None = None
 
 
 class ScorePreviewRequest(BaseModel):
@@ -3848,6 +3852,30 @@ def _compute_metric_value(
     return None
 
 
+def _normalize_component_score(value: float, component: ScoreComponent) -> float:
+    min_value = component.min_value
+    max_value = component.max_value
+    if (
+        min_value is not None
+        and max_value is not None
+        and isfinite(min_value)
+        and isfinite(max_value)
+        and max_value > min_value
+    ):
+        if component.direction == "asc":
+            ratio = (max_value - value) / (max_value - min_value)
+        else:
+            ratio = (value - min_value) / (max_value - min_value)
+        if ratio <= 0.0:
+            return 0.0
+        if ratio >= 1.0:
+            return 1.0
+        return ratio
+
+    direction = -1.0 if component.direction == "asc" else 1.0
+    return direction * value
+
+
 def _calculate_score_from_prepared(
     closes: Sequence[Tuple[date, float]],
     components: List[ScoreComponent],
@@ -3868,8 +3896,8 @@ def _calculate_score_from_prepared(
         key = f"{comp.metric}_{comp.lookback_days}"
         metrics[key] = value
 
-        direction = -1.0 if comp.direction == "asc" else 1.0
-        weighted += comp.weight * direction * value
+        adjusted = _normalize_component_score(value, comp)
+        weighted += comp.weight * adjusted
         total_weight += comp.weight
 
     if total_weight <= 0:
@@ -4564,6 +4592,8 @@ def _build_components_from_rules(rules: List[ScoreRulePayload]) -> List[ScoreCom
                 lookback_days=lookback,
                 weight=weight,
                 direction=direction,
+                min_value=rule.min_value,
+                max_value=rule.max_value,
             )
         except ValidationError as exc:
             raise HTTPException(400, exc.errors()) from exc

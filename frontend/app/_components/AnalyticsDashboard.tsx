@@ -95,6 +95,29 @@ const removeUndefined = (obj: Record<string, unknown>) =>
         Object.entries(obj).filter(([, value]) => value !== undefined && value !== null)
     );
 
+const parseOptionalNumber = (value: unknown): number | undefined => {
+    if (typeof value === "number") {
+        return Number.isFinite(value) ? value : undefined;
+    }
+    if (typeof value === "string") {
+        const trimmed = value.trim();
+        if (!trimmed) return undefined;
+        const normalized = trimmed.replace(",", ".");
+        const parsed = Number(normalized);
+        return Number.isFinite(parsed) ? parsed : undefined;
+    }
+    return undefined;
+};
+
+const stringifyOptionalNumber = (
+    value: number | null | undefined
+): string | undefined => {
+    if (value === null || value === undefined) {
+        return undefined;
+    }
+    return Number.isFinite(value) ? `${value}` : undefined;
+};
+
 const findScoreMetric = (value: string): ScoreMetricOption | undefined =>
     SCORE_METRIC_OPTIONS.find((option) => option.value === value);
 
@@ -104,6 +127,8 @@ type ScoreComponentRequest = {
     weight: number;
     direction: "asc" | "desc";
     label?: string;
+    min_value?: number;
+    max_value?: number;
 };
 
 type PortfolioSimulationStage = "preparing" | "ranking" | "building" | "finalizing";
@@ -216,12 +241,27 @@ const buildScoreComponents = (rules: ScoreBuilderRule[]): ScoreComponentRequest[
         const lookbackDays = resolveLookbackDays(option, rule.lookbackDays);
         const label = computeMetricLabel(option, lookbackDays, rule.label);
 
+        const minValue = parseOptionalNumber(rule.min);
+        const maxValue = parseOptionalNumber(rule.max);
+        const hasScale =
+            typeof minValue === "number" &&
+            typeof maxValue === "number" &&
+            Number.isFinite(minValue) &&
+            Number.isFinite(maxValue) &&
+            maxValue > minValue;
+
         acc.push({
             metric: option.backendMetric,
             lookback_days: lookbackDays,
             weight: Number(weightNumeric),
             direction,
             label,
+            ...(hasScale
+                ? {
+                      min_value: minValue,
+                      max_value: maxValue,
+                  }
+                : {}),
         });
         return acc;
     }, []);
@@ -758,6 +798,8 @@ const toTemplateRule = (rule: ScoreBuilderRule): ScoreTemplateRule => {
         rule.label ??
         option?.label ??
         rule.metric;
+    const minValue = parseOptionalNumber(rule.min);
+    const maxValue = parseOptionalNumber(rule.max);
     return {
         metric: rule.metric,
         weight: Number(rule.weight) || 0,
@@ -765,6 +807,8 @@ const toTemplateRule = (rule: ScoreBuilderRule): ScoreTemplateRule => {
         label: label ?? null,
         transform: rule.transform ?? "raw",
         lookbackDays,
+        min: minValue,
+        max: maxValue,
     };
 };
 
@@ -785,6 +829,8 @@ const fromTemplateRules = (rules: ScoreTemplateRule[]): ScoreBuilderRule[] =>
             label,
             transform: rule.transform ?? "raw",
             lookbackDays,
+            min: stringifyOptionalNumber(rule.min),
+            max: stringifyOptionalNumber(rule.max),
         };
     });
 
@@ -1081,6 +1127,8 @@ type ScorePreviewRulePayload = {
     direction: "asc" | "desc";
     label?: string;
     lookbackDays?: number | null;
+    min_value?: number;
+    max_value?: number;
 };
 
 type ScorePreviewRequest = {
@@ -1100,6 +1148,8 @@ type ScoreTemplateRule = {
     label?: string | null;
     transform?: "raw" | "zscore" | "percentile" | "";
     lookbackDays?: number | null;
+    min?: number | null;
+    max?: number | null;
 };
 
 type ScoreTemplate = {
@@ -1830,6 +1880,8 @@ async function backtestPortfolioByScore(
             lookback_days: component.lookback_days,
             weight: component.weight,
             direction: component.direction,
+            min_value: component.min_value,
+            max_value: component.max_value,
         })),
         filters: buildUniverseFiltersPayload(resolvedUniverse),
     });
@@ -10862,6 +10914,8 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                 direction: component.direction,
                 label: component.label,
                 lookbackDays: component.lookback_days,
+                min_value: component.min_value,
+                max_value: component.max_value,
             }));
 
             const limitValue = !scoreLimitInvalid && Number.isFinite(scoreLimit)
