@@ -456,7 +456,7 @@ const buildLinearClampPreview = (
     best: number,
     direction: "asc" | "desc"
 ) => {
-    let adjustedWorst = Number.isFinite(worst) ? worst : 0;
+    const adjustedWorst = Number.isFinite(worst) ? worst : 0;
     let adjustedBest = Number.isFinite(best) ? best : 100;
     if (adjustedBest <= adjustedWorst) {
         adjustedBest = adjustedWorst + 0.0001;
