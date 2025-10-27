@@ -4103,11 +4103,23 @@ def _normalize_index_member_symbol(
 
 
 def _collect_latest_index_membership(
-    ch_client, index_codes: Iterable[str]
+    ch_client, index_codes: Iterable[str], *, as_of: Optional[date] = None
 ) -> Dict[str, List[str]]:
     cleaned_codes = [_sanitize_index_code(code) for code in index_codes if _sanitize_index_code(code)]
     if not cleaned_codes:
         return {}
+    if as_of is not None:
+        timeline_map, _ = _fetch_index_portfolio_history_map(ch_client, cleaned_codes)
+        membership: Dict[str, List[str]] = {}
+        for code, entries in timeline_map.items():
+            latest: Optional[Set[str]] = None
+            for entry_date, members in entries:
+                if entry_date > as_of:
+                    break
+                latest = members
+            if latest:
+                membership[code] = sorted(latest)
+        return membership
     _ensure_index_tables(ch_client)
     symbol_lookup = _build_company_symbol_lookup(ch_client)
     in_clause = ", ".join(f"'{code}'" for code in cleaned_codes)
@@ -4392,13 +4404,17 @@ def _fetch_index_portfolio_history_map(
 def _collect_index_membership_union(
     ch_client,
     index_codes: Iterable[str],
+    *,
+    as_of: Optional[date] = None,
 ) -> Dict[str, List[str]]:
     timeline_map, _ = _fetch_index_portfolio_history_map(ch_client, index_codes)
     membership: Dict[str, List[str]] = {}
     for code, entries in timeline_map.items():
         seen: Set[str] = set()
         ordered: List[str] = []
-        for _, members in entries:
+        for entry_date, members in entries:
+            if as_of is not None and entry_date > as_of:
+                break
             for sym in sorted(members):
                 if sym in seen:
                     continue
@@ -4409,7 +4425,11 @@ def _collect_index_membership_union(
 
 
 def _list_candidate_symbols(
-    ch_client, filters: Optional[UniverseFilters], *, include_index_history: bool = False
+    ch_client,
+    filters: Optional[UniverseFilters],
+    *,
+    include_index_history: bool = False,
+    as_of: Optional[date] = None,
 ) -> List[str]:
     symbols = _collect_all_company_symbols(ch_client)
     if symbols is None:
@@ -4448,9 +4468,13 @@ def _list_candidate_symbols(
     indices_whitelist = None
     if filters.indices:
         if include_index_history:
-            membership_map = _collect_index_membership_union(ch_client, filters.indices)
+            membership_map = _collect_index_membership_union(
+                ch_client, filters.indices, as_of=as_of
+            )
         else:
-            membership_map = _collect_latest_index_membership(ch_client, filters.indices)
+            membership_map = _collect_latest_index_membership(
+                ch_client, filters.indices, as_of=as_of
+            )
         aggregated: Set[str] = set()
         for members in membership_map.values():
             aggregated.update(members)
@@ -5427,7 +5451,7 @@ def _run_score_preview(req: ScorePreviewRequest) -> ScorePreviewResponse:
 
     as_of_date = req.as_of or date.today()
 
-    candidates = _list_candidate_symbols(ch, auto_config.filters)
+    candidates = _list_candidate_symbols(ch, auto_config.filters, as_of=as_of_date)
     if not candidates:
         raise HTTPException(404, "Brak symboli do oceny")
 
