@@ -5,6 +5,11 @@ import { createPortal } from "react-dom";
 import Image from "next/image";
 import Link from "next/link";
 import Script from "next/script";
+import MiniScoreChart, {
+    type MetricScale as MiniMetricScale,
+    type Stock as MiniScoreStock,
+} from "@/components/MiniScoreChart";
+import { formatPct } from "@/lib/format";
 import {
     LineChart,
     Line,
@@ -449,40 +454,6 @@ const clampNumber = (value: number, min: number, max: number): number => {
     if (value < min) return min;
     if (value > max) return max;
     return value;
-};
-
-const buildLinearClampPreview = (
-    worst: number,
-    best: number,
-    direction: "asc" | "desc"
-) => {
-    const adjustedWorst = Number.isFinite(worst) ? worst : 0;
-    let adjustedBest = Number.isFinite(best) ? best : 100;
-    if (adjustedBest <= adjustedWorst) {
-        adjustedBest = adjustedWorst + 0.0001;
-    }
-    const span = Math.max(adjustedBest - adjustedWorst, 1);
-    const margin = span * 0.25;
-    const start = adjustedWorst - margin;
-    const end = adjustedBest + margin;
-    const steps = 24;
-    const data: { value: number; score: number }[] = [];
-    for (let i = 0; i <= steps; i += 1) {
-        const value = start + ((end - start) * i) / steps;
-        let score: number;
-        if (value <= adjustedWorst) {
-            score = 0;
-        } else if (value >= adjustedBest) {
-            score = 1;
-        } else {
-            score = (value - adjustedWorst) / (adjustedBest - adjustedWorst);
-        }
-        if (direction === "asc") {
-            score = 1 - score;
-        }
-        data.push({ value: Number(value.toFixed(2)), score: Number(score.toFixed(3)) });
-    }
-    return data;
 };
 
 const resolveLookbackDays = (
@@ -7867,6 +7838,76 @@ function ScoreRankingTable({ rows }: { rows: ScorePreviewRow[] }) {
         new Set(rows.flatMap((row) => Object.keys(row.metrics ?? {})))
     ).slice(0, 4);
 
+    const normalizeMetricKey = (value: string) =>
+        value.replace(/[^a-z0-9]+/gi, "").toLowerCase();
+    const toCamel = (value: string) =>
+        value.replace(/_([a-z0-9])/gi, (_, char: string) => char.toUpperCase());
+    const toSnake = (value: string) =>
+        value
+            .replace(/([A-Z])/g, "_$1")
+            .replace(/__+/g, "_")
+            .toLowerCase();
+
+    const buildNormalizedMap = (metrics: Record<string, number> | undefined) => {
+        const map = new Map<string, number>();
+        if (!metrics) return map;
+        Object.entries(metrics).forEach(([key, value]) => {
+            if (typeof value !== "number" || Number.isNaN(value)) return;
+            map.set(normalizeMetricKey(key), value);
+        });
+        return map;
+    };
+
+    const findValue = (map: Map<string, number>, aliases: string[]) => {
+        for (const alias of aliases) {
+            const normalized = normalizeMetricKey(alias);
+            if (!normalized) continue;
+            if (map.has(normalized)) {
+                return map.get(normalized);
+            }
+        }
+        return undefined;
+    };
+
+    const resolvePriceChangePercent = (
+        map: Map<string, number>,
+        key: string
+    ): number | undefined => {
+        const camel = toCamel(key);
+        const snake = toSnake(key);
+        const normalizedKey = normalizeMetricKey(key);
+        const direct = findValue(map, [key, camel, snake, normalizedKey]);
+        if (typeof direct === "number") {
+            return direct;
+        }
+        const diff = findValue(map, [
+            `${key}Diff`,
+            `${key}_diff`,
+            `${camel}Diff`,
+            `${snake}_diff`,
+            `${normalizedKey}diff`,
+            `${normalizedKey}value`,
+            "pricechangediff",
+            "pricechangevalue",
+        ]);
+        const priceNow = findValue(map, [
+            "priceNow",
+            "price_now",
+            "lastPrice",
+            "last_price",
+            "close",
+            "closePrice",
+            "price",
+        ]);
+        if (typeof diff === "number" && typeof priceNow === "number") {
+            const priceThen = priceNow - diff;
+            if (Math.abs(priceThen) > 1e-9) {
+                return (priceNow / priceThen - 1) * 100;
+            }
+        }
+        return undefined;
+    };
+
     return (
         <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
@@ -7884,8 +7925,10 @@ function ScoreRankingTable({ rows }: { rows: ScorePreviewRow[] }) {
                     </tr>
                 </thead>
                 <tbody>
-                    {rows.map((row, idx) => (
-                        <tr key={`${row.symbol}-${idx}`} className="border-b border-soft">
+                    {rows.map((row, idx) => {
+                        const metricMap = buildNormalizedMap(row.metrics);
+                        return (
+                            <tr key={`${row.symbol}-${idx}`} className="border-b border-soft">
                             <td className="py-2 pr-4 font-medium text-subtle">#{row.rank ?? idx + 1}</td>
                             <td className="py-2 pr-4">
                                 <div className="font-semibold text-primary">{row.symbol}</div>
@@ -7897,15 +7940,35 @@ function ScoreRankingTable({ rows }: { rows: ScorePreviewRow[] }) {
                             <td className="py-2 pr-4">
                                 {typeof row.weight === "number" ? formatPercent(row.weight) : "—"}
                             </td>
-                            {metricKeys.map((key) => (
-                                <td key={key} className="py-2 pr-4">
-                                    {row.metrics && typeof row.metrics[key] === "number"
-                                        ? row.metrics[key].toFixed(2)
-                                        : "—"}
-                                </td>
-                            ))}
+                            {metricKeys.map((key) => {
+                                const isPriceChange = /price[_-]?change/i.test(key);
+                                let content: React.ReactNode = "—";
+                                if (isPriceChange) {
+                                    const pct = resolvePriceChangePercent(metricMap, key);
+                                    if (typeof pct === "number") {
+                                        const digits = Math.abs(pct) >= 100 ? 0 : 2;
+                                        content = (
+                                            <span className={pct >= 0 ? "text-positive" : "text-negative"}>
+                                                {formatPct(pct, digits)}
+                                            </span>
+                                        );
+                                    }
+                                } else if (
+                                    row.metrics &&
+                                    typeof row.metrics[key] === "number" &&
+                                    Number.isFinite(row.metrics[key])
+                                ) {
+                                    content = row.metrics[key].toFixed(2);
+                                }
+                                return (
+                                    <td key={key} className="py-2 pr-4">
+                                        {content}
+                                    </td>
+                                );
+                            })}
                         </tr>
-                    ))}
+                        );
+                    })}
                 </tbody>
             </table>
         </div>
@@ -12001,13 +12064,88 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                 previewBest = Math.min(1000, previewWorst + 0.0001);
                                             }
                                         }
-                                        const scalePreviewData = isCustomTotalReturn
-                                            ? buildLinearClampPreview(
-                                                  previewWorst,
-                                                  previewBest,
-                                                  rule.direction
-                                              )
-                                            : [];
+                                        const baseMetricKey = metricOption?.backendMetric
+                                            ? `${metricOption.backendMetric}_${lookbackValue}`
+                                            : rule.metric.replace(/[\s-]+/g, "_");
+                                        const camelMetricKey = baseMetricKey.replace(
+                                            /_([a-z0-9])/gi,
+                                            (_, char: string) => char.toUpperCase()
+                                        );
+                                        const canonicalMetricKey =
+                                            metricOption?.backendMetric === "price_change"
+                                                ? camelMetricKey
+                                                : baseMetricKey;
+                                        const metricScale: MiniMetricScale | null = isCustomTotalReturn
+                                            ? {
+                                                  worst: previewWorst,
+                                                  best: previewBest,
+                                                  direction:
+                                                      rule.direction === "desc" ? "up" : "down",
+                                                  metricKey: canonicalMetricKey,
+                                              }
+                                            : null;
+                                        const metricAliases = Array.from(
+                                            new Set(
+                                                [
+                                                    canonicalMetricKey,
+                                                    baseMetricKey,
+                                                    camelMetricKey,
+                                                    metricOption?.value,
+                                                    rule.metric,
+                                                ]
+                                                    .filter(
+                                                        (key): key is string =>
+                                                            typeof key === "string" && key.length > 0
+                                                    )
+                                                    .map((key) => key.trim())
+                                            )
+                                        );
+                                        const chartStocks: MiniScoreStock[] = [];
+                                        if (metricScale) {
+                                            (scoreResults?.rows ?? []).forEach((row, rowIdx) => {
+                                                const metricsRecord: Record<string, number | undefined> = {
+                                                    ...(row.metrics ?? {}),
+                                                };
+                                                const entries = Object.entries(metricsRecord)
+                                                    .filter(
+                                                        (entry): entry is [string, number] =>
+                                                            typeof entry[1] === "number" &&
+                                                            Number.isFinite(entry[1] as number)
+                                                    )
+                                                    .map(([key, value]) => ({
+                                                        key,
+                                                        normalized: key
+                                                            .replace(/[^a-z0-9]+/gi, "")
+                                                            .toLowerCase(),
+                                                        value,
+                                                    }));
+                                                let resolvedValue: number | undefined;
+                                                for (const alias of metricAliases) {
+                                                    const normalizedAlias = alias
+                                                        .replace(/[^a-z0-9]+/gi, "")
+                                                        .toLowerCase();
+                                                    const match = entries.find(
+                                                        (entry) => entry.normalized === normalizedAlias
+                                                    );
+                                                    if (match) {
+                                                        resolvedValue = match.value;
+                                                        break;
+                                                    }
+                                                }
+                                                if (resolvedValue === undefined) {
+                                                    return;
+                                                }
+                                                metricsRecord[metricScale.metricKey] = resolvedValue;
+                                                const ticker = row.symbol ?? `symbol-${rowIdx + 1}`;
+                                                const name = row.name ?? ticker;
+                                                chartStocks.push({
+                                                    id: `${ticker}-${rowIdx}`,
+                                                    ticker,
+                                                    name,
+                                                    metrics: metricsRecord,
+                                                });
+                                            });
+                                        }
                                         const clampScaleInput = (value: string): string => {
                                             const parsed = parseOptionalNumber(value);
                                             if (typeof parsed !== "number") return value;
@@ -12279,7 +12417,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                                 </Chip>
                                                             </div>
                                                         </div>
-                                                        {isCustomTotalReturn ? (
+                                                        {isCustomTotalReturn && metricScale ? (
                                                             <div className="md:col-span-2 space-y-3 rounded-2xl border border-soft bg-surface p-4">
                                                                 <div className="flex items-center gap-2 text-sm font-medium text-primary">
                                                                     Skala punktacji
@@ -12369,20 +12507,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                                         </div>
                                                                     </label>
                                                                 </div>
-                                                                {scalePreviewData.length > 0 && (
-                                                                    <div className="h-24 w-full rounded-xl bg-soft-surface/60 p-2">
-                                                                        <ResponsiveContainer width="100%" height="100%">
-                                                                            <LineChart data={scalePreviewData} margin={{ top: 4, right: 8, left: 8, bottom: 4 }}>
-                                                                                <XAxis dataKey="value" type="number" domain={["auto", "auto"]} hide />
-                                                                                <YAxis dataKey="score" domain={[0, 1]} hide />
-                                                                                <Line type="monotone" dataKey="score" stroke="#4F46E5" strokeWidth={2} dot={false} isAnimationActive={false} />
-                                                                            </LineChart>
-                                                                        </ResponsiveContainer>
-                                                                    </div>
-                                                                )}
-                                                                <div className="text-[10px] uppercase tracking-wide text-muted">
-                                                                    r [%] → score
-                                                                </div>
+                                                                <MiniScoreChart scale={metricScale} stocks={chartStocks} />
                                                             </div>
                                                         ) : (
                                                             <>
