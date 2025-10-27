@@ -43,6 +43,8 @@ const nextConfig: NextConfig = {
       proxy("/api/quotes/:path*", "/quotes/:path*"),
       proxy("/api/indices", "/indices"),
       proxy("/api/indices/:path*", "/indices/:path*"),
+      proxy("/api/admin", "/api/admin"),
+      proxy("/api/admin/:path*", "/api/admin/:path*"),
     ];
   },
 };

@@ -91,3 +91,44 @@ export CLICKHOUSE_PASSWORD="<haslo>"
   przekazanej konfiguracji. Aktualne ustawienia można podejrzeć i zresetować
   do wartości środowiskowych tym samym panelem.
 
+## Narzędzia pomocnicze
+
+### Lista symboli z `_list_candidate_symbols`
+
+Do szybkiego wypisania kandydatów dla danego uniwersum możesz użyć skryptu
+`scripts/list_candidate_symbols.py`. Skrypt wymaga poprawnie ustawionych
+zmiennych połączeniowych do ClickHouse, tak jak backend.
+
+#### Linux / macOS (powłoka bash)
+
+```bash
+cd backend
+python scripts/list_candidate_symbols.py --universe index:WIG40 --pretty
+```
+
+Jeżeli chcesz od razu zobaczyć podstawowe informacje z tabeli `companies`
+(nazwa, ISIN, sektor, branża), dodaj przełącznik `--with-company-info`:
+
+```bash
+cd backend
+python scripts/list_candidate_symbols.py --universe index:WIG40 --pretty --with-company-info
+```
+
+#### Windows (PowerShell)
+
+```powershell
+cd backend
+python .\scripts\list_candidate_symbols.py --universe index:WIG40 --pretty
+```
+
+Opcjonalnie możesz wzbogacić wynik o dane z tabeli `companies`:
+
+```powershell
+cd backend
+python .\scripts\list_candidate_symbols.py --universe index:WIG40 --pretty --with-company-info
+```
+
+Parametr `--universe` możesz podać wielokrotnie, np. `--universe index:WIG40
+--universe isin:PLLOTOS00025`. Domyślnie skrypt drukuje JSON z listą tickerów;
+flaga `--pretty` wypisze jeden symbol na linię z numeracją.
+
