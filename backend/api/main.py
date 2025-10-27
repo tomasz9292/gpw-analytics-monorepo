@@ -1684,6 +1684,7 @@ def _build_company_symbol_lookup(ch_client) -> Dict[str, str]:
         for candidate in (
             "symbol",
             "symbol_gpw",
+            "symbol_gpw_benchmark",
             "ticker",
             "code",
             "short_name",
@@ -1847,7 +1848,24 @@ def _normalize_company_row(row: Dict[str, Any], symbol_column: str) -> Optional[
         raw_symbol_value = str(_convert_clickhouse_value(fallback))
         canonical["raw_symbol"] = raw_symbol_value
 
-    canonical["symbol"] = pretty_symbol(str(raw_symbol_value))
+    display_candidates = [
+        canonical.get("symbol_gpw_benchmark"),
+        canonical.get("symbol_gpw"),
+        raw_symbol_value,
+    ]
+    for display_candidate in display_candidates:
+        if not display_candidate:
+            continue
+        display_text = str(display_candidate).strip()
+        if not display_text:
+            continue
+        pretty = pretty_symbol(display_text)
+        canonical["symbol"] = pretty or display_text
+        break
+    else:
+        fallback_pretty = pretty_symbol(str(raw_symbol_value))
+        canonical["symbol"] = fallback_pretty or str(raw_symbol_value)
+
     if not canonical.get("symbol_gpw"):
         canonical["symbol_gpw"] = canonical["raw_symbol"]
     canonical["fundamentals"] = fundamentals
