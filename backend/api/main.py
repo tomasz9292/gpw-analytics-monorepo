@@ -4755,9 +4755,13 @@ def _build_filters_from_universe(universe: ScorePreviewRequest["universe"]) -> O
         raise HTTPException(400, "Niepoprawny format wszechświata") from exc
 
 
+DEFAULT_SCORE_PREVIEW_LIMIT = 5000
+
+
 def _build_auto_config_from_preview(req: ScorePreviewRequest) -> AutoSelectionConfig:
     components = _build_components_from_rules(req.rules)
-    top_n = req.limit or len(components)
+    limit = req.limit if req.limit is not None else DEFAULT_SCORE_PREVIEW_LIMIT
+    top_n = max(1, min(limit, DEFAULT_SCORE_PREVIEW_LIMIT))
     filters = _build_filters_from_universe(req.universe)
     return AutoSelectionConfig(
         top_n=top_n,
@@ -5453,7 +5457,7 @@ def _run_score_preview(req: ScorePreviewRequest) -> ScorePreviewResponse:
     else:
         prepared.sort(key=lambda item: item["score"], reverse=True)  # type: ignore[index]
 
-    limit = req.limit or len(candidates)
+    limit = req.limit if req.limit is not None else len(ranked)
     if limit:
         prepared = prepared[:limit]
 
