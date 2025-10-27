@@ -54,6 +54,22 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
             "(name, ISIN, sector, industry)."
         ),
     )
+    parser.add_argument(
+        "--include-index-history",
+        dest="include_index_history",
+        action="store_true",
+        help=(
+            "Include historical index compositions when resolving filters with the "
+            "index: prefix (matches backend defaults)."
+        ),
+    )
+    parser.add_argument(
+        "--no-include-index-history",
+        dest="include_index_history",
+        action="store_false",
+        help="Use only the latest index composition when resolving index: filters.",
+    )
+    parser.set_defaults(include_index_history=True)
     return parser.parse_args(argv)
 
 
@@ -62,7 +78,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     filters = _build_filters_from_universe(args.universe)
     ch = get_ch()
-    symbols = _list_candidate_symbols(ch, filters)
+    symbols = _list_candidate_symbols(
+        ch,
+        filters,
+        include_index_history=args.include_index_history,
+    )
 
     metadata_lookup: dict[str, dict[str, str]] = {}
     if args.with_company_info:

@@ -132,3 +132,7 @@ Parametr `--universe` możesz podać wielokrotnie, np. `--universe index:WIG40
 --universe isin:PLLOTOS00025`. Domyślnie skrypt drukuje JSON z listą tickerów;
 flaga `--pretty` wypisze jeden symbol na linię z numeracją.
 
+Skrypt korzysta z historycznych składów indeksów (`index:`) tak jak backend.
+Jeżeli chcesz ograniczyć się wyłącznie do najnowszego składu, dodaj
+`--no-include-index-history` (analogiczny przełącznik działa również w bashu).
+

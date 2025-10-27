@@ -5846,7 +5846,7 @@ def list_universe_candidates(
         description="Czy dołączyć podstawowe informacje o spółkach z tabeli companies",
     ),
     include_index_history: bool = Query(
-        default=False,
+        default=True,
         description="Uwzględnij historyczne składy indeksów przy filtrowaniu po index:",
     ),
 ) -> UniverseCandidateListResponse:

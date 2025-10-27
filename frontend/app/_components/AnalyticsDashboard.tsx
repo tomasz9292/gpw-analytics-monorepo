@@ -3369,6 +3369,7 @@ const CompanySyncPanel = ({ symbol, setSymbol }: CompanySyncPanelProps) => {
                 params.append("universe", token);
             }
             params.append("with_company_info", universeIncludeMetadata ? "true" : "false");
+            params.append("include_index_history", "true");
 
             const response = await fetch(
                 `${ADMIN_API}/universe/candidates?${params.toString()}`,
