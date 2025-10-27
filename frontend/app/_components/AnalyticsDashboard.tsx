@@ -131,6 +131,12 @@ type ScoreComponentRequest = {
     max_value?: number;
 };
 
+const PERCENT_BASED_SCORE_METRICS = new Set<ScoreComponentRequest["metric"]>([
+    "total_return",
+    "volatility",
+    "max_drawdown",
+]);
+
 type PortfolioSimulationStage = "preparing" | "ranking" | "building" | "finalizing";
 
 type PortfolioSimulationProgress = {
@@ -241,14 +247,26 @@ const buildScoreComponents = (rules: ScoreBuilderRule[]): ScoreComponentRequest[
         const lookbackDays = resolveLookbackDays(option, rule.lookbackDays);
         const label = computeMetricLabel(option, lookbackDays, rule.label);
 
-        const minValue = parseOptionalNumber(rule.min);
-        const maxValue = parseOptionalNumber(rule.max);
+        const rawMinValue = parseOptionalNumber(rule.min);
+        const rawMaxValue = parseOptionalNumber(rule.max);
         const hasScale =
-            typeof minValue === "number" &&
-            typeof maxValue === "number" &&
-            Number.isFinite(minValue) &&
-            Number.isFinite(maxValue) &&
-            maxValue > minValue;
+            typeof rawMinValue === "number" &&
+            typeof rawMaxValue === "number" &&
+            Number.isFinite(rawMinValue) &&
+            Number.isFinite(rawMaxValue) &&
+            rawMaxValue > rawMinValue;
+
+        let minValue = rawMinValue;
+        let maxValue = rawMaxValue;
+
+        if (
+            hasScale &&
+            option &&
+            PERCENT_BASED_SCORE_METRICS.has(option.backendMetric)
+        ) {
+            minValue = rawMinValue! / 100;
+            maxValue = rawMaxValue! / 100;
+        }
 
         acc.push({
             metric: option.backendMetric,
