@@ -1090,6 +1090,7 @@ type ScorePreviewRequest = {
     limit?: number;
     universe?: string | string[] | null;
     sort?: "asc" | "desc" | null;
+    as_of?: string | null;
 };
 
 type ScoreTemplateRule = {
@@ -2371,6 +2372,7 @@ async function previewScoreRanking(payload: ScorePreviewRequest): Promise<ScoreP
         limit: payload.limit,
         universe: payload.universe ?? undefined,
         sort: payload.sort ?? undefined,
+        as_of: payload.as_of ?? undefined,
     });
 
     const response = await fetch("/api/score/preview", {
@@ -10879,6 +10881,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                 limit: limitValue,
                 universe: resolvedUniverse,
                 sort: scoreSort,
+                as_of: scoreAsOf?.trim() ? scoreAsOf : undefined,
             };
 
             const result = await previewScoreRanking(payload);
