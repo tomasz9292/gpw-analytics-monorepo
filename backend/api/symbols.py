@@ -31,6 +31,29 @@ ALIASES_RAW_TO_WA: Dict[str, str] = {
     # ...
 }
 
+
+def _build_canonical_lookup() -> Dict[str, str]:
+    """Build mapping used to resolve various aliases to canonical raw symbol."""
+
+    lookup: Dict[str, str] = {}
+
+    for raw_symbol, wa_symbol in ALIASES_RAW_TO_WA.items():
+        raw_upper = raw_symbol.upper()
+        lookup.setdefault(raw_upper, raw_upper)
+
+        wa_upper = wa_symbol.upper()
+        lookup.setdefault(wa_upper, raw_upper)
+
+        if "." in wa_upper:
+            base = wa_upper.split(".", 1)[0].strip()
+            if base:
+                lookup.setdefault(base, raw_upper)
+
+    return lookup
+
+
+_ALIASES_CANONICAL_LOOKUP = _build_canonical_lookup()
+
 DEFAULT_OHLC_SYNC_SYMBOLS = (
     "ALR",
     "ALE",
@@ -81,9 +104,9 @@ def normalize_input_symbol(s: str) -> str:
 
     candidate = cleaned.upper()
 
-    alias = ALIASES_RAW_TO_WA.get(candidate)
-    if alias:
-        candidate = alias
+    canonical = _ALIASES_CANONICAL_LOOKUP.get(candidate)
+    if canonical:
+        candidate = canonical
 
     try:
         return _normalize_gpw_symbol(candidate)
