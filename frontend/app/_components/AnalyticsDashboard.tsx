@@ -8099,6 +8099,10 @@ const extractDisplayName = (symbol: string, meta?: SymbolRow): string | null => 
     if (normalizedPreferred === normalizedSymbol) {
         return null;
     }
+    const normalizedTicker = normalizeUpper(meta.ticker);
+    if (normalizedTicker && normalizedPreferred === normalizedTicker) {
+        return null;
+    }
     return preferred;
 };
 
