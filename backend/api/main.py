@@ -507,7 +507,7 @@ def _resolve_import_symbol(value: str) -> Optional[str]:
     except Exception:
         return None
 
-    if len(ticker) > 6 and normalized_input not in ALIASES_RAW_TO_WA:
+    if not ticker.isalnum():
         return None
 
     return ticker
