@@ -3551,13 +3551,46 @@ def update_ohlc_sync_schedule(payload: OhlcSyncScheduleRequest) -> OhlcSyncSched
     return _snapshot_ohlc_schedule_state()
 
 
+def _resolve_symbol_for_quotes(ch_client, value: str) -> str:
+    cleaned = value.strip()
+    if not cleaned:
+        return ""
+
+    symbol_lookup = _build_company_symbol_lookup(ch_client)
+    if symbol_lookup:
+        direct = symbol_lookup.get(cleaned.upper())
+        if direct:
+            return direct
+
+        for alias in _iter_symbol_aliases(cleaned):
+            key = alias.strip().upper()
+            if not key:
+                continue
+            resolved = symbol_lookup.get(key)
+            if resolved:
+                return resolved
+
+    normalized = normalize_input_symbol(cleaned)
+    if normalized:
+        if symbol_lookup:
+            lookup_key = normalized.strip().upper()
+            if lookup_key:
+                resolved = symbol_lookup.get(lookup_key)
+                if resolved:
+                    return resolved
+        return normalized
+
+    return ""
+
+
 @api_router.get("/quotes", response_model=List[QuoteRow])
 def quotes(symbol: str, start: Optional[str] = None):
     """
     Zwraca notowania OHLC dla symbolu od wskazanej daty.
     Obsługuje zarówno 'CDR.WA' jak i 'CDPROJEKT'.
     """
-    raw_symbol = normalize_input_symbol(symbol)
+    ch = get_ch()
+    raw_symbol = _resolve_symbol_for_quotes(ch, symbol)
     if not raw_symbol:
         raise HTTPException(400, "symbol must not be empty")
 
@@ -3566,7 +3599,6 @@ def quotes(symbol: str, start: Optional[str] = None):
     except Exception:
         raise HTTPException(400, "start must be in format YYYY-MM-DD")
 
-    ch = get_ch()
     rows = ch.query(
         f"""
         SELECT toString(date) as date, open, high, low, close, volume
