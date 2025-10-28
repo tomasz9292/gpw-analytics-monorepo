@@ -56,6 +56,8 @@ const API = "/api";
 const ADMIN_API = "/api/admin";
 const LOCAL_ADMIN_API = "http://localhost:8000/api/admin";
 const LOCAL_CLICKHOUSE_STORAGE_KEY = "gpw-local-clickhouse-config";
+const CUSTOM_INDICES_STORAGE_KEY = "gpw-custom-indices";
+const MAX_UNIVERSE_FALLBACK_SYMBOLS = 500;
 
 const NETWORK_ERROR_PATTERNS = [
     "failed to fetch",
@@ -220,6 +222,22 @@ type BenchmarkUniverseOption = {
     effectiveDate: string;
     symbols: string[];
     constituents: BenchmarkUniverseConstituent[];
+    isCustom?: boolean;
+};
+
+type CustomIndexDefinition = {
+    id: string;
+    code: string;
+    name?: string | null;
+    symbols: string[];
+    createdAt: string;
+    updatedAt: string;
+};
+
+type CustomIndexDraft = {
+    code: string;
+    name: string;
+    symbols: string;
 };
 
 type GpwBenchmarkHistoryPoint = {
@@ -783,7 +801,7 @@ const extractRawInsights = (payload: JsonValue): CompanyRawInsights => {
 
 const resolveUniverseWithFallback = (
     universe: ScorePreviewRequest["universe"],
-    fallback?: string[],
+    fallback?: string[] | null,
     preferFallback = false
 ): ScorePreviewRequest["universe"] => {
     if (typeof universe === "string" && universe.trim()) {
@@ -804,7 +822,8 @@ const resolveUniverseWithFallback = (
 };
 
 const buildUniverseFiltersPayload = (
-    value: string | string[] | null | undefined
+    value: string | string[] | null | undefined,
+    customIndexMap?: Record<string, string[]>
 ): { include?: string | string[]; indices?: string[] } | undefined => {
     if (value == null) {
         return undefined;
@@ -826,22 +845,45 @@ const buildUniverseFiltersPayload = (
         return undefined;
     }
 
-    const includeTokens: string[] = [];
-    const indexTokens: string[] = [];
+    const includeSet = new Set<string>();
+    const indexSet = new Set<string>();
 
     tokens.forEach((token) => {
         const lowered = token.toLowerCase();
         if (lowered.startsWith("index:")) {
-            const code = token.slice(token.indexOf(":") + 1).trim().toUpperCase();
-            if (code) {
-                indexTokens.push(code);
+            const rawCodes = token.slice(token.indexOf(":") + 1).trim();
+            if (!rawCodes) {
+                return;
             }
+            const parts = rawCodes
+                .split(/[+&]/)
+                .map((part) => part.trim().toUpperCase())
+                .filter(Boolean);
+            parts.forEach((code) => {
+                const customSymbols = customIndexMap?.[code];
+                if (customSymbols && customSymbols.length > 0) {
+                    customSymbols.forEach((symbol) => {
+                        const normalized = symbol.trim().toUpperCase();
+                        if (normalized) {
+                            includeSet.add(normalized);
+                        }
+                    });
+                } else {
+                    indexSet.add(code);
+                }
+            });
         } else {
-            includeTokens.push(token);
+            const cleaned = token.trim();
+            if (cleaned) {
+                includeSet.add(cleaned);
+            }
         }
     });
 
     const payload: { include?: string | string[]; indices?: string[] } = {};
+
+    const includeTokens = Array.from(includeSet);
+    const indexTokens = Array.from(indexSet);
 
     if (includeTokens.length === 1) {
         payload.include = includeTokens[0];
@@ -850,10 +892,111 @@ const buildUniverseFiltersPayload = (
     }
 
     if (indexTokens.length) {
-        payload.indices = Array.from(new Set(indexTokens));
+        payload.indices = indexTokens;
     }
 
     return Object.keys(payload).length ? payload : undefined;
+};
+
+const splitUniverseTokens = (value: string | null | undefined): string[] => {
+    if (!value) {
+        return [];
+    }
+    return value
+        .split(/[\s,;]+/)
+        .map((token) => token.trim())
+        .filter(Boolean);
+};
+
+const toggleUniverseTokenValue = (
+    value: string | null | undefined,
+    token: string
+): { next: string; isActive: boolean; changed: boolean } => {
+    const normalizedToken = token.trim().toLowerCase();
+    const currentTokens = splitUniverseTokens(value);
+    const filtered = currentTokens.filter(
+        (item) => item.toLowerCase() !== normalizedToken
+    );
+
+    if (filtered.length !== currentTokens.length) {
+        return {
+            next: filtered.length ? filtered.join(", ") : "",
+            isActive: false,
+            changed: true,
+        };
+    }
+
+    filtered.push(token);
+    return {
+        next: filtered.join(", "),
+        isActive: true,
+        changed: true,
+    };
+};
+
+const removeUniverseTokenValue = (
+    value: string | null | undefined,
+    token: string
+): string => {
+    const normalizedToken = token.trim().toLowerCase();
+    const filtered = splitUniverseTokens(value).filter(
+        (item) => item.toLowerCase() !== normalizedToken
+    );
+    return filtered.length ? filtered.join(", ") : "";
+};
+
+const universeIncludesToken = (
+    value: string | null | undefined,
+    token: string
+): boolean => {
+    const normalizedToken = token.trim().toLowerCase();
+    return splitUniverseTokens(value).some(
+        (item) => item.toLowerCase() === normalizedToken
+    );
+};
+
+const extractIndexCodesFromUniverse = (
+    value: string | string[] | null | undefined
+): string[] => {
+    if (value == null) {
+        return [];
+    }
+    const entries = Array.isArray(value) ? value : [value];
+    const collected: string[] = [];
+    entries.forEach((entry) => {
+        if (typeof entry !== "string") {
+            return;
+        }
+        entry
+            .split(/[\s,;]+/)
+            .map((token) => token.trim())
+            .filter(Boolean)
+            .forEach((token) => {
+                const lowered = token.toLowerCase();
+                if (!lowered.startsWith("index:")) {
+                    return;
+                }
+                const tail = token.slice(token.indexOf(":") + 1).trim();
+                if (!tail) {
+                    return;
+                }
+                tail
+                    .split(/[+&]/)
+                    .map((part) => part.trim().toUpperCase())
+                    .filter(Boolean)
+                    .forEach((code) => {
+                        collected.push(code);
+                    });
+            });
+    });
+    return Array.from(new Set(collected));
+};
+
+const createCustomIndexId = (): string => {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+        return crypto.randomUUID();
+    }
+    return `custom-${Math.random().toString(36).slice(2, 10)}`;
 };
 
 const toTemplateRule = (rule: ScoreBuilderRule): ScoreTemplateRule => {
@@ -1915,7 +2058,8 @@ async function backtestPortfolio(
 async function backtestPortfolioByScore(
     options: ScorePortfolioOptions,
     components: ScoreComponentRequest[],
-    fallbackUniverse?: string[]
+    fallbackUniverse?: string[] | null,
+    customIndexMap?: Record<string, string[]>
 ): Promise<PortfolioResp> {
     const {
         universe = null,
@@ -1962,7 +2106,7 @@ async function backtestPortfolioByScore(
             ...(component.scoring ? { scoring: component.scoring } : {}),
             normalize: component.normalize ?? "none",
         })),
-        filters: buildUniverseFiltersPayload(resolvedUniverse),
+        filters: buildUniverseFiltersPayload(resolvedUniverse, customIndexMap),
     });
 
     const payload = removeUndefined({
@@ -9356,6 +9500,84 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
         () => [...SCORE_UNIVERSE_FALLBACK]
     );
     const [benchmarkPortfolios, setBenchmarkPortfolios] = useState<GpwBenchmarkPortfolio[]>([]);
+    const [customIndices, setCustomIndices] = useState<CustomIndexDefinition[]>(() => {
+        if (typeof window === "undefined") {
+            return [];
+        }
+        try {
+            const stored = window.localStorage.getItem(CUSTOM_INDICES_STORAGE_KEY);
+            if (!stored) {
+                return [];
+            }
+            const parsed: unknown = JSON.parse(stored);
+            if (!Array.isArray(parsed)) {
+                return [];
+            }
+            const normalized: CustomIndexDefinition[] = [];
+            parsed.forEach((item) => {
+                if (!item || typeof item !== "object") {
+                    return;
+                }
+                const codeRaw = (item as { code?: unknown }).code;
+                const symbolsRaw = (item as { symbols?: unknown }).symbols;
+                if (typeof codeRaw !== "string" || !Array.isArray(symbolsRaw)) {
+                    return;
+                }
+                const code = codeRaw.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "");
+                if (!code) {
+                    return;
+                }
+                const uniqueSymbols = Array.from(
+                    new Set(
+                        symbolsRaw
+                            .map((sym) =>
+                                typeof sym === "string" ? sym.trim().toUpperCase() : ""
+                            )
+                            .filter(Boolean)
+                    )
+                ).slice(0, MAX_UNIVERSE_FALLBACK_SYMBOLS);
+                if (!uniqueSymbols.length) {
+                    return;
+                }
+                const nameRaw = (item as { name?: unknown }).name;
+                const nameValue =
+                    typeof nameRaw === "string" ? nameRaw.trim() : undefined;
+                const createdAtRaw = (item as { createdAt?: unknown }).createdAt;
+                const updatedAtRaw = (item as { updatedAt?: unknown }).updatedAt;
+                const createdAt =
+                    typeof createdAtRaw === "string" && createdAtRaw.trim().length
+                        ? createdAtRaw
+                        : new Date().toISOString();
+                const updatedAt =
+                    typeof updatedAtRaw === "string" && updatedAtRaw.trim().length
+                        ? updatedAtRaw
+                        : createdAt;
+                const idRaw = (item as { id?: unknown }).id;
+                const id =
+                    typeof idRaw === "string" && idRaw.trim().length
+                        ? idRaw
+                        : createCustomIndexId();
+                normalized.push({
+                    id,
+                    code,
+                    name: nameValue && nameValue.length ? nameValue : undefined,
+                    symbols: uniqueSymbols,
+                    createdAt,
+                    updatedAt,
+                });
+            });
+            return normalized;
+        } catch {
+            return [];
+        }
+    });
+    const [customIndexFormOpen, setCustomIndexFormOpen] = useState(false);
+    const [customIndexDraft, setCustomIndexDraft] = useState<CustomIndexDraft>({
+        code: "",
+        name: "",
+        symbols: "",
+    });
+    const [customIndexError, setCustomIndexError] = useState<string | null>(null);
     const [benchmarkHistory, setBenchmarkHistory] = useState<
         Record<string, GpwBenchmarkHistorySeries>
     >({});
@@ -9372,6 +9594,20 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
         { type: "success" | "error"; message: string } | null
     >(null);
     const templatesHydratedRef = useRef(false);
+
+    useEffect(() => {
+        if (typeof window === "undefined") {
+            return;
+        }
+        try {
+            window.localStorage.setItem(
+                CUSTOM_INDICES_STORAGE_KEY,
+                JSON.stringify(customIndices)
+            );
+        } catch {
+            // Ignorujemy błędy zapisu w localStorage.
+        }
+    }, [customIndices]);
 
     const scoreComponents = useMemo(() => buildScoreComponents(scoreRules), [scoreRules]);
     const scoreTotalWeight = scoreComponents.reduce((acc, component) => acc + component.weight, 0);
@@ -10092,14 +10328,16 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
         pfMode === "manual" ? pfDisableManualSimulation : pfDisableScoreSimulation;
 
     const benchmarkUniverseOptions = useMemo<BenchmarkUniverseOption[]>(() => {
-        return benchmarkPortfolios.map((portfolio) => {
+        const options: BenchmarkUniverseOption[] = [];
+
+        const normalizeSymbol = (value: unknown): string =>
+            typeof value === "string" ? value.trim().toUpperCase() : "";
+        const normalizeName = (value: unknown): string =>
+            typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+
+        benchmarkPortfolios.forEach((portfolio) => {
             const symbolSet = new Set<string>();
             const constituentMap = new Map<string, BenchmarkUniverseConstituent>();
-
-            const normalizeSymbol = (value: unknown): string =>
-                typeof value === "string" ? value.trim().toUpperCase() : "";
-            const normalizeName = (value: unknown): string =>
-                typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
 
             portfolio.constituents.forEach((entry) => {
                 const displaySymbol = normalizeSymbol(entry.symbol);
@@ -10151,16 +10389,99 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
             const constituents = Array.from(constituentMap.values()).sort((a, b) =>
                 a.baseSymbol.localeCompare(b.baseSymbol)
             );
+            const code = (portfolio.index_code ?? "").trim().toUpperCase();
+            const effectiveDate = portfolio.effective_date ?? "";
 
-            return {
-                code: portfolio.index_code,
-                name: portfolio.index_name?.trim() || portfolio.index_code,
-                effectiveDate: portfolio.effective_date,
+            options.push({
+                code,
+                name: portfolio.index_name?.trim() || code,
+                effectiveDate,
                 symbols,
                 constituents,
-            };
+            });
         });
-    }, [benchmarkPortfolios]);
+
+        customIndices.forEach((index) => {
+            const uniqueSymbols = Array.from(
+                new Set(
+                    index.symbols
+                        .map((symbol) => symbol.trim().toUpperCase())
+                        .filter(Boolean)
+                )
+            );
+            const constituents: BenchmarkUniverseConstituent[] = uniqueSymbols.map(
+                (symbol) => {
+                    const baseSymbol = symbol.includes(".")
+                        ? symbol.split(".", 1)[0]
+                        : symbol;
+                    return {
+                        symbol,
+                        baseSymbol,
+                        rawSymbol: symbol,
+                        companyName: null,
+                    };
+                }
+            );
+            const dateCandidates = [index.updatedAt, index.createdAt].filter(
+                (value): value is string => typeof value === "string" && value.trim().length > 0
+            );
+            let effectiveDate = "";
+            for (const candidate of dateCandidates) {
+                const parsed = new Date(candidate);
+                if (!Number.isNaN(parsed.getTime())) {
+                    effectiveDate = parsed.toISOString().slice(0, 10);
+                    break;
+                }
+            }
+            if (!effectiveDate) {
+                effectiveDate = new Date(index.updatedAt || index.createdAt || Date.now())
+                    .toISOString()
+                    .slice(0, 10);
+            }
+            const code = index.code.trim().toUpperCase();
+            const name = index.name?.trim() || `${code} (własny)`;
+
+            options.push({
+                code,
+                name,
+                effectiveDate,
+                symbols: uniqueSymbols,
+                constituents,
+                isCustom: true,
+            });
+        });
+
+        return options.sort((a, b) => a.code.localeCompare(b.code));
+    }, [benchmarkPortfolios, customIndices]);
+
+    const benchmarkUniverseOptionMap = useMemo(() => {
+        const map: Record<string, BenchmarkUniverseOption> = {};
+        benchmarkUniverseOptions.forEach((option) => {
+            map[option.code.toUpperCase()] = option;
+        });
+        return map;
+    }, [benchmarkUniverseOptions]);
+
+    const customIndexMap = useMemo(() => {
+        const map: Record<string, string[]> = {};
+        customIndices.forEach((index) => {
+            const code = index.code.trim().toUpperCase();
+            if (!code) {
+                return;
+            }
+            const symbols = Array.from(
+                new Set(
+                    index.symbols
+                        .map((symbol) => symbol.trim().toUpperCase())
+                        .filter(Boolean)
+                )
+            );
+            if (symbols.length) {
+                map[code] = symbols.slice(0, MAX_UNIVERSE_FALLBACK_SYMBOLS);
+            }
+        });
+        return map;
+    }, [customIndices]);
 
     useEffect(() => {
         if (!benchmarkUniverseOptions.length) {
@@ -10191,22 +10512,46 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
     const handleBenchmarkUniverseSelect = useCallback(
         (option: BenchmarkUniverseOption, target: "score" | "pf" | "both" = "score") => {
             const universeToken = `index:${option.code}`;
+            let scoreResult: { next: string; isActive: boolean; changed: boolean } | null = null;
+            let pfResult: { next: string; isActive: boolean; changed: boolean } | null = null;
+
             if (target === "score" || target === "both") {
-                setScoreUniverse(universeToken);
+                scoreResult = toggleUniverseTokenValue(scoreUniverse, universeToken);
+                if (scoreResult.changed) {
+                    setScoreUniverse(scoreResult.next);
+                }
             }
             if (target === "pf" || target === "both") {
-                setPfScoreUniverse(universeToken);
+                pfResult = toggleUniverseTokenValue(pfScoreUniverse, universeToken);
+                if (pfResult.changed) {
+                    setPfScoreUniverse(pfResult.next);
+                }
             }
+
             setSelectedBenchmarkCode(option.code);
-            if (option.symbols.length) {
+
+            if ((scoreResult?.isActive || pfResult?.isActive) && option.symbols.length) {
                 setScoreUniverseFallback((prev) => {
-                    const merged = new Set<string>([...option.symbols.slice(0, 500)]);
-                    prev.forEach((symbol) => merged.add(symbol));
-                    return Array.from(merged).slice(0, 500);
+                    const merged = new Set<string>(
+                        prev.map((symbol) => symbol.trim().toUpperCase()).filter(Boolean)
+                    );
+                    option.symbols.forEach((symbol) => {
+                        const normalized = symbol.trim().toUpperCase();
+                        if (normalized) {
+                            merged.add(normalized);
+                        }
+                    });
+                    return Array.from(merged).slice(0, MAX_UNIVERSE_FALLBACK_SYMBOLS);
                 });
             }
         },
-        [setPfScoreUniverse, setScoreUniverse, setScoreUniverseFallback]
+        [
+            pfScoreUniverse,
+            scoreUniverse,
+            setPfScoreUniverse,
+            setScoreUniverse,
+            setScoreUniverseFallback,
+        ]
     );
 
     const benchmarkOverview = useMemo(
@@ -10234,6 +10579,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                     latestValue: lastPoint?.value ?? null,
                     changePct,
                     lastDate: lastPoint?.date ?? null,
+                    isCustom: option.isCustom === true,
                 };
             }),
         [benchmarkHistory, benchmarkUniverseOptions]
@@ -11004,6 +11350,114 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
         return tokens.length === 1 ? tokens[0] : tokens;
     };
 
+    const expandUniverseValueWithCustomIndices = useCallback(
+        (value: string | string[] | null | undefined): string | string[] | null | undefined => {
+            if (value == null) {
+                return value ?? null;
+            }
+            const entries = Array.isArray(value) ? value : [value];
+            const expanded: string[] = [];
+            const seen = new Set<string>();
+
+            const pushToken = (token: string) => {
+                const trimmed = token.trim();
+                if (!trimmed) {
+                    return;
+                }
+                const normalized = trimmed.toLowerCase();
+                if (seen.has(normalized)) {
+                    return;
+                }
+                seen.add(normalized);
+                expanded.push(trimmed);
+            };
+
+            entries.forEach((entry) => {
+                if (typeof entry !== "string") {
+                    pushToken(String(entry));
+                    return;
+                }
+                const trimmedEntry = entry.trim();
+                if (!trimmedEntry) {
+                    return;
+                }
+                const lowered = trimmedEntry.toLowerCase();
+                if (lowered.startsWith("index:")) {
+                    const afterColon = trimmedEntry.slice(trimmedEntry.indexOf(":") + 1).trim();
+                    if (!afterColon) {
+                        return;
+                    }
+                    const parts = afterColon
+                        .split(/[+&]/)
+                        .map((part) => part.trim().toUpperCase())
+                        .filter(Boolean);
+                    let expandedAny = false;
+                    parts.forEach((code) => {
+                        const customSymbols = customIndexMap[code];
+                        if (customSymbols && customSymbols.length) {
+                            customSymbols.forEach((symbol) => pushToken(symbol));
+                            expandedAny = true;
+                        } else {
+                            pushToken(`index:${code}`);
+                        }
+                    });
+                    if (expandedAny) {
+                        return;
+                    }
+                    return;
+                }
+                pushToken(trimmedEntry);
+            });
+
+            if (!expanded.length) {
+                return null;
+            }
+            if (!Array.isArray(value) && expanded.length === 1) {
+                return expanded[0];
+            }
+            return expanded;
+        },
+        [customIndexMap]
+    );
+
+    const computeUniverseFallback = useCallback(
+        (value: string | string[] | null | undefined): string[] | undefined => {
+            const baseSet = new Set<string>(
+                scoreUniverseFallback.map((symbol) => symbol.trim().toUpperCase()).filter(Boolean)
+            );
+            const codes = extractIndexCodesFromUniverse(value);
+            codes.forEach((code) => {
+                const option = benchmarkUniverseOptionMap[code];
+                if (option) {
+                    option.symbols.forEach((symbol) => {
+                        const normalized = symbol.trim().toUpperCase();
+                        if (normalized) {
+                            baseSet.add(normalized);
+                        }
+                    });
+                }
+                const customSymbols = customIndexMap[code];
+                if (customSymbols && customSymbols.length) {
+                    customSymbols.forEach((symbol) => {
+                        const normalized = symbol.trim().toUpperCase();
+                        if (normalized) {
+                            baseSet.add(normalized);
+                        }
+                    });
+                }
+            });
+
+            if (!baseSet.size) {
+                return scoreUniverseFallback.length
+                    ? [...scoreUniverseFallback]
+                    : undefined;
+            }
+
+            return Array.from(baseSet).slice(0, MAX_UNIVERSE_FALLBACK_SYMBOLS);
+        },
+        [benchmarkUniverseOptionMap, customIndexMap, scoreUniverseFallback]
+    );
+
     const addScoreRule = () => {
         const defaultOption = SCORE_METRIC_OPTIONS[0];
         const lookbackDays = resolveLookbackDays(defaultOption, defaultOption?.lookback);
@@ -11045,6 +11499,79 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
         setEditingTemplateId(null);
         setScoreTemplateFeedback(null);
     };
+
+    const handleSaveCustomIndex = useCallback(() => {
+        const normalizedCode = customIndexDraft.code
+            .trim()
+            .toUpperCase()
+            .replace(/[^A-Z0-9_-]/g, "");
+        if (!normalizedCode) {
+            setCustomIndexError("Podaj kod indeksu (litery, cyfry, myślnik lub podkreślenie).");
+            return;
+        }
+        const tokens = customIndexDraft.symbols
+            .split(/[\s,;]+/)
+            .map((token) => token.trim().toUpperCase())
+            .filter(Boolean);
+        const uniqueSymbols = Array.from(new Set(tokens)).slice(
+            0,
+            MAX_UNIVERSE_FALLBACK_SYMBOLS
+        );
+        if (!uniqueSymbols.length) {
+            setCustomIndexError("Dodaj co najmniej jeden symbol spółki.");
+            return;
+        }
+        const codeExists =
+            benchmarkPortfolios.some(
+                (portfolio) =>
+                    (portfolio.index_code ?? "").trim().toUpperCase() === normalizedCode
+            ) || customIndices.some((index) => index.code === normalizedCode);
+        if (codeExists) {
+            setCustomIndexError("Indeks o takim kodzie już istnieje.");
+            return;
+        }
+        const nameValue = customIndexDraft.name.trim();
+        const timestamp = new Date().toISOString();
+        setCustomIndices((prev) => [
+            ...prev,
+            {
+                id: createCustomIndexId(),
+                code: normalizedCode,
+                name: nameValue ? nameValue : undefined,
+                symbols: uniqueSymbols,
+                createdAt: timestamp,
+                updatedAt: timestamp,
+            },
+        ]);
+        setCustomIndexDraft({ code: "", name: "", symbols: "" });
+        setCustomIndexError(null);
+        setCustomIndexFormOpen(false);
+    }, [
+        benchmarkPortfolios,
+        customIndexDraft.code,
+        customIndexDraft.name,
+        customIndexDraft.symbols,
+        customIndices,
+    ]);
+
+    const handleDeleteCustomIndex = useCallback(
+        (id: string) => {
+            const removed = customIndices.find((index) => index.id === id) ?? null;
+            setCustomIndices((prev) => prev.filter((index) => index.id !== id));
+            if (removed) {
+                const token = `index:${removed.code.trim().toUpperCase()}`;
+                setScoreUniverse((prev) => removeUniverseTokenValue(prev, token));
+                setPfScoreUniverse((prev) => removeUniverseTokenValue(prev, token));
+                setSelectedBenchmarkCode((prev) => {
+                    if (!prev) {
+                        return prev;
+                    }
+                    return prev === removed?.code.trim().toUpperCase() ? null : prev;
+                });
+            }
+        },
+        [customIndices, setPfScoreUniverse, setScoreUniverse, setSelectedBenchmarkCode]
+    );
 
     const handleSaveScoreTemplate = (
         mode: "update" | "new" = editingTemplateId ? "update" : "new"
@@ -11169,9 +11696,11 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                 : undefined;
 
             const parsedUniverse = parseUniverseValue(scoreUniverse);
+            const expandedUniverse = expandUniverseValueWithCustomIndices(parsedUniverse);
+            const fallbackUniverse = computeUniverseFallback(expandedUniverse);
             const resolvedUniverse = resolveUniverseWithFallback(
-                parsedUniverse,
-                scoreUniverseFallback
+                expandedUniverse ?? undefined,
+                fallbackUniverse
             );
 
             const payload: ScorePreviewRequest = {
@@ -11232,6 +11761,9 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                         : universeCandidates.length === 1
                         ? universeCandidates[0]
                         : universeCandidates;
+                const expandedUniverseValue =
+                    expandUniverseValueWithCustomIndices(universeValue);
+                const fallbackForPf = computeUniverseFallback(expandedUniverseValue);
 
                 const selectedTemplate = pfSelectedTemplateId
                     ? scoreTemplates.find((tpl) => tpl.id === pfSelectedTemplateId)
@@ -11294,7 +11826,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                         limit: pfScoreLimitInvalid ? undefined : Math.floor(pfScoreLimit),
                         weighting: pfScoreWeighting,
                         direction: pfScoreDirection,
-                        universe: universeValue,
+                        universe: expandedUniverseValue ?? undefined,
                         minScore: parseOptionalNumber(pfScoreMin),
                         maxScore: parseOptionalNumber(pfScoreMax),
                         start: pfStart,
@@ -11306,7 +11838,8 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                         benchmark: pfBenchmark,
                     },
                     componentsForScore,
-                    scoreUniverseFallback
+                    fallbackForPf,
+                    customIndexMap
                 );
                 setPfProgress((prev) =>
                     prev
@@ -11961,18 +12494,25 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                         value={scoreUniverse}
                                         onChange={(e) => setScoreUniverse(e.target.value)}
                                         className={inputBaseClasses}
-                                        placeholder="np. WIG20.WA, WIG40.WA"
+                                        placeholder="np. index:MWIG40, index:SWIG80"
                                     />
                                     <span className="text-xs text-subtle">
                                         Pozostaw puste, aby uwzględnić wszystkie spółki
-                                        GPW dostępne w bazie danych.
+                                        GPW dostępne w bazie danych. Możesz też łączyć kilka
+                                        indeksów, np. <code className="rounded bg-slate-100 px-1">index:MWIG40</code>{" "}
+                                        <span className="text-muted">+</span>{" "}
+                                        <code className="rounded bg-slate-100 px-1">index:SWIG80</code>,
+                                        oraz własne konfiguracje.
                                     </span>
                                     {benchmarkUniverseOptions.length > 0 && (
                                         <div className="flex flex-wrap items-center gap-2 text-xs text-subtle">
                                             <span>Wybierz indeks:</span>
                                             {benchmarkUniverseOptions.map((option) => {
                                                 const token = `index:${option.code}`.toLowerCase();
-                                                const isActive = scoreUniverse?.trim().toLowerCase() === token;
+                                                const isActive = universeIncludesToken(
+                                                    scoreUniverse,
+                                                    token
+                                                );
                                                 const baseClasses =
                                                     "rounded-full border px-3 py-1 transition text-xs";
                                                 const activeClasses =
@@ -11992,6 +12532,11 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                         title={`Skład indeksu na ${option.effectiveDate}`}
                                                     >
                                                         <span className="font-semibold">{option.code}</span>
+                                                        {option.isCustom && (
+                                                            <span className="ml-2 rounded-full bg-primary/10 px-2 py-[1px] text-[10px] uppercase tracking-wide text-primary">
+                                                                Własny
+                                                            </span>
+                                                        )}
                                                         {option.name && option.name !== option.code && (
                                                             <span className="ml-1 text-[10px]">
                                                                 {option.name}
@@ -12847,6 +13392,190 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                 Aktualne portfele i wyniki indeksów dostępnych jako wszechświat
                                 dla rankingu.
                             </p>
+                            <div className="mb-6 space-y-3 rounded-xl border border-soft bg-soft-surface px-4 py-4">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <div>
+                                        <div className="text-sm font-medium text-primary">Własne indeksy</div>
+                                        <div className="text-xs text-subtle">
+                                            Definiuj własne listy spółek – zapisujemy je lokalnie w przeglądarce.
+                                        </div>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setCustomIndexFormOpen((prev) => !prev);
+                                            setCustomIndexError(null);
+                                        }}
+                                        className="rounded-lg border border-soft px-3 py-1.5 text-xs font-medium text-muted transition hover:border-[var(--color-primary)] hover:text-primary"
+                                    >
+                                        {customIndexFormOpen ? "Zamknij" : "Nowy indeks"}
+                                    </button>
+                                </div>
+                                {customIndexFormOpen && (
+                                    <div className="space-y-3 rounded-xl border border-dashed border-soft bg-white px-4 py-4">
+                                        <div className="grid gap-3 md:grid-cols-2">
+                                            <label className="flex flex-col gap-2">
+                                                <span className="text-xs uppercase tracking-wide text-muted">
+                                                    Kod indeksu
+                                                </span>
+                                                <input
+                                                    type="text"
+                                                    value={customIndexDraft.code}
+                                                    onChange={(e) =>
+                                                        setCustomIndexDraft((prev) => ({
+                                                            ...prev,
+                                                            code: e.target.value,
+                                                        }))
+                                                    }
+                                                    className={inputBaseClasses}
+                                                    placeholder="np. QUALITY20"
+                                                />
+                                            </label>
+                                            <label className="flex flex-col gap-2">
+                                                <span className="text-xs uppercase tracking-wide text-muted">
+                                                    Nazwa (opcjonalnie)
+                                                </span>
+                                                <input
+                                                    type="text"
+                                                    value={customIndexDraft.name}
+                                                    onChange={(e) =>
+                                                        setCustomIndexDraft((prev) => ({
+                                                            ...prev,
+                                                            name: e.target.value,
+                                                        }))
+                                                    }
+                                                    className={inputBaseClasses}
+                                                    placeholder="np. Ranking jakościowy"
+                                                />
+                                            </label>
+                                        </div>
+                                        <label className="flex flex-col gap-2">
+                                            <span className="text-xs uppercase tracking-wide text-muted">
+                                                Spółki
+                                            </span>
+                                            <textarea
+                                                value={customIndexDraft.symbols}
+                                                onChange={(e) =>
+                                                    setCustomIndexDraft((prev) => ({
+                                                        ...prev,
+                                                        symbols: e.target.value,
+                                                    }))
+                                                }
+                                                className={`${inputBaseClasses} min-h-[6rem]`}
+                                                placeholder="np. 11B, ALLEGRO, PEKAO"
+                                            />
+                                            <span className="text-xs text-subtle">
+                                                Oddziel symbole przecinkiem, spacją lub nową linią. Limit {MAX_UNIVERSE_FALLBACK_SYMBOLS} spółek.
+                                            </span>
+                                        </label>
+                                        {customIndexError && (
+                                            <div className="text-xs text-negative">{customIndexError}</div>
+                                        )}
+                                        <div className="flex flex-wrap gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={handleSaveCustomIndex}
+                                                className="rounded-lg bg-primary px-3 py-2 text-xs font-medium text-white transition hover:bg-[var(--color-primary-dark)]"
+                                            >
+                                                Zapisz indeks
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setCustomIndexFormOpen(false);
+                                                    setCustomIndexError(null);
+                                                }}
+                                                className="rounded-lg border border-soft px-3 py-2 text-xs text-muted transition hover:border-[var(--color-primary)] hover:text-primary"
+                                            >
+                                                Anuluj
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+                                {customIndices.length > 0 ? (
+                                    <div className="space-y-2">
+                                        {customIndices.map((index) => {
+                                            const normalizedCode = index.code.trim().toUpperCase();
+                                            const option = benchmarkUniverseOptionMap[normalizedCode];
+                                            const fallbackOption: BenchmarkUniverseOption =
+                                                option ?? {
+                                                    code: normalizedCode,
+                                                    name:
+                                                        index.name?.trim() || `${normalizedCode} (własny)`,
+                                                    effectiveDate: new Date(
+                                                        index.updatedAt || index.createdAt || Date.now()
+                                                    )
+                                                        .toISOString()
+                                                        .slice(0, 10),
+                                                    symbols: index.symbols,
+                                                    constituents: index.symbols.map((symbol) => ({
+                                                        symbol,
+                                                        baseSymbol: symbol.includes(".")
+                                                            ? symbol.split(".", 1)[0]
+                                                            : symbol,
+                                                        rawSymbol: symbol,
+                                                        companyName: null,
+                                                    })),
+                                                    isCustom: true,
+                                                };
+                                            const previewSymbols = index.symbols
+                                                .slice(0, 6)
+                                                .join(", ");
+                                            return (
+                                                <div
+                                                    key={index.id}
+                                                    className="flex flex-wrap items-start justify-between gap-3 rounded-xl border border-soft bg-white px-3 py-3 shadow-sm"
+                                                >
+                                                    <div className="space-y-1">
+                                                        <div className="text-sm font-semibold text-primary">
+                                                            {normalizedCode}
+                                                            <span className="ml-2 rounded-full bg-primary/10 px-2 py-[1px] text-[10px] uppercase tracking-wide text-primary">
+                                                                Własny
+                                                            </span>
+                                                        </div>
+                                                        {index.name && index.name.trim() && (
+                                                            <div className="text-xs text-subtle">
+                                                                {index.name.trim()}
+                                                            </div>
+                                                        )}
+                                                        <div className="text-xs text-muted">
+                                                            {index.symbols.length} spółek • {previewSymbols}
+                                                            {index.symbols.length > 6 ? "…" : ""}
+                                                        </div>
+                                                    </div>
+                                                    <div className="flex flex-wrap gap-2">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleBenchmarkUniverseSelect(fallbackOption, "score")}
+                                                            className="rounded-lg border border-soft px-3 py-1.5 text-xs text-muted transition hover:border-[var(--color-primary)] hover:text-primary"
+                                                        >
+                                                            Dodaj do score
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleBenchmarkUniverseSelect(fallbackOption, "pf")}
+                                                            className="rounded-lg border border-soft px-3 py-1.5 text-xs text-muted transition hover:border-[var(--color-primary)] hover:text-primary"
+                                                        >
+                                                            Dodaj do symulatora
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleDeleteCustomIndex(index.id)}
+                                                            className="rounded-lg border border-soft px-3 py-1.5 text-xs text-negative transition hover:border-negative hover:text-negative"
+                                                        >
+                                                            Usuń
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                ) : (
+                                    <div className="text-xs text-subtle">
+                                        Nie dodano jeszcze żadnego własnego indeksu.
+                                    </div>
+                                )}
+                            </div>
                             {benchmarkOverview.length > 0 ? (
                                 <>
                                     <div className="overflow-x-auto">
@@ -12865,7 +13594,16 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                             <tbody className="divide-y divide-soft">
                                                 {benchmarkOverview.map((item) => (
                                                     <tr key={item.code}>
-                                                        <td className="px-3 py-2 font-medium text-primary">{item.code}</td>
+                                                        <td className="px-3 py-2 font-medium text-primary">
+                                                            <div className="flex items-center gap-2">
+                                                                <span>{item.code}</span>
+                                                                {item.isCustom && (
+                                                                    <span className="rounded-full bg-primary/10 px-2 py-[2px] text-[10px] uppercase tracking-wide text-primary">
+                                                                        Własny
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                        </td>
                                                         <td className="px-3 py-2 text-subtle">
                                                             {item.name || "—"}
                                                         </td>
@@ -13202,15 +13940,17 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                         value={pfScoreUniverse}
                                                         onChange={(e) => setPfScoreUniverse(e.target.value)}
                                                         className={inputBaseClasses}
-                                                        placeholder="np. WIG20.WA"
+                                                        placeholder="np. index:MWIG40, index:SWIG80"
                                                     />
                                                     {benchmarkUniverseOptions.length > 0 && (
                                                         <div className="flex flex-wrap items-center gap-2 text-xs text-subtle">
                                                             <span>Wybierz indeks:</span>
                                                             {benchmarkUniverseOptions.map((option) => {
                                                                 const token = `index:${option.code}`.toLowerCase();
-                                                                const isActive =
-                                                                    pfScoreUniverse?.trim().toLowerCase() === token;
+                                                                const isActive = universeIncludesToken(
+                                                                    pfScoreUniverse,
+                                                                    token
+                                                                );
                                                                 const baseClasses =
                                                                     "rounded-full border px-3 py-1 transition text-xs";
                                                                 const activeClasses =
@@ -13237,6 +13977,11 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                                         <span className="font-semibold">
                                                                             {option.code}
                                                                         </span>
+                                                                        {option.isCustom && (
+                                                                            <span className="ml-2 rounded-full bg-primary/10 px-2 py-[1px] text-[10px] uppercase tracking-wide text-primary">
+                                                                                Własny
+                                                                            </span>
+                                                                        )}
                                                                         {option.name && option.name !== option.code && (
                                                                             <span className="ml-1 text-[10px]">
                                                                                 {option.name}
@@ -13250,6 +13995,12 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                             })}
                                                         </div>
                                                     )}
+                                                    <span className="text-xs text-subtle">
+                                                        Możesz łączyć kilka indeksów oraz własne konfiguracje,
+                                                        np. <code className="rounded bg-slate-100 px-1">index:MWIG40</code>{" "}
+                                                        <span className="text-muted">+</span>{" "}
+                                                        <code className="rounded bg-slate-100 px-1">index:SWIG80</code>.
+                                                    </span>
                                                 </label>
                                             </div>
                                             <div className="grid gap-3 md:grid-cols-2">
