@@ -366,6 +366,33 @@ def test_backtest_portfolio_auto_partial_slots_use_cash(monkeypatch):
     )
 
 
+def test_compute_backtest_rescales_negative_weights():
+    closes_map = {
+        "AAA": [("2023-01-02", 100.0), ("2023-01-03", 100.0)],
+        "BBB": [("2023-01-02", 100.0), ("2023-01-03", 100.0)],
+    }
+
+    def allocator(ds, available):
+        assert set(available) == {"AAA", "BBB"}
+        # negative weight for BBB should be clamped to zero and the positive
+        # allocation for AAA rescaled to preserve the budget
+        return {"AAA": 1.5, "BBB": -0.5}, 0.0, None
+
+    equity, stats, _ = main._compute_backtest(
+        closes_map,
+        [0.0, 0.0],
+        date(2023, 1, 2),
+        "none",
+        dynamic_allocator=allocator,
+        initial_capital=100.0,
+    )
+
+    assert equity
+    assert equity[0].value == pytest.approx(100.0)
+    assert stats.final_value == pytest.approx(100.0)
+    assert stats.initial_value == pytest.approx(100.0)
+
+
 def test_portfolio_score_returns_top_n(monkeypatch):
     data = {
         "AAA": [

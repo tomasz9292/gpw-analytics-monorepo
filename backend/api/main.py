@@ -5476,9 +5476,21 @@ def _compute_backtest(
             if dynamic_allocator is not None:
                 weights_update, cash_candidate, note = dynamic_allocator(ds, available_syms)
                 cash_trade_note = note
+                positive_total = 0.0
                 for sym in base_weights.keys():
-                    base_weights[sym] = max(float(weights_update.get(sym, 0.0)), 0.0)
+                    weight = max(float(weights_update.get(sym, 0.0)), 0.0)
+                    base_weights[sym] = weight
+                    positive_total += weight
                 active_cash_weight = min(max(float(cash_candidate), 0.0), 1.0)
+
+                allowed_investable = max(0.0, 1.0 - active_cash_weight)
+                if positive_total <= 0 or allowed_investable <= 0:
+                    for sym in base_weights.keys():
+                        base_weights[sym] = 0.0
+                elif positive_total > allowed_investable:
+                    scale = allowed_investable / positive_total
+                    for sym in base_weights.keys():
+                        base_weights[sym] *= scale
             else:
                 active_cash_weight = default_cash_weight
                 cash_trade_note = None
