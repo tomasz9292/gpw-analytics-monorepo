@@ -3908,7 +3908,7 @@ const CompanySyncPanel = ({ symbol, setSymbol }: CompanySyncPanelProps) => {
             const input = ohlcImportInputRef.current;
             const file = input?.files?.[0];
             if (!file) {
-                setOhlcImportError("Wybierz plik z danymi notowań (CSV).");
+                setOhlcImportError("Wybierz plik z danymi notowań (CSV lub ZIP).");
                 return;
             }
             setOhlcImporting(true);
@@ -3942,7 +3942,7 @@ const CompanySyncPanel = ({ symbol, setSymbol }: CompanySyncPanelProps) => {
         setOhlcImportError(null);
         setOhlcImportSuccess(null);
         if (!file) {
-            setOhlcImportError("Wybierz plik z danymi notowań (CSV).");
+            setOhlcImportError("Wybierz plik z danymi notowań (CSV lub ZIP).");
             return;
         }
         setOhlcImporting(true);
@@ -5104,14 +5104,14 @@ const CompanySyncPanel = ({ symbol, setSymbol }: CompanySyncPanelProps) => {
                         <Card title="Import notowań z pliku">
                             <form onSubmit={handleOhlcImport} className="space-y-4">
                                 <p className="text-sm text-muted">
-                                    Wgraj plik CSV wygenerowany lokalnie i zapisz dane w ClickHouse
-                                    Cloud lub działającym lokalnie backendzie.
+                                    Wgraj plik CSV lub archiwum ZIP z plikami <code>.MST</code> i zapisz
+                                    dane w ClickHouse Cloud lub działającym lokalnie backendzie.
                                 </p>
                                 <label className="flex flex-col gap-2 text-sm font-medium text-primary">
-                                    <span>Plik z notowaniami (CSV)</span>
+                                    <span>Plik z notowaniami (CSV lub ZIP)</span>
                                     <input
                                         type="file"
-                                        accept=".csv,text/csv"
+                                        accept=".csv,.zip,text/csv,application/zip"
                                         ref={ohlcImportInputRef}
                                         onChange={() => {
                                             setOhlcImportError(null);
@@ -5121,7 +5121,9 @@ const CompanySyncPanel = ({ symbol, setSymbol }: CompanySyncPanelProps) => {
                                         disabled={ohlcImporting}
                                     />
                                     <span className="text-xs font-normal text-subtle">
-                                        Kolumny: symbol, date, open, high, low, close, volume (opcjonalnie).
+                                        CSV: kolumny symbol, date, open, high, low, close, volume
+                                        (opcjonalnie). ZIP: spakowane pliki <code>.MST</code> z
+                                        notowaniami dziennymi.
                                     </span>
                                 </label>
                                 {ohlcImportError && (
