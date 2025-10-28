@@ -801,7 +801,7 @@ const extractRawInsights = (payload: JsonValue): CompanyRawInsights => {
 
 const resolveUniverseWithFallback = (
     universe: ScorePreviewRequest["universe"],
-    fallback?: string[],
+    fallback?: string[] | null,
     preferFallback = false
 ): ScorePreviewRequest["universe"] => {
     if (typeof universe === "string" && universe.trim()) {
@@ -9513,61 +9513,59 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
             if (!Array.isArray(parsed)) {
                 return [];
             }
-            const normalized = parsed
-                .map((item) => {
-                    if (!item || typeof item !== "object") {
-                        return null;
-                    }
-                    const codeRaw = (item as { code?: unknown }).code;
-                    const symbolsRaw = (item as { symbols?: unknown }).symbols;
-                    if (typeof codeRaw !== "string" || !Array.isArray(symbolsRaw)) {
-                        return null;
-                    }
-                    const code = codeRaw.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "");
-                    if (!code) {
-                        return null;
-                    }
-                    const uniqueSymbols = Array.from(
-                        new Set(
-                            symbolsRaw
-                                .map((sym) =>
-                                    typeof sym === "string"
-                                        ? sym.trim().toUpperCase()
-                                        : ""
-                                )
-                                .filter(Boolean)
-                        )
-                    ).slice(0, MAX_UNIVERSE_FALLBACK_SYMBOLS);
-                    if (!uniqueSymbols.length) {
-                        return null;
-                    }
-                    const nameRaw = (item as { name?: unknown }).name;
-                    const name = typeof nameRaw === "string" ? nameRaw.trim() : undefined;
-                    const createdAtRaw = (item as { createdAt?: unknown }).createdAt;
-                    const updatedAtRaw = (item as { updatedAt?: unknown }).updatedAt;
-                    const createdAt =
-                        typeof createdAtRaw === "string" && createdAtRaw.trim().length
-                            ? createdAtRaw
-                            : new Date().toISOString();
-                    const updatedAt =
-                        typeof updatedAtRaw === "string" && updatedAtRaw.trim().length
-                            ? updatedAtRaw
-                            : createdAt;
-                    const idRaw = (item as { id?: unknown }).id;
-                    const id =
-                        typeof idRaw === "string" && idRaw.trim().length
-                            ? idRaw
-                            : createCustomIndexId();
-                    return {
-                        id,
-                        code,
-                        name: name && name.length ? name : undefined,
-                        symbols: uniqueSymbols,
-                        createdAt,
-                        updatedAt,
-                    } satisfies CustomIndexDefinition;
-                })
-                .filter((entry): entry is CustomIndexDefinition => Boolean(entry));
+            const normalized: CustomIndexDefinition[] = [];
+            parsed.forEach((item) => {
+                if (!item || typeof item !== "object") {
+                    return;
+                }
+                const codeRaw = (item as { code?: unknown }).code;
+                const symbolsRaw = (item as { symbols?: unknown }).symbols;
+                if (typeof codeRaw !== "string" || !Array.isArray(symbolsRaw)) {
+                    return;
+                }
+                const code = codeRaw.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "");
+                if (!code) {
+                    return;
+                }
+                const uniqueSymbols = Array.from(
+                    new Set(
+                        symbolsRaw
+                            .map((sym) =>
+                                typeof sym === "string" ? sym.trim().toUpperCase() : ""
+                            )
+                            .filter(Boolean)
+                    )
+                ).slice(0, MAX_UNIVERSE_FALLBACK_SYMBOLS);
+                if (!uniqueSymbols.length) {
+                    return;
+                }
+                const nameRaw = (item as { name?: unknown }).name;
+                const nameValue =
+                    typeof nameRaw === "string" ? nameRaw.trim() : undefined;
+                const createdAtRaw = (item as { createdAt?: unknown }).createdAt;
+                const updatedAtRaw = (item as { updatedAt?: unknown }).updatedAt;
+                const createdAt =
+                    typeof createdAtRaw === "string" && createdAtRaw.trim().length
+                        ? createdAtRaw
+                        : new Date().toISOString();
+                const updatedAt =
+                    typeof updatedAtRaw === "string" && updatedAtRaw.trim().length
+                        ? updatedAtRaw
+                        : createdAt;
+                const idRaw = (item as { id?: unknown }).id;
+                const id =
+                    typeof idRaw === "string" && idRaw.trim().length
+                        ? idRaw
+                        : createCustomIndexId();
+                normalized.push({
+                    id,
+                    code,
+                    name: nameValue && nameValue.length ? nameValue : undefined,
+                    symbols: uniqueSymbols,
+                    createdAt,
+                    updatedAt,
+                });
+            });
             return normalized;
         } catch {
             return [];
@@ -11558,17 +11556,8 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
 
     const handleDeleteCustomIndex = useCallback(
         (id: string) => {
-            let removed: CustomIndexDefinition | null = null;
-            setCustomIndices((prev) => {
-                const next = prev.filter((index) => {
-                    if (index.id === id) {
-                        removed = index;
-                        return false;
-                    }
-                    return true;
-                });
-                return next;
-            });
+            const removed = customIndices.find((index) => index.id === id) ?? null;
+            setCustomIndices((prev) => prev.filter((index) => index.id !== id));
             if (removed) {
                 const token = `index:${removed.code.trim().toUpperCase()}`;
                 setScoreUniverse((prev) => removeUniverseTokenValue(prev, token));
@@ -11581,7 +11570,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                 });
             }
         },
-        [setPfScoreUniverse, setScoreUniverse, setSelectedBenchmarkCode]
+        [customIndices, setPfScoreUniverse, setScoreUniverse, setSelectedBenchmarkCode]
     );
 
     const handleSaveScoreTemplate = (
