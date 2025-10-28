@@ -9,6 +9,7 @@ import re
 import statistics
 import textwrap
 import unicodedata
+import zipfile
 from datetime import date, datetime, timedelta, timezone
 from math import isfinite, sqrt
 from typing import (
@@ -49,7 +50,12 @@ from .ohlc_progress import OhlcSyncProgress, OhlcSyncProgressTracker
 from .ohlc_sources import MultiSourceOhlcHarvester
 from .sector_classification_data import GPW_SECTOR_CLASSIFICATION
 from .stooq_ohlc import OhlcSyncProgressEvent, OhlcSyncResult, _parse_float
-from .symbols import DEFAULT_OHLC_SYNC_SYMBOLS, normalize_input_symbol, pretty_symbol
+from .symbols import (
+    ALIASES_RAW_TO_WA,
+    DEFAULT_OHLC_SYNC_SYMBOLS,
+    normalize_input_symbol,
+    pretty_symbol,
+)
 from .windows_agent import router as windows_agent_router
 
 # =========================
@@ -179,6 +185,60 @@ _OHLC_IMPORT_REQUIRED_COLUMNS = ("symbol", "date", "open", "high", "low", "close
 _OHLC_IMPORT_OPTIONAL_COLUMNS = ("volume",)
 _MAX_OHLC_IMPORT_ERRORS = 50
 
+_MST_HEADER_ALIASES = {
+    "data": "date",
+    "date": "date",
+    "czas": "time",
+    "symbol": "symbol",
+    "ticker": "symbol",
+    "kod": "symbol",
+    "spolka": "symbol",
+    "otwarcie": "open",
+    "kurs_otwarcia": "open",
+    "otw": "open",
+    "open": "open",
+    "najwyzszy": "high",
+    "kurs_max": "high",
+    "max": "high",
+    "high": "high",
+    "najnizszy": "low",
+    "kurs_min": "low",
+    "min": "low",
+    "low": "low",
+    "zamkniecie": "close",
+    "kurs_zamkniecia": "close",
+    "zamkn": "close",
+    "close": "close",
+    "wolumen": "volume",
+    "wol": "volume",
+    "wolumen_obrotu": "volume",
+    "volume": "volume",
+    "obrot": "turnover",
+    "obrot_wartosciowy": "turnover",
+    "obrotwartosciowy": "turnover",
+}
+
+_MST_REQUIRED_FIELDS = {"date", "open", "high", "low", "close"}
+
+_MST_DEFAULT_COLUMN_ORDER = {
+    "date": 0,
+    "open": 1,
+    "high": 2,
+    "low": 3,
+    "close": 4,
+    "volume": 5,
+}
+
+_MST_DEFAULT_COLUMN_ORDER_WITH_SYMBOL = {
+    "symbol": 0,
+    "date": 1,
+    "open": 2,
+    "high": 3,
+    "low": 4,
+    "close": 5,
+    "volume": 6,
+}
+
 ALLOWED_SCORE_METRICS = {"total_return", "volatility", "max_drawdown", "sharpe", "price_change"}
 
 
@@ -291,6 +351,384 @@ def _decode_uploaded_text(content: bytes) -> str:
         except UnicodeDecodeError:
             continue
     raise ValueError("Nie udało się zdekodować pliku. Użyj kodowania UTF-8.")
+
+
+def _parse_ohlc_csv_payload(
+    content: bytes,
+) -> Tuple[List[List[Any]], int, List[str], int]:
+    decoded = _decode_uploaded_text(content)
+    reader = csv.DictReader(io.StringIO(decoded))
+    if not reader.fieldnames:
+        raise ValueError("Plik nie zawiera nagłówka.")
+
+    column_map: Dict[str, str] = {}
+    for raw_header in reader.fieldnames:
+        normalized = _normalize_import_column(raw_header)
+        if not normalized:
+            continue
+        column_map.setdefault(normalized, raw_header)
+
+    missing = [name for name in _OHLC_IMPORT_REQUIRED_COLUMNS if name not in column_map]
+    if missing:
+        required = ", ".join(_OHLC_IMPORT_REQUIRED_COLUMNS)
+        optional = ", ".join(_OHLC_IMPORT_OPTIONAL_COLUMNS)
+        raise ValueError(
+            "Niepoprawny nagłówek pliku. Wymagane kolumny: "
+            f"{required}. Opcjonalnie: {optional}."
+        )
+
+    payload: List[List[Any]] = []
+    skipped = 0
+    errors: List[str] = []
+    total_errors = 0
+    seen: set[tuple[str, date]] = set()
+
+    def register_error(message: str) -> None:
+        nonlocal total_errors
+        total_errors += 1
+        if len(errors) < _MAX_OHLC_IMPORT_ERRORS:
+            errors.append(message)
+
+    for index, row in enumerate(reader, start=2):
+        raw_symbol = (row.get(column_map["symbol"]) or "").strip()
+        if not raw_symbol:
+            skipped += 1
+            register_error(f"Wiersz {index}: brak symbolu spółki.")
+            continue
+        try:
+            symbol = _normalize_gpw_symbol(raw_symbol)
+        except Exception as exc:
+            skipped += 1
+            register_error(f"Wiersz {index}: {exc}")
+            continue
+
+        raw_date = (row.get(column_map["date"]) or "").strip()
+        if not raw_date:
+            skipped += 1
+            register_error(f"Wiersz {index}: brak daty notowania.")
+            continue
+        try:
+            parsed_date = date.fromisoformat(raw_date)
+        except ValueError:
+            skipped += 1
+            register_error(f"Wiersz {index}: niepoprawny format daty ({raw_date}).")
+            continue
+
+        open_value = _parse_float(row.get(column_map["open"]))
+        high_value = _parse_float(row.get(column_map["high"]))
+        low_value = _parse_float(row.get(column_map["low"]))
+        close_value = _parse_float(row.get(column_map["close"]))
+        missing_values = [
+            name
+            for name, value in (
+                ("open", open_value),
+                ("high", high_value),
+                ("low", low_value),
+                ("close", close_value),
+            )
+            if value is None
+        ]
+        if missing_values:
+            skipped += 1
+            missing_label = ", ".join(sorted(set(missing_values)))
+            register_error(f"Wiersz {index}: brak danych w kolumnach: {missing_label}.")
+            continue
+
+        volume_value = None
+        if "volume" in column_map:
+            volume_value = _parse_float(row.get(column_map["volume"]))
+
+        key = (symbol, parsed_date)
+        if key in seen:
+            skipped += 1
+            register_error(
+                f"Wiersz {index}: zduplikowany rekord {symbol} {parsed_date.isoformat()}."
+            )
+            continue
+        seen.add(key)
+
+        payload.append(
+            [symbol, parsed_date, open_value, high_value, low_value, close_value, volume_value]
+        )
+
+    return payload, skipped, errors, total_errors
+
+
+def _detect_mst_delimiter(text: str) -> str:
+    for line in text.splitlines():
+        cleaned = line.strip()
+        if not cleaned or cleaned.startswith("#"):
+            continue
+        count_semicolons = cleaned.count(";")
+        count_commas = cleaned.count(",")
+        if count_semicolons >= 4:
+            return ";"
+        if count_commas >= 4:
+            return ","
+    return ";"
+
+
+def _derive_symbol_from_mst_filename(filename: str) -> Optional[str]:
+    base = os.path.basename(filename)
+    stem, _ = os.path.splitext(base)
+    candidate = stem.strip()
+    if not candidate:
+        return None
+
+    lowered = candidate.lower()
+    for suffix in ("_d", "_w", "_m", "_q", "_y"):
+        if lowered.endswith(suffix):
+            candidate = candidate[: -len(suffix)]
+            break
+
+    candidate = re.sub(r"[^0-9a-zA-Z]", "", candidate)
+    if not candidate:
+        return None
+
+    return _resolve_import_symbol(candidate)
+
+
+def _resolve_import_symbol(value: str) -> Optional[str]:
+    normalized_input = normalize_input_symbol(value)
+    if not normalized_input:
+        return None
+
+    alias = ALIASES_RAW_TO_WA.get(normalized_input)
+    if alias:
+        base = alias.split(".", 1)[0].strip()
+        if base:
+            try:
+                return _normalize_gpw_symbol(base)
+            except Exception:
+                return None
+
+    try:
+        ticker = _normalize_gpw_symbol(normalized_input)
+    except Exception:
+        return None
+
+    if len(ticker) > 6 and normalized_input not in ALIASES_RAW_TO_WA:
+        return None
+
+    return ticker
+
+
+def _parse_mst_date(value: str) -> Optional[date]:
+    cleaned = re.sub(r"[^0-9]", "", value or "")
+    if len(cleaned) == 8:
+        try:
+            return date(int(cleaned[0:4]), int(cleaned[4:6]), int(cleaned[6:8]))
+        except ValueError:
+            return None
+    if len(cleaned) == 6:
+        try:
+            year = int(cleaned[0:2])
+            year += 2000 if year < 70 else 1900
+            return date(year, int(cleaned[2:4]), int(cleaned[4:6]))
+        except ValueError:
+            return None
+    return None
+
+
+def _build_mst_column_map(row: Sequence[str]) -> Dict[str, int]:
+    normalized = [_normalize_import_column(value) for value in row]
+    column_map: Dict[str, int] = {}
+    for idx, norm in enumerate(normalized):
+        key = _MST_HEADER_ALIASES.get(norm)
+        if key and key not in column_map:
+            column_map[key] = idx
+    if _MST_REQUIRED_FIELDS.issubset(column_map):
+        return column_map
+    return {}
+
+
+def _parse_mst_file(
+    content: bytes,
+    *,
+    default_symbol: Optional[str],
+    display_name: str,
+) -> Tuple[List[List[Any]], int, List[str], int]:
+    text = _decode_uploaded_text(content)
+    delimiter = _detect_mst_delimiter(text)
+    reader = csv.reader(io.StringIO(text), delimiter=delimiter)
+
+    column_map: Dict[str, int] = {}
+    payload: List[List[Any]] = []
+    errors: List[str] = []
+    total_errors = 0
+    skipped = 0
+
+    def register_error(message: str) -> None:
+        nonlocal total_errors
+        total_errors += 1
+        if len(errors) < _MAX_OHLC_IMPORT_ERRORS:
+            errors.append(f"{display_name}: {message}")
+
+    has_header = False
+
+    for index, row in enumerate(reader, start=1):
+        if not row or not any(cell.strip() for cell in row):
+            continue
+        if not column_map:
+            possible_map = _build_mst_column_map(row)
+            if possible_map:
+                column_map = possible_map
+                has_header = True
+                if "symbol" not in column_map and not default_symbol:
+                    raise ValueError(
+                        "brak kolumny z symbolem i nie udało się rozpoznać go z nazwy pliku"
+                    )
+                continue
+            first_cell = row[0].strip() if row else ""
+            if _parse_mst_date(first_cell) is not None:
+                column_map = dict(_MST_DEFAULT_COLUMN_ORDER)
+                if not default_symbol:
+                    raise ValueError(
+                        "nie udało się rozpoznać symbolu spółki z nazwy pliku"
+                    )
+            else:
+                column_map = dict(_MST_DEFAULT_COLUMN_ORDER_WITH_SYMBOL)
+
+        row_index = index
+
+        max_index = max(column_map.values(), default=-1)
+        if len(row) <= max_index:
+            row = list(row) + [""] * (max_index + 1 - len(row))
+
+        symbol_value: Optional[str] = None
+        symbol_idx = column_map.get("symbol")
+        if symbol_idx is not None and symbol_idx < len(row):
+            symbol_value = _resolve_import_symbol(row[symbol_idx])
+        if not symbol_value:
+            symbol_value = default_symbol
+        if not symbol_value:
+            skipped += 1
+            register_error(f"wiersz {row_index}: brak symbolu spółki.")
+            continue
+
+        date_idx = column_map.get("date")
+        raw_date = row[date_idx].strip() if date_idx is not None and date_idx < len(row) else ""
+        if not raw_date:
+            skipped += 1
+            register_error(f"wiersz {row_index}: brak daty notowania.")
+            continue
+        parsed_date = _parse_mst_date(raw_date)
+        if parsed_date is None:
+            skipped += 1
+            register_error(
+                f"wiersz {row_index}: niepoprawny format daty ({raw_date})."
+            )
+            continue
+
+        numeric_values: Dict[str, Optional[float]] = {}
+        missing_fields: List[str] = []
+        for field in ["open", "high", "low", "close"]:
+            idx = column_map.get(field)
+            value = _parse_float(row[idx]) if idx is not None and idx < len(row) else None
+            if value is None:
+                missing_fields.append(field)
+            numeric_values[field] = value
+        if missing_fields:
+            skipped += 1
+            missing_label = ", ".join(sorted(set(missing_fields)))
+            register_error(f"wiersz {row_index}: brak danych w kolumnach: {missing_label}.")
+            continue
+
+        volume_idx = column_map.get("volume")
+        volume_value = (
+            _parse_float(row[volume_idx])
+            if volume_idx is not None and volume_idx < len(row)
+            else None
+        )
+
+        payload.append(
+            [
+                symbol_value,
+                parsed_date,
+                numeric_values["open"],
+                numeric_values["high"],
+                numeric_values["low"],
+                numeric_values["close"],
+                volume_value,
+            ]
+        )
+
+    if not has_header and not payload:
+        # When there was no header and we couldn't parse any rows, report a clearer error.
+        raise ValueError("Nie udało się odczytać danych z pliku MST.")
+
+    return payload, skipped, errors, total_errors
+
+
+def _parse_mst_archive_payload(
+    content: bytes,
+) -> Tuple[List[List[Any]], int, List[str], int]:
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(content))
+    except zipfile.BadZipFile as exc:
+        raise ValueError("Nie udało się odczytać archiwum ZIP.") from exc
+
+    payload: List[List[Any]] = []
+    skipped = 0
+    errors: List[str] = []
+    total_errors = 0
+    seen: set[tuple[str, date]] = set()
+
+    try:
+        members = [
+            info
+            for info in archive.infolist()
+            if not info.is_dir() and info.filename.lower().endswith(".mst")
+        ]
+        if not members:
+            raise ValueError("Archiwum nie zawiera plików .MST z notowaniami.")
+
+        for info in members:
+            display_name = os.path.basename(info.filename) or info.filename
+            default_symbol = _derive_symbol_from_mst_filename(display_name)
+            try:
+                with archive.open(info) as handle:
+                    file_payload, file_skipped, file_errors, file_total_errors = _parse_mst_file(
+                        handle.read(),
+                        default_symbol=default_symbol,
+                        display_name=display_name,
+                    )
+            except ValueError as exc:
+                total_errors += 1
+                if len(errors) < _MAX_OHLC_IMPORT_ERRORS:
+                    errors.append(f"{display_name}: {exc}")
+                skipped += 1
+                continue
+
+            total_errors += file_total_errors
+            skipped += file_skipped
+            for message in file_errors:
+                if len(errors) < _MAX_OHLC_IMPORT_ERRORS:
+                    errors.append(message)
+
+            for row in file_payload:
+                symbol_value, parsed_date = row[0], row[1]
+                key = (symbol_value, parsed_date)
+                if key in seen:
+                    skipped += 1
+                    continue
+                seen.add(key)
+                payload.append(row)
+    finally:
+        archive.close()
+
+    return payload, skipped, errors, total_errors
+
+
+def parse_mst_archive(content: bytes) -> Tuple[List[List[Any]], int, List[str], int]:
+    """Parse a ZIP archive with Stooq MST files into normalized OHLC rows.
+
+    This is a thin wrapper around the internal :func:`_parse_mst_archive_payload`
+    helper that exposes MST parsing capabilities to other modules (for example,
+    the desktop analytics agent) without duplicating the parsing logic.
+    """
+
+    return _parse_mst_archive_payload(content)
 
 
 def _deduplicate_strings(values: Iterable[str], limit: Optional[int] = None) -> List[str]:
@@ -3218,107 +3656,15 @@ async def import_ohlc_file(file: UploadFile = File(...)) -> OhlcImportResponse:
     if not content:
         raise HTTPException(400, "Przesłany plik jest pusty.")
 
+    buffer = io.BytesIO(content)
+    buffer.seek(0)
     try:
-        decoded = _decode_uploaded_text(content)
+        if zipfile.is_zipfile(buffer):
+            payload, skipped, errors, total_errors = _parse_mst_archive_payload(content)
+        else:
+            payload, skipped, errors, total_errors = _parse_ohlc_csv_payload(content)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-
-    reader = csv.DictReader(io.StringIO(decoded))
-    if not reader.fieldnames:
-        raise HTTPException(400, "Plik nie zawiera nagłówka.")
-
-    column_map: Dict[str, str] = {}
-    for raw_header in reader.fieldnames:
-        normalized = _normalize_import_column(raw_header)
-        if not normalized:
-            continue
-        column_map.setdefault(normalized, raw_header)
-
-    missing = [name for name in _OHLC_IMPORT_REQUIRED_COLUMNS if name not in column_map]
-    if missing:
-        required = ", ".join(_OHLC_IMPORT_REQUIRED_COLUMNS)
-        optional = ", ".join(_OHLC_IMPORT_OPTIONAL_COLUMNS)
-        raise HTTPException(
-            400,
-            (
-                "Niepoprawny nagłówek pliku. Wymagane kolumny: "
-                f"{required}. Opcjonalnie: {optional}."
-            ),
-        )
-
-    payload: List[List[Any]] = []
-    skipped = 0
-    errors: List[str] = []
-    total_errors = 0
-    seen: set[tuple[str, date]] = set()
-
-    def register_error(message: str) -> None:
-        nonlocal total_errors
-        total_errors += 1
-        if len(errors) < _MAX_OHLC_IMPORT_ERRORS:
-            errors.append(message)
-
-    for index, row in enumerate(reader, start=2):
-        raw_symbol = (row.get(column_map["symbol"]) or "").strip()
-        if not raw_symbol:
-            skipped += 1
-            register_error(f"Wiersz {index}: brak symbolu spółki.")
-            continue
-        try:
-            symbol = _normalize_gpw_symbol(raw_symbol)
-        except Exception as exc:
-            skipped += 1
-            register_error(f"Wiersz {index}: {exc}")
-            continue
-
-        raw_date = (row.get(column_map["date"]) or "").strip()
-        if not raw_date:
-            skipped += 1
-            register_error(f"Wiersz {index}: brak daty notowania.")
-            continue
-        try:
-            parsed_date = date.fromisoformat(raw_date)
-        except ValueError:
-            skipped += 1
-            register_error(f"Wiersz {index}: niepoprawny format daty ({raw_date}).")
-            continue
-
-        open_value = _parse_float(row.get(column_map["open"]))
-        high_value = _parse_float(row.get(column_map["high"]))
-        low_value = _parse_float(row.get(column_map["low"]))
-        close_value = _parse_float(row.get(column_map["close"]))
-        missing_values = [
-            name
-            for name, value in (
-                ("open", open_value),
-                ("high", high_value),
-                ("low", low_value),
-                ("close", close_value),
-            )
-            if value is None
-        ]
-        if missing_values:
-            skipped += 1
-            missing_label = ", ".join(sorted(set(missing_values)))
-            register_error(f"Wiersz {index}: brak danych w kolumnach: {missing_label}.")
-            continue
-
-        volume_value = None
-        if "volume" in column_map:
-            volume_value = _parse_float(row.get(column_map["volume"]))
-
-        key = (symbol, parsed_date)
-        if key in seen:
-            skipped += 1
-            register_error(
-                f"Wiersz {index}: zduplikowany rekord {symbol} {parsed_date.isoformat()}."
-            )
-            continue
-        seen.add(key)
-
-        payload.append(
-            [symbol, parsed_date, open_value, high_value, low_value, close_value, volume_value]
-        )
 
     if not payload:
         if errors:
