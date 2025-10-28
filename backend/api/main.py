@@ -1339,6 +1339,8 @@ COMPANY_SYMBOL_CANDIDATES = [
     "company_code",
 ]
 
+TICKER_LIKE_PATTERN = re.compile(r"^[0-9A-Z]{1,8}(?:[._-][0-9A-Z]{1,8})?$")
+
 COMPANY_NAME_CANDIDATES = [
     "symbol",
     "name",
@@ -1745,7 +1747,6 @@ def _build_company_symbol_lookup(ch_client) -> Dict[str, str]:
             ]
 
         lookup: Dict[str, str] = {}
-        ticker_like_pattern = re.compile(r"^[0-9A-Z]{1,8}(?:[._-][0-9A-Z]{1,8})?$")
 
         for row in rows:
             canonical: Optional[str] = None
@@ -1758,7 +1759,7 @@ def _build_company_symbol_lookup(ch_client) -> Dict[str, str]:
                 normalized_upper = normalized.strip().upper() if normalized else ""
                 if not normalized_upper:
                     continue
-                if not ticker_like_pattern.fullmatch(normalized_upper):
+                if not TICKER_LIKE_PATTERN.fullmatch(normalized_upper):
                     continue
                 canonical = normalized
                 break
@@ -4126,6 +4127,7 @@ def _collect_all_company_symbols(ch_client) -> Optional[List[str]]:
         columns = None
 
     if columns:
+        symbol_lookup: Optional[Dict[str, str]] = _build_company_symbol_lookup(ch_client)
         symbol_column = _find_company_symbol_column(columns)
         if symbol_column:
             sql = (
@@ -4145,9 +4147,22 @@ def _collect_all_company_symbols(ch_client) -> Optional[List[str]]:
                     raw_value = row[0]
                     if raw_value is None:
                         continue
-                    normalized = normalize_input_symbol(str(raw_value))
-                    if normalized:
-                        company_symbols.add(normalized)
+                    text = str(raw_value)
+                    canonical: Optional[str] = None
+                    if symbol_lookup:
+                        lookup_key = text.strip().upper()
+                        if lookup_key:
+                            canonical = symbol_lookup.get(lookup_key)
+                        if not canonical:
+                            normalized_key = normalize_input_symbol(text).strip().upper()
+                            if normalized_key:
+                                canonical = symbol_lookup.get(normalized_key)
+                    if not canonical:
+                        canonical = normalize_input_symbol(text)
+                    if canonical and not TICKER_LIKE_PATTERN.fullmatch(canonical):
+                        canonical = ""
+                    if canonical:
+                        company_symbols.add(canonical)
 
     ohlc_symbols: set[str] = set()
     try:
