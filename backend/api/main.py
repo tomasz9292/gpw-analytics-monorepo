@@ -1331,6 +1331,7 @@ COMPANY_NAME_CANDIDATES = [
     "name",
     "company_name",
     "full_name",
+    "nazwa",
     "symbol",
 ]
 
