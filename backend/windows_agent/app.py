@@ -44,6 +44,7 @@ from api.gpw_benchmark import (
     IndexHistoryRecord,
     IndexPortfolioRecord,
 )
+from api.main import parse_mst_archive
 from api.stooq_index_quotes import IndexQuoteRow, StooqIndexQuoteHarvester
 from api.stooq_news import StooqCompanyNewsHarvester
 from api.stooq_ohlc import OhlcRow, StooqOhlcHarvester
@@ -274,6 +275,7 @@ class App:
         self.agent_id = f"agent-{uuid.uuid4().hex[:6]}"
         self.download_thread: Optional[threading.Thread] = None
         self.export_thread: Optional[threading.Thread] = None
+        self.mstall_import_thread: Optional[threading.Thread] = None
         self.running = False
 
         self.output_dir_var = StringVar(value=str(DEFAULT_OUTPUT_DIR))
@@ -541,6 +543,11 @@ class App:
         actions = ttk.Frame(container, style="Card.TFrame")
         actions.pack(fill="x", padx=4, pady=(0, 8))
         ttk.Button(actions, text="Pobierz dane", command=self._start_download, style="Accent.TButton").pack(side="left")
+        ttk.Button(
+            actions,
+            text="Importuj mstall.zip",
+            command=self._start_mstall_import,
+        ).pack(side="left", padx=(8, 0))
         ttk.Button(actions, text="Otwórz katalog", command=self._open_output_dir).pack(side="left", padx=(8, 0))
 
         progress = ttk.LabelFrame(container, text="Panel synchronizacji", style="Card.TLabelframe")
@@ -789,6 +796,156 @@ class App:
                 subprocess.Popen(["xdg-open", str(path)])
         except Exception as exc:  # pragma: no cover - platform specific
             messagebox.showerror("Błąd", f"Nie udało się otworzyć katalogu: {exc}")
+
+    def _start_mstall_import(self) -> None:
+        if self.mstall_import_thread and self.mstall_import_thread.is_alive():
+            messagebox.showinfo("Import", "Trwa poprzedni import archiwum MST.")
+            return
+        if self.download_thread and self.download_thread.is_alive():
+            messagebox.showwarning(
+                "Import",
+                "Zakończ najpierw pobieranie danych przed rozpoczęciem importu archiwum.",
+            )
+            return
+        archive = filedialog.askopenfilename(
+            title="Wybierz plik mstall.zip",
+            filetypes=[("Archiwa ZIP", "*.zip"), ("Wszystkie pliki", "*.*")],
+            initialdir=self.output_dir_var.get() or str(Path.home()),
+        )
+        if not archive:
+            return
+
+        path = Path(archive)
+        self.mstall_import_thread = threading.Thread(
+            target=self._import_mstall_archive_worker,
+            args=(path,),
+            daemon=True,
+        )
+        self.mstall_import_thread.start()
+
+    def _import_mstall_archive_worker(self, archive_path: Path) -> None:
+        try:
+            self._reset_progress(1)
+            self._set_status("Import archiwum mstall.zip")
+            self._log(f"Import archiwum notowań z pliku {archive_path}")
+
+            try:
+                content = archive_path.read_bytes()
+            except OSError as exc:
+                message = f"Nie udało się odczytać pliku {archive_path}: {exc}"
+                self._log(message)
+                self._append_error_message(message)
+                messagebox.showerror("Import MST", message)
+                self._complete_progress(False)
+                return
+
+            try:
+                payload, skipped, errors, total_errors = parse_mst_archive(content)
+            except ValueError as exc:
+                message = f"Błąd importu archiwum: {exc}"
+                self._log(message)
+                self._append_error_message(message)
+                messagebox.showerror("Import MST", message)
+                self._complete_progress(False)
+                return
+
+            for warning in errors:
+                self._log(f"Pominięto wiersz: {warning}")
+                self._append_error_message(warning)
+            if total_errors > len(errors):
+                remaining = total_errors - len(errors)
+                if remaining > 0:
+                    self._log(
+                        f"Dodatkowo wystąpiło {remaining} błędów, które nie zostały wyświetlone."
+                    )
+
+            rows: List[OhlcRow] = []
+            dropped_rows = 0
+            for entry in payload:
+                symbol, row_date, open_value, high_value, low_value, close_value, volume_value = entry
+                try:
+                    rows.append(
+                        OhlcRow(
+                            symbol=symbol,
+                            date=row_date,
+                            open=open_value,
+                            high=high_value,
+                            low=low_value,
+                            close=close_value,
+                            volume=volume_value,
+                        )
+                    )
+                except Exception as exc:
+                    dropped_rows += 1
+                    warning = f"Nie udało się przetworzyć rekordu {symbol} {row_date}: {exc}"
+                    self._log(warning)
+                    self._append_error_message(warning)
+
+            if not rows:
+                message = "Archiwum nie zawiera poprawnych danych notowań."
+                self._log(message)
+                messagebox.showwarning("Import MST", message)
+                self._complete_progress(False)
+                return
+
+            rows.sort(key=lambda row: (row.symbol, row.date))
+
+            output_dir = Path(self.output_dir_var.get() or DEFAULT_OUTPUT_DIR)
+            try:
+                output_dir.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                message = f"Nie udało się utworzyć katalogu wynikowego {output_dir}: {exc}"
+                self._log(message)
+                self._append_error_message(message)
+                messagebox.showerror("Import MST", message)
+                self._complete_progress(False)
+                return
+
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            csv_path = output_dir / f"mstall_ohlc_{timestamp}.csv"
+            try:
+                with csv_path.open("w", newline="", encoding="utf-8") as handle:
+                    writer = csv.writer(handle)
+                    writer.writerow(["symbol", "date", "open", "high", "low", "close", "volume"])
+                    for row in rows:
+                        writer.writerow(
+                            [
+                                row.symbol,
+                                row.date.isoformat(),
+                                row.open,
+                                row.high,
+                                row.low,
+                                row.close,
+                                row.volume if row.volume is not None else "",
+                            ]
+                        )
+            except OSError as exc:
+                message = f"Nie udało się zapisać pliku CSV {csv_path}: {exc}"
+                self._log(message)
+                self._append_error_message(message)
+                messagebox.showerror("Import MST", message)
+                self._complete_progress(False)
+                return
+
+            self.results.ohlc = rows
+            self.results.output_files.append(csv_path)
+            self._register_output_file()
+
+            total_rows = len(rows)
+            self._increment_progress(1, total_rows)
+            if skipped or dropped_rows:
+                skipped_total = skipped + dropped_rows
+                self._log(f"Pominięto {skipped_total} wierszy z powodu błędów danych.")
+
+            summary = f"Zaimportowano {total_rows} rekordów notowań z archiwum {archive_path.name}."
+            self._log(summary)
+            messagebox.showinfo("Import MST", summary)
+            self._complete_progress(True)
+
+            self._log("Rozpoczynam automatyczny eksport danych do ClickHouse...")
+            self._start_export()
+        finally:
+            self.mstall_import_thread = None
 
     def _open_date_picker(self, target: StringVar, title: str) -> None:
         initial = self._parse_date(target.get())

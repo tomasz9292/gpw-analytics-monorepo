@@ -720,6 +720,17 @@ def _parse_mst_archive_payload(
     return payload, skipped, errors, total_errors
 
 
+def parse_mst_archive(content: bytes) -> Tuple[List[List[Any]], int, List[str], int]:
+    """Parse a ZIP archive with Stooq MST files into normalized OHLC rows.
+
+    This is a thin wrapper around the internal :func:`_parse_mst_archive_payload`
+    helper that exposes MST parsing capabilities to other modules (for example,
+    the desktop analytics agent) without duplicating the parsing logic.
+    """
+
+    return _parse_mst_archive_payload(content)
+
+
 def _deduplicate_strings(values: Iterable[str], limit: Optional[int] = None) -> List[str]:
     seen: set[str] = set()
     output: List[str] = []
