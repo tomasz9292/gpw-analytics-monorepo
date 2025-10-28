@@ -11,7 +11,19 @@ import textwrap
 import unicodedata
 from datetime import date, datetime, timedelta, timezone
 from math import isfinite, sqrt
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple, TypedDict
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+    TypedDict,
+    Union,
+)
 from typing import Literal, cast
 from uuid import uuid4
 
@@ -2586,11 +2598,18 @@ class ScorePreviewRow(BaseModel):
     metrics: Dict[str, float]
 
 
+class ScorePreviewMissingRow(BaseModel):
+    symbol: str
+    raw: str
+    reason: str
+
+
 class ScorePreviewResponse(BaseModel):
     name: Optional[str] = None
     as_of: str
     universe_count: int
     rows: List[ScorePreviewRow]
+    missing: List[ScorePreviewMissingRow] = Field(default_factory=list)
     meta: Dict[str, object]
 
 
@@ -3845,14 +3864,22 @@ def _slice_closes_window(
 
 
 def _compute_metric_value(
-    closes: Sequence[Tuple[date, float]], metric: str, lookback_days: int
+    closes: Sequence[Tuple[date, float]], metric: str, lookback_days: int, *, diagnose: bool = False
 ) -> Optional[float]:
     if not closes:
+        if diagnose:
+            raise ScoreComputationError(
+                "Brak danych notowań do obliczenia metryk score."
+            )
         return None
 
     if metric in {"total_return", "price_change"}:
         last_dt, last_close = closes[-1]
         if last_close <= 0:
+            if diagnose:
+                raise ScoreComputationError(
+                    "Ostatnia cena zamknięcia jest niepoprawna lub niedostępna."
+                )
             return None
         target_dt = last_dt - timedelta(days=lookback_days)
         base_close = None
@@ -3862,6 +3889,13 @@ def _compute_metric_value(
                     base_close = close
                 break
         if base_close is None or base_close <= 0:
+            if diagnose:
+                raise ScoreComputationError(
+                    (
+                        "Brak danych sprzed {days} dni do wyliczenia metryki "
+                        "{metric}."
+                    ).format(days=lookback_days, metric=metric)
+                )
             return None
         result = (last_close / base_close) - 1.0
         if metric == "price_change":
@@ -3870,6 +3904,13 @@ def _compute_metric_value(
 
     window = _slice_closes_window(closes, lookback_days)
     if len(window) < 2:
+        if diagnose:
+            raise ScoreComputationError(
+                (
+                    "Za mało notowań ({count}) do obliczenia metryki {metric} "
+                    "w horyzoncie {days} dni."
+                ).format(count=len(window), metric=metric, days=lookback_days)
+            )
         return None
 
     returns: List[float] = []
@@ -3880,6 +3921,10 @@ def _compute_metric_value(
 
     if metric == "volatility":
         if len(returns) < 2:
+            if diagnose:
+                raise ScoreComputationError(
+                    "Za mało prawidłowych stóp zwrotu do obliczenia zmienności."
+                )
             return None
         return statistics.pstdev(returns)
 
@@ -3896,14 +3941,30 @@ def _compute_metric_value(
 
     if metric == "sharpe":
         if len(returns) < 2:
+            if diagnose:
+                raise ScoreComputationError(
+                    "Za mało prawidłowych stóp zwrotu do obliczenia Sharpe'a."
+                )
             return None
         avg = statistics.mean(returns)
         stdev = statistics.pstdev(returns)
         if stdev <= 1e-12:
+            if diagnose:
+                raise ScoreComputationError(
+                    "Zmienność w badanym okresie jest zbyt niska do obliczenia Sharpe'a."
+                )
             return None
         return (avg / stdev) * sqrt(252)
 
+    if diagnose:
+        raise ScoreComputationError(f"Metryka {metric} nie jest obsługiwana.")
     return None
+
+
+class ScoreComputationError(Exception):
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
 
 
 def _normalize_component_score(value: float, component: ScoreComponent) -> float:
@@ -3956,15 +4017,48 @@ def _evaluate_components_for_prepared(
     *,
     include_metrics: bool = False,
 ) -> Optional[Tuple[List[float], Optional[Dict[str, float]]]]:
+    return _evaluate_components_internal(
+        closes,
+        components,
+        include_metrics=include_metrics,
+        diagnose_failure=False,
+    )
+
+
+def _evaluate_components_internal(
+    closes: Sequence[Tuple[date, float]],
+    components: List[ScoreComponent],
+    *,
+    include_metrics: bool,
+    diagnose_failure: bool,
+) -> Optional[Tuple[List[float], Optional[Dict[str, float]]]]:
     if not closes:
+        if diagnose_failure:
+            raise ScoreComputationError("Brak notowań dla wybranej spółki.")
         return None
 
     metrics: Optional[Dict[str, float]] = {} if include_metrics else None
     adjusted_scores: List[float] = []
 
     for comp in components:
-        value = _compute_metric_value(closes, comp.metric, comp.lookback_days)
+        try:
+            value = _compute_metric_value(
+                closes,
+                comp.metric,
+                comp.lookback_days,
+                diagnose=diagnose_failure,
+            )
+        except ScoreComputationError:
+            if diagnose_failure:
+                raise
+            return None
         if value is None:
+            if diagnose_failure:
+                raise ScoreComputationError(
+                    (
+                        "Nie udało się obliczyć metryki {metric} w horyzoncie {days} dni."
+                    ).format(metric=comp.metric, days=comp.lookback_days)
+                )
             return None
 
         if metrics is not None:
@@ -4638,6 +4732,10 @@ def _collect_candidate_metadata(
     return metadata
 
 
+RankedScoreEntry = Tuple[str, float] | Tuple[str, float, Dict[str, float]]
+RankedScoreList = List[RankedScoreEntry]
+
+
 def _rank_symbols_by_score(
     ch_client,
     candidates: List[str],
@@ -4645,20 +4743,38 @@ def _rank_symbols_by_score(
     include_metrics: bool = False,
     *,
     as_of: Optional[date] = None,
-) -> List[Tuple[str, float] | Tuple[str, float, Dict[str, float]]]:
+    collect_failures: bool = False,
+) -> Union[RankedScoreList, Tuple[RankedScoreList, Dict[str, str]]]:
     history_map = _collect_close_history_bulk(
         ch_client, candidates, components, as_of=as_of
     )
     evaluated: Dict[str, Dict[str, object]] = {}
+    failures: Dict[str, str] = {} if collect_failures else {}
     for sym in candidates:
         closes_raw = history_map.get(sym)
+        if not closes_raw:
+            if collect_failures:
+                failures[sym] = "Brak notowań spełniających kryteria zapytania."
+            continue
         closes_prepared = _prepare_metric_series(closes_raw or [])
-        result = _evaluate_components_for_prepared(
-            closes_prepared,
-            components,
-            include_metrics=include_metrics,
-        )
+        if not closes_prepared:
+            if collect_failures:
+                failures[sym] = "Brak prawidłowych danych notowań."
+            continue
+        try:
+            result = _evaluate_components_internal(
+                closes_prepared,
+                components,
+                include_metrics=include_metrics,
+                diagnose_failure=collect_failures,
+            )
+        except ScoreComputationError as exc:
+            if collect_failures:
+                failures[sym] = exc.reason
+            continue
         if result is None:
+            if collect_failures and sym not in failures:
+                failures[sym] = "Brak wymaganych danych do obliczenia metryk score."
             continue
         adjusted_scores, metrics = result
         evaluated[sym] = {
@@ -4707,6 +4823,8 @@ def _rank_symbols_by_score(
             ranked.append((sym, score))
 
     ranked.sort(key=lambda item: item[1], reverse=True)
+    if collect_failures:
+        return ranked, failures
     return ranked
 
 
@@ -5488,14 +5606,20 @@ def _run_score_preview(req: ScorePreviewRequest) -> ScorePreviewResponse:
     if not candidates:
         raise HTTPException(404, "Brak symboli do oceny")
 
-    ranked = _rank_symbols_by_score(
+    ranked_result = _rank_symbols_by_score(
         ch,
         candidates,
         auto_config.components,
         include_metrics=True,
         as_of=as_of_date,
+        collect_failures=True,
     )
-    if not ranked:
+    if isinstance(ranked_result, tuple):
+        ranked, failures = ranked_result
+    else:
+        ranked = ranked_result
+        failures = {}
+    if not ranked and not failures:
         raise HTTPException(404, "Brak symboli ze wszystkimi wymaganymi danymi")
 
     prepared: List[Dict[str, object]] = []
@@ -5536,11 +5660,17 @@ def _run_score_preview(req: ScorePreviewRequest) -> ScorePreviewResponse:
         "universe_count": len(candidates),
     }
 
+    missing_rows = [
+        ScorePreviewMissingRow(symbol=pretty_symbol(sym), raw=sym, reason=reason)
+        for sym, reason in sorted(failures.items())
+    ]
+
     return ScorePreviewResponse(
         name=req.name,
         as_of=as_of,
         universe_count=len(candidates),
         rows=rows,
+        missing=missing_rows,
         meta=meta,
     )
 

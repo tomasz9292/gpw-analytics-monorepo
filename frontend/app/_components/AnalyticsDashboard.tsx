@@ -1245,6 +1245,12 @@ type ScorePreviewRow = {
     metrics?: Record<string, number>;
 };
 
+type ScorePreviewMissingRow = {
+    symbol: string;
+    raw?: string;
+    reason: string;
+};
+
 type ScorePreviewMeta = {
     asOf?: string;
     totalUniverse?: number;
@@ -1255,6 +1261,7 @@ type ScorePreviewMeta = {
 
 type ScorePreviewResult = {
     rows: ScorePreviewRow[];
+    missing: ScorePreviewMissingRow[];
     meta: ScorePreviewMeta;
 };
 
@@ -2476,7 +2483,31 @@ const normalizeScoreRankingResponse = (raw: unknown): ScorePreviewResult => {
     ]);
     if (totalUniverse !== undefined) meta.totalUniverse = totalUniverse;
 
-    return { rows, meta };
+    const missing: ScorePreviewMissingRow[] = [];
+    const missingSource = getProp(raw, "missing");
+    if (Array.isArray(missingSource)) {
+        missingSource.forEach((item) => {
+            if (!item || typeof item !== "object") return;
+            const rawSymbolCandidate = getProp(item, "raw") ?? getProp(item, "symbol");
+            const symbolCandidate = getProp(item, "symbol") ?? getProp(item, "name");
+            const reasonCandidate = getProp(item, "reason") ?? getProp(item, "message");
+            const rawSymbol = rawSymbolCandidate ? String(rawSymbolCandidate) : undefined;
+            const symbol = symbolCandidate
+                ? String(symbolCandidate)
+                : rawSymbol ?? undefined;
+            const reason = reasonCandidate
+                ? String(reasonCandidate)
+                : "Brak informacji o przyczynie.";
+            if (!symbol && !rawSymbol) return;
+            missing.push({
+                symbol: symbol ?? (rawSymbol ?? ""),
+                raw: rawSymbol,
+                reason,
+            });
+        });
+    }
+
+    return { rows, missing, meta };
 };
 
 async function previewScoreRanking(payload: ScorePreviewRequest): Promise<ScorePreviewResult> {
@@ -7975,6 +8006,41 @@ function ScoreRankingTable({ rows }: { rows: ScorePreviewRow[] }) {
     );
 }
 
+function ScoreMissingTable({ items }: { items: ScorePreviewMissingRow[] }) {
+    if (!items.length) return null;
+
+    return (
+        <div className="mt-6">
+            <div className="text-sm font-medium text-subtle mb-2">
+                Spółki bez obliczonego score
+            </div>
+            <div className="overflow-x-auto">
+                <table className="min-w-full text-sm">
+                    <thead className="text-left text-subtle">
+                        <tr className="border-b border-soft">
+                            <th className="py-2 pr-4 font-medium">Spółka</th>
+                            <th className="py-2 pr-4 font-medium">Powód</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {items.map((item) => {
+                            const key = item.raw ?? item.symbol;
+                            return (
+                                <tr key={key} className="border-b border-soft last:border-b-0">
+                                    <td className="py-2 pr-4 font-medium">
+                                        {item.symbol || item.raw || "—"}
+                                    </td>
+                                    <td className="py-2 pr-4 text-subtle">{item.reason}</td>
+                                </tr>
+                            );
+                        })}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    );
+}
+
 function Watchlist({
     items,
     current,
@@ -12762,6 +12828,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                             .join(" • ")}
                                     </div>
                                     <ScoreRankingTable rows={scoreResults.rows} />
+                                    <ScoreMissingTable items={scoreResults.missing} />
                                 </div>
                             ) : (
                                 <div className="text-xs text-subtle">
