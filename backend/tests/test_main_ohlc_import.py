@@ -65,6 +65,28 @@ def test_parse_mst_archive_payload_merges_files():
     assert { (row[0], row[1]): row[2:] for row in payload } == expected
 
 
+def test_parse_mst_archive_payload_handles_placeholder_headers():
+    archive_bytes = build_zip(
+        {
+            "PATENTUS.MST": (
+                "<DTYYYYMMDD>,<HISOPEN>,<HISHIGH>,<HISLOW>,<HISCLOSE>,<VOL>\n"
+                "20241028,1.1,2.2,0.9,1.5,1234\n"
+            )
+        }
+    )
+
+    payload, skipped, errors, total_errors = main_module._parse_mst_archive_payload(
+        archive_bytes
+    )
+
+    assert skipped == 0
+    assert errors == []
+    assert total_errors == 0
+    assert payload == [
+        ["PATENTUS", date(2024, 10, 28), 1.1, 2.2, 0.9, 1.5, 1234.0]
+    ]
+
+
 def test_parse_mst_archive_payload_reports_missing_symbol():
     archive_bytes = build_zip(
         {
