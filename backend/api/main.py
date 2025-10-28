@@ -1328,11 +1328,11 @@ COMPANY_SYMBOL_CANDIDATES = [
 ]
 
 COMPANY_NAME_CANDIDATES = [
+    "symbol",
     "name",
     "company_name",
     "full_name",
     "nazwa",
-    "symbol",
 ]
 
 CompanyFieldTarget = Tuple[str, str, str]
