@@ -564,6 +564,45 @@ def test_score_preview_without_limit_returns_full_universe(monkeypatch):
 
     assert response.meta["universe_count"] == 80
     assert len(response.rows) == 80
+    assert response.missing == []
+
+
+def test_score_preview_reports_missing_symbols(monkeypatch):
+    data = {
+        "AAA": [
+            ("2023-01-01", 100.0),
+            ("2023-01-02", 101.0),
+            ("2023-01-03", 102.0),
+            ("2023-01-04", 103.0),
+            ("2023-01-05", 105.0),
+        ],
+        "BBB": [
+            ("2023-01-05", 200.0),
+        ],
+        "CCC": [],
+    }
+
+    fake = FakeClickHouse(data)
+    monkeypatch.setattr(main, "get_ch", lambda: fake)
+    monkeypatch.setattr(
+        main,
+        "_list_candidate_symbols",
+        lambda ch, filters, as_of=None: ["AAA", "BBB", "CCC"],
+    )
+
+    request = main.ScorePreviewRequest(
+        name="demo",
+        rules=[main.ScoreRulePayload(metric="total_return_4", weight=1, direction="desc")],
+        as_of=date(2023, 1, 5),
+    )
+
+    response = main.score_preview(request)
+
+    assert [row.raw for row in response.rows] == ["AAA"]
+    missing_reasons = {item.raw: item.reason for item in response.missing}
+    assert "BBB" in missing_reasons
+    assert "CCC" in missing_reasons
+    assert "Brak" in missing_reasons["BBB"]
 
 
 def test_linear_clamped_scoring_higher_direction():
