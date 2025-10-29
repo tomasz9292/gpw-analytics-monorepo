@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useMemo, useState, useEffect, useId, useCallback, useRef } from "react";
+import type { SVGAttributes } from "react";
 import { createPortal } from "react-dom";
 import Image from "next/image";
 import Link from "next/link";
@@ -24,6 +25,15 @@ import type { TooltipContentProps } from "recharts";
 import type { CategoricalChartFunc } from "recharts/types/chart/types";
 import type { MouseHandlerDataParam } from "recharts/types/synchronisation/types";
 import type { BrushStartEndIndex } from "recharts/types/context/brushUpdateContext";
+import type { Props as BrushProps } from "recharts/types/cartesian/Brush";
+
+type BrushTravellerProps = {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    stroke?: SVGAttributes<SVGElement>["stroke"];
+};
 
 declare global {
     interface Window {
@@ -143,6 +153,66 @@ const PERCENT_BASED_SCORE_METRICS = new Set<ScoreComponentRequest["metric"]>([
     "distance_from_high",
     "distance_from_low",
 ]);
+
+const CHART_BRUSH_CLASS = "metric-chart-brush";
+const CHART_BRUSH_STROKE = "#2563EB";
+const CHART_BRUSH_BACKGROUND_FILL = "#E7EEFF";
+const CHART_BRUSH_TRAVELLER_WIDTH = 18;
+
+const ChartBrushTraveller: React.FC<BrushTravellerProps> = ({
+    x,
+    y,
+    width,
+    height,
+    stroke,
+}) => {
+    const handleStroke = stroke ?? CHART_BRUSH_STROKE;
+    const radius = 8;
+    const padding = Math.min(12, Math.max(4, height * 0.2));
+    const lineStart = padding;
+    const lineEnd = Math.max(lineStart + 6, height - padding);
+    const centerX = width / 2;
+
+    return (
+        <g className="metric-chart-brush__handle" transform={`translate(${x}, ${y})`}>
+            <rect
+                width={width}
+                height={height}
+                rx={radius}
+                ry={radius}
+                fill="#ffffff"
+                stroke={handleStroke}
+                strokeWidth={2}
+            />
+            <line
+                x1={centerX - 3}
+                y1={lineStart}
+                x2={centerX - 3}
+                y2={lineEnd}
+                stroke={handleStroke}
+                strokeWidth={1.5}
+                strokeLinecap="round"
+            />
+            <line
+                x1={centerX + 3}
+                y1={lineStart}
+                x2={centerX + 3}
+                y2={lineEnd}
+                stroke={handleStroke}
+                strokeWidth={1.5}
+                strokeLinecap="round"
+            />
+        </g>
+    );
+};
+
+const CHART_BRUSH_COMMON_PROPS = {
+    className: CHART_BRUSH_CLASS,
+    travellerWidth: CHART_BRUSH_TRAVELLER_WIDTH,
+    traveller: (props: BrushTravellerProps) => <ChartBrushTraveller {...props} />,
+    stroke: CHART_BRUSH_STROKE,
+    fill: CHART_BRUSH_BACKGROUND_FILL,
+} satisfies Partial<BrushProps>;
 
 type PortfolioSimulationStage = "preparing" | "ranking" | "building" | "finalizing";
 
@@ -9826,11 +9896,9 @@ function PriceChart({
                                 dot={false}
                             />
                             <Brush
+                                {...CHART_BRUSH_COMMON_PROPS}
                                 dataKey="date"
-                                height={22}
-                                travellerWidth={10}
-                                stroke="#2563EB"
-                                fill="#E2E8F0"
+                                height={30}
                                 startIndex={brushRange?.startIndex}
                                 endIndex={brushRange?.endIndex}
                                 onChange={handleBrushUpdate}
@@ -10751,11 +10819,9 @@ function MetricRulePreview({
                                                         dot={false}
                                                     />
                                                     <Brush
+                                                        {...CHART_BRUSH_COMMON_PROPS}
                                                         dataKey="date"
-                                                        height={48}
-                                                        travellerWidth={10}
-                                                        stroke="#2563EB"
-                                                        fill="#E2E8F0"
+                                                        height={56}
                                                         startIndex={windowRange?.startIndex}
                                                         endIndex={windowRange?.endIndex}
                                                         onChange={handleBrushSelectionChange}
