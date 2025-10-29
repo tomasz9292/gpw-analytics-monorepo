@@ -3,23 +3,23 @@
 :root {
   --background: #f4f6fb;
   --foreground: #0f172a;
-  --color-primary: #2563eb;
+  --color-primary: #4663f0;
   --color-accent: #16a34a;
   --color-negative: #ef4444;
   --color-neutral-bg: #f4f6fb;
   --color-surface: #ffffff;
-  --color-soft-surface: #eef2ff;
+  --color-soft-surface: #e5ebff;
   --color-border: #d4d8e3;
   --color-neutral-text: #0f172a;
   --color-muted: #475569;
   --color-subtle: #94a3b8;
-  --color-tech: #1d4ed8;
-  --color-primary-strong: #0b1641;
-  --color-primary-soft: #1e3a8a;
+  --color-tech: #5471f7;
+  --color-primary-strong: #15224d;
+  --color-primary-soft: #2f46d6;
   --color-accent-strong: #15803d;
   --color-accent-deep: #166534;
   --shadow-brand-elevated: 0 30px 60px rgba(15, 23, 42, 0.18);
-  --shadow-brand-floating: 0 12px 40px rgba(37, 99, 235, 0.15);
+  --shadow-brand-floating: 0 12px 40px rgba(70, 99, 240, 0.18);
   --font-geist-sans: "Inter", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont,
     "Helvetica Neue", Arial, sans-serif;
   --font-geist-mono: "IBM Plex Mono", "SFMono-Regular", "Menlo", Monaco, Consolas,
@@ -163,13 +163,13 @@ body {
 }
 
 .metric-chart-brush .recharts-brush-background rect {
-  fill: #f1f5ff;
+  fill: #e6ebff;
   stroke: none;
 }
 
 .metric-chart-brush .recharts-brush-slide {
-  fill: rgba(37, 99, 235, 0.18);
-  stroke: #2563eb;
+  fill: rgba(70, 99, 240, 0.18);
+  stroke: #4663f0;
   stroke-width: 1.5;
 }
 
@@ -179,14 +179,14 @@ body {
 
 .metric-chart-brush__handle rect {
   fill: #ffffff;
-  stroke: #2563eb;
+  stroke: #4663f0;
   stroke-width: 2;
   rx: 8;
   ry: 8;
 }
 
 .metric-chart-brush__handle line {
-  stroke: #2563eb;
+  stroke: #4663f0;
   stroke-width: 1.5;
   stroke-linecap: round;
 }

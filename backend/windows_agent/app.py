@@ -373,10 +373,10 @@ class App:
             return None
 
     def _configure_styles(self) -> None:
-        accent = "#2563eb"
+        accent = "#4663f0"
         neutral_bg = "#f3f4f6"
         surface_bg = "#ffffff"
-        surface_alt = "#e0e7ff"
+        surface_alt = "#dde4ff"
         text_color = "#111827"
         muted_text = "#4b5563"
 
@@ -423,12 +423,12 @@ class App:
             foreground="#ffffff",
             borderwidth=0,
             focusthickness=3,
-            focuscolor="#bfdbfe",
+            focuscolor="#cdd5ff",
             padding=(18, 10),
         )
         style.map(
             "Accent.TButton",
-            background=[("active", "#1d4ed8"), ("pressed", "#1e3a8a")],
+            background=[("active", "#3651d7"), ("pressed", "#273bb1")],
         )
         style.configure("TCheckbutton", background=surface_bg, foreground=text_color, padding=6)
         style.map("TCheckbutton", background=[("active", "#e5e7eb")])
@@ -438,7 +438,7 @@ class App:
         style.configure("Hero.TFrame", background=neutral_bg, padding=(8, 4))
         style.configure("HeroTitle.TLabel", background=neutral_bg, foreground=text_color, font=("Segoe UI Semibold", 22))
         style.configure("HeroSubtitle.TLabel", background=neutral_bg, foreground=muted_text, font=("Segoe UI", 11))
-        style.configure("Badge.TLabel", background=surface_alt, foreground="#1d4ed8", padding=(10, 4), font=("Segoe UI Semibold", 9))
+        style.configure("Badge.TLabel", background=surface_alt, foreground="#3a4ed9", padding=(10, 4), font=("Segoe UI Semibold", 9))
         style.configure("Inline.TFrame", background=surface_bg)
         style.configure("SectionHeader.TLabel", background=surface_bg, foreground=muted_text, font=("Segoe UI", 9))
 
