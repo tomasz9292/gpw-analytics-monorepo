@@ -8371,14 +8371,11 @@ function RebalanceTimeline({
 
 type MetricTone = "positive" | "negative" | "neutral" | "primary";
 
-const METRIC_TONE_STYLES: Record<MetricTone, string> = {
-    positive:
-        "border-[rgba(46,204,113,0.35)] bg-[rgba(46,204,113,0.08)] text-accent",
-    negative:
-        "border-[rgba(231,76,60,0.35)] bg-[rgba(231,76,60,0.08)] text-negative",
-    neutral: "border-soft bg-soft-surface text-neutral",
-    primary:
-        "border-[rgba(10,35,66,0.25)] bg-[rgba(10,35,66,0.08)] text-primary",
+const METRIC_TONE_PILL_STYLES: Record<MetricTone, string> = {
+    positive: "bg-[rgba(46,204,113,0.15)] text-accent",
+    negative: "bg-[rgba(231,76,60,0.18)] text-negative",
+    neutral: "bg-soft-surface text-neutral",
+    primary: "bg-[rgba(10,35,66,0.12)] text-primary",
 };
 
 const prettifyMetricLabel = (raw: string) =>
@@ -8399,25 +8396,6 @@ const toSnake = (value: string) =>
         .replace(/([A-Z])/g, "_$1")
         .replace(/__+/g, "_")
         .toLowerCase();
-
-type MetricBadgeProps = {
-    label: string;
-    value: React.ReactNode;
-    tone?: MetricTone;
-};
-
-const MetricBadge = ({ label, value, tone = "neutral" }: MetricBadgeProps) => (
-    <div
-        className={`flex min-w-[140px] flex-1 flex-col gap-1 rounded-2xl border px-4 py-3 transition-shadow sm:flex-none ${
-            METRIC_TONE_STYLES[tone]
-        } shadow-[0_1px_4px_rgba(10,35,66,0.04)]`}
-    >
-        <span className="text-xs font-medium uppercase tracking-wide text-subtle">
-            {label}
-        </span>
-        <span className="text-lg font-semibold leading-tight">{value}</span>
-    </div>
-);
 
 const buildNormalizedMap = (metrics: Record<string, number> | undefined) => {
     const map = new Map<string, number>();
@@ -8518,116 +8496,157 @@ function ScoreRankingTable({ rows }: { rows: ScorePreviewRow[] }) {
         new Set(rows.flatMap((row) => Object.keys(row.metrics ?? {})))
     ).slice(0, 4);
 
+    const buildMetricDisplay = (
+        row: ScorePreviewRow,
+        key: string,
+        metricMap: Map<string, number>
+    ) => {
+        let tone: MetricTone = "neutral";
+        let text = "—";
+        let indicator: "up" | "down" | undefined;
+
+        if (/price[_-]?change/i.test(key)) {
+            const pct = resolvePriceChangePercent(metricMap, key);
+            if (typeof pct === "number") {
+                const digits = Math.abs(pct) >= 100 ? 0 : 2;
+                tone = pct > 0 ? "positive" : pct < 0 ? "negative" : "neutral";
+                text = formatPct(pct, digits);
+                indicator = pct > 0 ? "up" : pct < 0 ? "down" : undefined;
+            }
+        } else {
+            const normalizedKey = normalizeMetricKey(key);
+            const fromMap = metricMap.get(normalizedKey);
+            const direct = row.metrics?.[key];
+            const numeric =
+                typeof direct === "number" && Number.isFinite(direct)
+                    ? direct
+                    : typeof fromMap === "number"
+                        ? fromMap
+                        : undefined;
+            if (typeof numeric === "number") {
+                tone =
+                    numeric < 0
+                        ? "negative"
+                        : shouldHighlightPositiveMetric(key)
+                            ? "positive"
+                            : "neutral";
+                text = formatMetricNumber(numeric);
+            }
+        }
+
+        return { tone, text, indicator };
+    };
+
+    const renderPill = (value: React.ReactNode, tone: MetricTone = "neutral") => {
+        if (value === null || value === undefined) {
+            return <span className="text-subtle">—</span>;
+        }
+
+        if (typeof value === "string") {
+            const trimmed = value.trim();
+            if (!trimmed || trimmed === "—") {
+                return <span className="text-subtle">—</span>;
+            }
+        }
+
+        return (
+            <span
+                className={`inline-flex items-center gap-1 rounded-xl px-3 py-1 text-sm font-semibold shadow-[0_1px_3px_rgba(10,35,66,0.08)] ${METRIC_TONE_PILL_STYLES[tone]}`}
+            >
+                {value}
+            </span>
+        );
+    };
+
     return (
-        <div className="space-y-4">
-            {rows.map((row, idx) => {
-                const metricMap = buildNormalizedMap(row.metrics);
-                const baseRank = row.rank ?? idx + 1;
-                const scoreValue =
-                    typeof row.score === "number"
-                        ? row.score.toFixed(2)
-                        : "—";
-                const weightValue =
-                    typeof row.weight === "number"
-                        ? formatPercent(row.weight)
-                        : "—";
+        <div className="rounded-3xl border border-soft bg-surface shadow-[0_18px_45px_rgba(10,35,66,0.08)]">
+            <div className="overflow-x-auto">
+                <table className="min-w-full text-sm">
+                    <thead className="bg-soft-surface/80 text-left text-xs font-semibold uppercase tracking-wide text-subtle">
+                        <tr>
+                            <th className="px-4 py-3 text-center">#</th>
+                            <th className="px-4 py-3">Spółka</th>
+                            <th className="px-4 py-3">Score</th>
+                            <th className="px-4 py-3">Waga</th>
+                            {metricKeys.map((key) => (
+                                <th key={key} className="px-4 py-3">
+                                    {prettifyMetricLabel(key)}
+                                </th>
+                            ))}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {rows.map((row, idx) => {
+                            const metricMap = buildNormalizedMap(row.metrics);
+                            const baseRank = row.rank ?? idx + 1;
+                            const scoreValue =
+                                typeof row.score === "number"
+                                    ? row.score.toFixed(2)
+                                    : "—";
+                            const weightValue =
+                                typeof row.weight === "number"
+                                    ? formatPercent(row.weight)
+                                    : "—";
+                            const rowBackground =
+                                idx % 2 === 0
+                                    ? "bg-white/70"
+                                    : "bg-soft-surface/60";
 
-                return (
-                    <article
-                        key={`${row.symbol}-${idx}`}
-                        className="rounded-3xl border border-soft bg-surface p-5 shadow-[0_18px_45px_rgba(10,35,66,0.08)] transition-shadow hover:shadow-[0_24px_65px_rgba(10,35,66,0.12)]"
-                    >
-                        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-                            <div className="flex items-start gap-4">
-                                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary text-base font-semibold text-white shadow-[0_10px_25px_rgba(10,35,66,0.25)]">
-                                    #{baseRank}
-                                </div>
-                                <div>
-                                    <div className="text-lg font-semibold text-primary">
-                                        {row.symbol}
-                                    </div>
-                                    {row.name && (
-                                        <div className="text-sm text-subtle">{row.name}</div>
-                                    )}
-                                </div>
-                            </div>
-                            <div className="flex flex-wrap gap-3">
-                                <MetricBadge label="Score" value={scoreValue} tone="primary" />
-                                <MetricBadge label="Waga" value={weightValue} />
-                                {metricKeys.map((key) => {
-                                    const label = prettifyMetricLabel(key);
-                                    const isPriceChange = /price[_-]?change/i.test(key);
-                                    let tone: MetricTone = "neutral";
-                                    let valueNode: React.ReactNode = (
-                                        <span className="text-subtle">—</span>
-                                    );
-
-                                    if (isPriceChange) {
-                                        const pct = resolvePriceChangePercent(
-                                            metricMap,
-                                            key
+                            return (
+                                <tr
+                                    key={`${row.symbol}-${idx}`}
+                                    className={`${rowBackground} border-t border-soft transition-colors hover:bg-white`}
+                                >
+                                    <td className="px-4 py-3 text-center text-sm font-semibold text-primary">
+                                        {baseRank}
+                                    </td>
+                                    <td className="px-4 py-3">
+                                        <div className="text-sm font-semibold text-primary">
+                                            {row.symbol}
+                                        </div>
+                                        {row.name && (
+                                            <div className="text-xs text-subtle">{row.name}</div>
+                                        )}
+                                    </td>
+                                    <td className="px-4 py-3">
+                                        {renderPill(scoreValue, "primary")}
+                                    </td>
+                                    <td className="px-4 py-3">
+                                        {renderPill(weightValue)}
+                                    </td>
+                                    {metricKeys.map((key) => {
+                                        const { tone, text, indicator } = buildMetricDisplay(
+                                            row,
+                                            key,
+                                            metricMap
                                         );
-                                        if (typeof pct === "number") {
-                                            const digits =
-                                                Math.abs(pct) >= 100 ? 0 : 2;
-                                            tone =
-                                                pct > 0
-                                                    ? "positive"
-                                                    : pct < 0
-                                                        ? "negative"
-                                                        : "neutral";
-                                            valueNode = (
-                                                <span className="flex items-baseline gap-1">
-                                                    {pct !== 0 && (
-                                                        <span className="text-xs font-semibold">
-                                                            {pct > 0 ? "▲" : "▼"}
-                                                        </span>
-                                                    )}
-                                                    <span>{formatPct(pct, digits)}</span>
-                                                </span>
-                                            );
-                                        }
-                                    } else {
-                                        const normalizedKey =
-                                            normalizeMetricKey(key);
-                                        const fromMap = metricMap.get(
-                                            normalizedKey
+                                        const hasValue = text !== "—";
+                                        const content = hasValue ? (
+                                            <>
+                                                {indicator === "up" && (
+                                                    <span className="text-[10px] leading-none">▲</span>
+                                                )}
+                                                {indicator === "down" && (
+                                                    <span className="text-[10px] leading-none">▼</span>
+                                                )}
+                                                <span>{text}</span>
+                                            </>
+                                        ) : (
+                                            "—"
                                         );
-                                        const direct = row.metrics?.[key];
-                                        const numeric =
-                                            typeof direct === "number" &&
-                                            Number.isFinite(direct)
-                                                ? direct
-                                                : typeof fromMap === "number"
-                                                    ? fromMap
-                                                    : undefined;
-                                        if (typeof numeric === "number") {
-                                            tone =
-                                                numeric < 0
-                                                    ? "negative"
-                                                    : shouldHighlightPositiveMetric(key)
-                                                        ? "positive"
-                                                        : "neutral";
-                                            valueNode = (
-                                                <span>{formatMetricNumber(numeric)}</span>
-                                            );
-                                        }
-                                    }
 
-                                    return (
-                                        <MetricBadge
-                                            key={key}
-                                            label={label}
-                                            value={valueNode}
-                                            tone={tone}
-                                        />
-                                    );
-                                })}
-                            </div>
-                        </div>
-                    </article>
-                );
-            })}
+                                        return (
+                                            <td key={key} className="px-4 py-3">
+                                                {renderPill(content, tone)}
+                                            </td>
+                                        );
+                                    })}
+                                </tr>
+                            );
+                        })}
+                    </tbody>
+                </table>
+            </div>
         </div>
     );
 }
