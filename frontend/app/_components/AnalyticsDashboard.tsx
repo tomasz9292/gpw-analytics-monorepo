@@ -8805,6 +8805,7 @@ function TickerAutosuggest({
     disabled = false,
     allowedKinds,
     autoFocus = false,
+    allowFreeEntry = false,
 }: {
     onPick: (symbol: string, meta?: SymbolRow) => void;
     placeholder?: string;
@@ -8812,6 +8813,7 @@ function TickerAutosuggest({
     disabled?: boolean;
     allowedKinds?: SymbolKind[];
     autoFocus?: boolean;
+    allowFreeEntry?: boolean;
 }) {
     const [q, setQ] = useState("");
     const [list, setList] = useState<SymbolRow[]>([]);
@@ -8916,6 +8918,25 @@ function TickerAutosuggest({
 
     const onKeyDown = useCallback(
         (e: React.KeyboardEvent<HTMLInputElement>) => {
+            if (e.key === "Enter") {
+                if (idx >= 0 && idx < list.length) {
+                    e.preventDefault();
+                    choose(list[idx]);
+                    return;
+                }
+                if (allowFreeEntry) {
+                    const normalized = e.currentTarget.value.trim().toUpperCase();
+                    if (normalized && tickerDisplayPattern.test(normalized)) {
+                        e.preventDefault();
+                        onPick(normalized);
+                        setQ("");
+                        setList([]);
+                        setOpen(false);
+                        setIdx(-1);
+                    }
+                }
+                return;
+            }
             if (!open || !list.length) return;
             if (e.key === "ArrowDown") {
                 e.preventDefault();
@@ -8923,16 +8944,11 @@ function TickerAutosuggest({
             } else if (e.key === "ArrowUp") {
                 e.preventDefault();
                 setIdx((i) => Math.max(i - 1, 0));
-            } else if (e.key === "Enter") {
-                e.preventDefault();
-                if (idx >= 0) {
-                    choose(list[idx]);
-                }
             } else if (e.key === "Escape") {
                 setOpen(false);
             }
         },
-        [choose, idx, list, open]
+        [allowFreeEntry, choose, idx, list, onPick, open]
     );
 
     useEffect(() => {
@@ -9843,19 +9859,7 @@ type MetricRulePreviewProps = {
     asOf?: string | null;
 };
 
-const PREVIEW_PERIOD_OPTIONS = [
-    { label: "1M", value: 30 as const },
-    { label: "3M", value: 90 as const },
-    { label: "6M", value: 180 as const },
-    { label: "1R", value: 365 as const },
-    { label: "3L", value: 1095 as const },
-    { label: "5L", value: 1825 as const },
-    { label: "MAX", value: "max" as const },
-] as const;
-
-type PreviewPeriod = (typeof PREVIEW_PERIOD_OPTIONS)[number]["value"];
-
-const computePreviewStartISO = (period: PreviewPeriod): string => {
+const computePreviewStartISO = (period: number | "max"): string => {
     if (period === "max") {
         return "1990-01-01";
     }
@@ -9863,13 +9867,95 @@ const computePreviewStartISO = (period: PreviewPeriod): string => {
     return startDate.toISOString().slice(0, 10);
 };
 
+type ChartWindowRange = { startIndex: number; endIndex: number };
+
+const safeParseDate = (value: string | null | undefined): Date | null => {
+    if (typeof value !== "string" || !value.trim()) {
+        return null;
+    }
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const computeWindowStartIndex = (
+    rows: Row[],
+    endIndex: number,
+    lookbackDays: number
+): number => {
+    if (!rows.length) {
+        return 0;
+    }
+    const total = rows.length;
+    const safeEnd = Math.max(0, Math.min(endIndex, total - 1));
+    if (!Number.isFinite(lookbackDays) || lookbackDays <= 0) {
+        return safeEnd;
+    }
+    const endDate = safeParseDate(rows[safeEnd]?.date);
+    if (!endDate) {
+        return Math.max(0, safeEnd - lookbackDays + 1);
+    }
+    const threshold = endDate.getTime() - lookbackDays * DAY_MS;
+    let start = safeEnd;
+    for (let i = safeEnd; i >= 0; i -= 1) {
+        const currentDate = safeParseDate(rows[i]?.date);
+        if (!currentDate) {
+            start = i;
+            continue;
+        }
+        start = i;
+        if (currentDate.getTime() <= threshold) {
+            start = Math.min(safeEnd, i + 1);
+            break;
+        }
+    }
+    return start;
+};
+
+const findEndIndexForDate = (
+    rows: Row[],
+    isoDate: string | null | undefined
+): number | null => {
+    const target = safeParseDate(isoDate);
+    if (!target) {
+        return null;
+    }
+    for (let i = rows.length - 1; i >= 0; i -= 1) {
+        const rowDate = safeParseDate(rows[i]?.date);
+        if (!rowDate) {
+            continue;
+        }
+        if (rowDate.getTime() <= target.getTime()) {
+            return i;
+        }
+    }
+    return null;
+};
+
+const computeWindowDurationDays = (
+    rows: Row[],
+    range: ChartWindowRange | null
+): number | null => {
+    if (!range) {
+        return null;
+    }
+    const startRow = rows[range.startIndex];
+    const endRow = rows[range.endIndex];
+    if (!startRow || !endRow) {
+        return null;
+    }
+    const startDate = safeParseDate(startRow.date);
+    const endDate = safeParseDate(endRow.date);
+    if (!startDate || !endDate) {
+        return null;
+    }
+    const diff = endDate.getTime() - startDate.getTime();
+    return diff < 0 ? 0 : Math.round(diff / DAY_MS);
+};
+
 function MetricRulePreview({ rule, metricOption, lookbackValue, asOf }: MetricRulePreviewProps) {
-    const datalistId = useId();
     const chartGradientId = useId();
-    const [symbolInput, setSymbolInput] = useState<string>(() => DEFAULT_METRIC_PREVIEW_SYMBOL);
     const [selectedSymbol, setSelectedSymbol] = useState<string>(() => DEFAULT_METRIC_PREVIEW_SYMBOL);
-    const [symbolOptions, setSymbolOptions] = useState<SymbolRow[]>([]);
-    const [symbolsLoading, setSymbolsLoading] = useState(false);
+    const [selectedSymbolMeta, setSelectedSymbolMeta] = useState<SymbolRow | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [missingReason, setMissingReason] = useState<string | null>(null);
@@ -9879,10 +9965,10 @@ function MetricRulePreview({ rule, metricOption, lookbackValue, asOf }: MetricRu
         metricKey: string;
     } | null>(null);
     const [previewOpen, setPreviewOpen] = useState(false);
-    const [chartPeriod, setChartPeriod] = useState<PreviewPeriod>(365);
     const [chartRows, setChartRows] = useState<Row[]>([]);
     const [chartLoading, setChartLoading] = useState(false);
     const [chartError, setChartError] = useState<string | null>(null);
+    const [windowRange, setWindowRange] = useState<ChartWindowRange | null>(null);
 
     const sanitizedRule = useMemo(() => {
         const weightNumeric = Number(rule.weight);
@@ -9909,54 +9995,23 @@ function MetricRulePreview({ rule, metricOption, lookbackValue, asOf }: MetricRu
         [metricOption]
     );
 
-    useEffect(() => {
-        const query = symbolInput.trim();
-        if (query.length < 2) {
-            setSymbolOptions([]);
-            setSymbolsLoading(false);
-            return;
-        }
-        let active = true;
-        setSymbolsLoading(true);
-        searchSymbols(query, ["stock"]) // realtime suggestions
-            .then((rows) => {
-                if (!active) return;
-                const unique = new Map<string, SymbolRow>();
-                rows.forEach((row) => {
-                    const key = row.symbol.toUpperCase();
-                    if (!unique.has(key)) {
-                        unique.set(key, row);
-                    }
-                });
-                setSymbolOptions(Array.from(unique.values()).slice(0, 20));
-            })
-            .catch(() => {
-                if (!active) return;
-                setSymbolOptions([]);
-            })
-            .finally(() => {
-                if (!active) return;
-                setSymbolsLoading(false);
-            });
-        return () => {
-            active = false;
-        };
-    }, [symbolInput]);
+    const handleSymbolPick = useCallback(
+        (symbol: string, meta?: SymbolRow) => {
+            const normalized = symbol.trim().toUpperCase();
+            if (!normalized) return;
+            setSelectedSymbol(normalized);
+            setSelectedSymbolMeta(meta ?? null);
+        },
+        []
+    );
 
-    useEffect(() => {
-        const normalized = symbolInput.trim().toUpperCase();
-        const timer = window.setTimeout(() => {
-            setSelectedSymbol((prev) => {
-                if (!normalized) {
-                    return "";
-                }
-                return prev === normalized ? prev : normalized;
-            });
-        }, 250);
-        return () => {
-            window.clearTimeout(timer);
-        };
-    }, [symbolInput]);
+    const effectiveAsOf = useMemo(() => {
+        if (windowRange && chartRows[windowRange.endIndex]) {
+            return chartRows[windowRange.endIndex].date ?? null;
+        }
+        const normalized = typeof asOf === "string" ? asOf.trim() : "";
+        return normalized || null;
+    }, [windowRange, chartRows, asOf]);
 
     useEffect(() => {
         if (!component) {
@@ -9981,7 +10036,7 @@ function MetricRulePreview({ rule, metricOption, lookbackValue, asOf }: MetricRu
                     limit: 1,
                     universe: normalizedSymbol,
                     sort: component.direction === "asc" ? "asc" : "desc",
-                    as_of: asOf?.trim() ? asOf : undefined,
+                    as_of: effectiveAsOf ?? undefined,
                 },
                 { signal: controller.signal }
             )
@@ -10038,19 +10093,24 @@ function MetricRulePreview({ rule, metricOption, lookbackValue, asOf }: MetricRu
             window.clearTimeout(timer);
             controller.abort();
         };
-    }, [component, selectedSymbol, asOf, metricOption, rule]);
+    }, [component, selectedSymbol, effectiveAsOf, metricOption, rule]);
 
     useEffect(() => {
         const normalizedSymbol = selectedSymbol.trim().toUpperCase();
         if (!normalizedSymbol) {
             setChartRows([]);
             setChartError(null);
+            setWindowRange(null);
             return;
         }
         let cancelled = false;
         setChartLoading(true);
         setChartError(null);
-        const startISO = computePreviewStartISO(chartPeriod);
+        const fallbackDays =
+            Number.isFinite(lookbackValue) && lookbackValue > 0
+                ? Math.max(Math.floor(lookbackValue * 6), 365)
+                : 365;
+        const startISO = computePreviewStartISO(fallbackDays);
         fetchQuotes(normalizedSymbol, startISO)
             .then((rows) => {
                 if (cancelled) return;
@@ -10059,6 +10119,7 @@ function MetricRulePreview({ rule, metricOption, lookbackValue, asOf }: MetricRu
             .catch((err: unknown) => {
                 if (cancelled) return;
                 setChartRows([]);
+                setWindowRange(null);
                 setChartError(resolveErrorMessage(err, "Nie udało się pobrać danych cenowych."));
             })
             .finally(() => {
@@ -10069,7 +10130,185 @@ function MetricRulePreview({ rule, metricOption, lookbackValue, asOf }: MetricRu
         return () => {
             cancelled = true;
         };
-    }, [selectedSymbol, chartPeriod]);
+    }, [selectedSymbol, lookbackValue]);
+
+    useEffect(() => {
+        if (!chartRows.length) {
+            setWindowRange(null);
+            return;
+        }
+        const targetEnd = findEndIndexForDate(chartRows, asOf) ?? chartRows.length - 1;
+        const safeEnd = Math.max(0, Math.min(targetEnd, chartRows.length - 1));
+        const startIndex = computeWindowStartIndex(chartRows, safeEnd, lookbackValue);
+        setWindowRange((current) => {
+            if (current && current.startIndex === startIndex && current.endIndex === safeEnd) {
+                return current;
+            }
+            return { startIndex, endIndex: safeEnd };
+        });
+    }, [chartRows, lookbackValue, asOf]);
+
+    useEffect(() => {
+        setMissingReason(null);
+    }, [selectedSymbol, lookbackValue]);
+
+    const priceFormatter = useMemo(
+        () =>
+            new Intl.NumberFormat("pl-PL", {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+            }),
+        []
+    );
+
+    const percentFormatter = useMemo(
+        () =>
+            new Intl.NumberFormat("pl-PL", {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+            }),
+        []
+    );
+
+    const axisDateFormatter = useMemo(
+        () =>
+            new Intl.DateTimeFormat("pl-PL", {
+                month: "short",
+                year: "numeric",
+            }),
+        []
+    );
+
+    const tooltipDateFormatter = useMemo(
+        () =>
+            new Intl.DateTimeFormat("pl-PL", {
+                day: "numeric",
+                month: "long",
+                year: "numeric",
+            }),
+        []
+    );
+
+    const brushDateFormatter = useMemo(
+        () =>
+            new Intl.DateTimeFormat("pl-PL", {
+                year: "numeric",
+                month: "short",
+            }),
+        []
+    );
+
+    const axisTickFormatter = useCallback(
+        (value: string | number) => {
+            if (typeof value !== "string" && typeof value !== "number") {
+                return "";
+            }
+            const date = new Date(value);
+            if (Number.isNaN(date.getTime())) {
+                return "";
+            }
+            return axisDateFormatter.format(date);
+        },
+        [axisDateFormatter]
+    );
+
+    const brushTickFormatter = useCallback(
+        (value: string | number) => {
+            if (typeof value !== "string" && typeof value !== "number") {
+                return "";
+            }
+            const date = new Date(value);
+            if (Number.isNaN(date.getTime())) {
+                return "";
+            }
+            return brushDateFormatter.format(date);
+        },
+        [brushDateFormatter]
+    );
+
+    const windowRows = useMemo(() => {
+        if (!windowRange) return [];
+        const total = chartRows.length;
+        if (!total) return [];
+        const start = Math.max(0, Math.min(windowRange.startIndex, total - 1));
+        const end = Math.max(start, Math.min(windowRange.endIndex, total - 1));
+        return chartRows.slice(start, end + 1);
+    }, [chartRows, windowRange]);
+
+    const chartData = useMemo<PriceChartPoint[]>(() => {
+        if (!windowRows.length) return [];
+        const base = windowRows[0]?.close ?? 0;
+        return windowRows.map((row) => {
+            const change = row.close - base;
+            const changePct = base !== 0 ? (change / base) * 100 : 0;
+            return { ...row, change, changePct, sma: null };
+        });
+    }, [windowRows]);
+
+    const brushData = useMemo<PriceChartPoint[]>(() => {
+        if (!chartRows.length) return [];
+        const base = chartRows[0]?.close ?? 0;
+        return chartRows.map((row) => {
+            const change = row.close - base;
+            const changePct = base !== 0 ? (change / base) * 100 : 0;
+            return { ...row, change, changePct, sma: null };
+        });
+    }, [chartRows]);
+
+    const chartStats = useMemo(() => {
+        if (!chartData.length) return null;
+        const first = chartData[0];
+        const last = chartData[chartData.length - 1];
+        if (!first || !last) return null;
+        const change = last.close - first.close;
+        const changePct = first.close !== 0 ? (change / first.close) * 100 : 0;
+        return {
+            change,
+            changePct,
+            latestPrice: last.close,
+        };
+    }, [chartData]);
+
+    const chartChangeClass = useMemo(() => {
+        if (!chartStats) return "text-subtle";
+        if (Math.abs(chartStats.change) < 1e-10) {
+            return "text-subtle";
+        }
+        return chartStats.change > 0 ? "text-accent" : "text-negative";
+    }, [chartStats]);
+
+    const chartChangeValue = useMemo(() => {
+        if (!chartStats) return "—";
+        if (!Number.isFinite(chartStats.change)) return "—";
+        const absolute = priceFormatter.format(Math.abs(chartStats.change));
+        if (Math.abs(chartStats.change) < 1e-10) {
+            return priceFormatter.format(0);
+        }
+        const sign = chartStats.change > 0 ? "+" : "-";
+        return `${sign}${absolute}`;
+    }, [chartStats, priceFormatter]);
+
+    const chartChangePct = useMemo(() => {
+        if (!chartStats) return "—";
+        if (!Number.isFinite(chartStats.changePct)) return "—";
+        const value = chartStats.changePct;
+        const absolute = percentFormatter.format(Math.abs(value));
+        if (Math.abs(value) < 1e-10) {
+            return `${percentFormatter.format(0)}%`;
+        }
+        const sign = value > 0 ? "+" : "-";
+        return `${sign}${absolute}%`;
+    }, [chartStats, percentFormatter]);
+
+    const chartLatestPrice = useMemo(() => {
+        if (!chartData.length) return "—";
+        const last = chartData[chartData.length - 1];
+        if (!last) return "—";
+        return priceFormatter.format(last.close);
+    }, [chartData, priceFormatter]);
+
+    const chartPrimaryColor = chartStats && chartStats.change < 0 ? "#EA4335" : "#1DB954";
+    const chartStrokeColor = chartStats && chartStats.change < 0 ? "#C5221F" : "#0B8F47";
 
     const metricRange = useMemo(() => {
         if (!component) return null;
@@ -10126,126 +10365,53 @@ function MetricRulePreview({ rule, metricOption, lookbackValue, asOf }: MetricRu
         [percentBased]
     );
 
-    const priceFormatter = useMemo(
-        () =>
-            new Intl.NumberFormat("pl-PL", {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 2,
-            }),
-        []
+    const windowDurationDays = useMemo(
+        () => computeWindowDurationDays(chartRows, windowRange),
+        [chartRows, windowRange]
     );
 
-    const percentFormatter = useMemo(
-        () =>
-            new Intl.NumberFormat("pl-PL", {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 2,
-            }),
-        []
-    );
+    const windowStartDate =
+        windowRange && chartRows[windowRange.startIndex]
+            ? chartRows[windowRange.startIndex].date ?? null
+            : null;
+    const windowEndDate =
+        windowRange && chartRows[windowRange.endIndex]
+            ? chartRows[windowRange.endIndex].date ?? null
+            : null;
 
-    const axisDateFormatter = useMemo(
-        () =>
-            new Intl.DateTimeFormat("pl-PL", {
-                month: "short",
-                year: "numeric",
-            }),
-        []
-    );
-
-    const tooltipDateFormatter = useMemo(
-        () =>
-            new Intl.DateTimeFormat("pl-PL", {
-                day: "numeric",
-                month: "long",
-                year: "numeric",
-            }),
-        []
-    );
-
-    const axisTickFormatter = useCallback(
-        (value: string | number) => {
-            if (typeof value !== "string" && typeof value !== "number") {
-                return "";
+    const handleBrushSelectionChange = useCallback(
+        (range: BrushStartEndIndex) => {
+            if (!chartRows.length) {
+                return;
             }
-            const date = new Date(value);
-            if (Number.isNaN(date.getTime())) {
-                return "";
-            }
-            return axisDateFormatter.format(date);
+            const total = chartRows.length;
+            const rawStart =
+                typeof range.startIndex === "number" ? range.startIndex : range.endIndex ?? 0;
+            const rawEnd =
+                typeof range.endIndex === "number" ? range.endIndex : range.startIndex ?? 0;
+            const nextEnd = Math.max(0, Math.min(Math.max(rawStart, rawEnd), total - 1));
+            const nextStart = computeWindowStartIndex(chartRows, nextEnd, lookbackValue);
+            setWindowRange((current) => {
+                if (current && current.startIndex === nextStart && current.endIndex === nextEnd) {
+                    return current;
+                }
+                return { startIndex: nextStart, endIndex: nextEnd };
+            });
+            setMissingReason(null);
         },
-        [axisDateFormatter]
+        [chartRows, lookbackValue]
     );
 
-    const chartData = useMemo<PriceChartPoint[]>(() => {
-        if (!chartRows.length) return [];
-        const base = chartRows[0]?.close ?? 0;
-        return chartRows.map((row) => {
-            const change = row.close - base;
-            const changePct = base !== 0 ? (change / base) * 100 : 0;
-            return { ...row, change, changePct, sma: null };
-        });
-    }, [chartRows]);
+    const selectedDisplayLabel = useMemo(() => {
+        const base = selectedSymbol || DEFAULT_METRIC_PREVIEW_SYMBOL;
+        const display = extractDisplayName(base, selectedSymbolMeta ?? undefined);
+        return display ? `${base} — ${display}` : base;
+    }, [selectedSymbol, selectedSymbolMeta]);
 
-    const chartStats = useMemo(() => {
-        if (!chartData.length) return null;
-        const first = chartData[0];
-        const last = chartData[chartData.length - 1];
-        if (!first || !last) return null;
-        const change = last.close - first.close;
-        const changePct = first.close !== 0 ? (change / first.close) * 100 : 0;
-        return {
-            change,
-            changePct,
-            latestPrice: last.close,
-        };
-    }, [chartData]);
+    const lookbackTarget =
+        Number.isFinite(lookbackValue) && lookbackValue > 0 ? Math.floor(lookbackValue) : null;
 
-    const activePeriodOption = useMemo(
-        () => PREVIEW_PERIOD_OPTIONS.find((option) => option.value === chartPeriod),
-        [chartPeriod]
-    );
-
-    const chartChangeClass = useMemo(() => {
-        if (!chartStats) return "text-subtle";
-        if (Math.abs(chartStats.change) < 1e-10) {
-            return "text-subtle";
-        }
-        return chartStats.change > 0 ? "text-accent" : "text-negative";
-    }, [chartStats]);
-
-    const chartChangeValue = useMemo(() => {
-        if (!chartStats) return "—";
-        if (!Number.isFinite(chartStats.change)) return "—";
-        const absolute = priceFormatter.format(Math.abs(chartStats.change));
-        if (Math.abs(chartStats.change) < 1e-10) {
-            return priceFormatter.format(0);
-        }
-        const sign = chartStats.change > 0 ? "+" : "-";
-        return `${sign}${absolute}`;
-    }, [chartStats, priceFormatter]);
-
-    const chartChangePct = useMemo(() => {
-        if (!chartStats) return "—";
-        if (!Number.isFinite(chartStats.changePct)) return "—";
-        const value = chartStats.changePct;
-        const absolute = percentFormatter.format(Math.abs(value));
-        if (Math.abs(value) < 1e-10) {
-            return `${percentFormatter.format(0)}%`;
-        }
-        const sign = value > 0 ? "+" : "-";
-        return `${sign}${absolute}%`;
-    }, [chartStats, percentFormatter]);
-
-    const chartLatestPrice = useMemo(() => {
-        if (!chartData.length) return "—";
-        const last = chartData[chartData.length - 1];
-        if (!last) return "—";
-        return priceFormatter.format(last.close);
-    }, [chartData, priceFormatter]);
-
-    const chartPrimaryColor = chartStats && chartStats.change < 0 ? "#EA4335" : "#1DB954";
-    const chartStrokeColor = chartStats && chartStats.change < 0 ? "#C5221F" : "#0B8F47";
+    const sliderAvailable = brushData.length > 1 && Boolean(windowRange);
 
     return (
         <div className="space-y-3 rounded-2xl border border-soft bg-surface p-4">
@@ -10258,9 +10424,7 @@ function MetricRulePreview({ rule, metricOption, lookbackValue, asOf }: MetricRu
                     </div>
                 </div>
                 <div className="flex items-center gap-2">
-                    {loading ? (
-                        <span className="text-[11px] text-muted">Ładowanie…</span>
-                    ) : null}
+                    {loading ? <span className="text-[11px] text-muted">Ładowanie…</span> : null}
                     <button
                         type="button"
                         onClick={() => setPreviewOpen((prev) => !prev)}
@@ -10272,39 +10436,30 @@ function MetricRulePreview({ rule, metricOption, lookbackValue, asOf }: MetricRu
             </div>
             {previewOpen ? (
                 <div className="space-y-4 pt-1">
-                    <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-                        <label className="flex flex-col gap-2">
+                    <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                        <div className="flex flex-col gap-2">
                             <span className="text-xs uppercase tracking-wide text-muted">Spółka</span>
-                            <input
-                                value={symbolInput}
-                                onChange={(event) => setSymbolInput(event.target.value)}
-                                list={datalistId}
-                                placeholder="np. CDR.WA"
-                                className="w-full rounded-xl border border-soft bg-surface px-3 py-2 text-sm text-neutral focus:border-[var(--color-tech)] focus:outline-none focus:ring-2 focus:ring-[rgba(52,152,219,0.15)]"
+                            <TickerAutosuggest
+                                onPick={handleSymbolPick}
+                                allowedKinds={["stock"]}
+                                allowFreeEntry
+                                placeholder="Dodaj symbol (np. CDR.WA)"
+                                inputClassName="w-full"
                             />
-                            <datalist id={datalistId}>
-                                {symbolOptions.map((option) => (
-                                    <option
-                                        key={option.symbol}
-                                        value={option.symbol.toUpperCase()}
-                                    >
-                                        {option.symbol.toUpperCase()}
-                                        {option.name ? ` — ${option.name}` : ""}
-                                    </option>
-                                ))}
-                            </datalist>
-                            {symbolsLoading ? (
-                                <span className="text-[11px] text-subtle">Ładowanie listy spółek…</span>
-                            ) : null}
-                        </label>
+                            <span className="text-[11px] text-subtle">
+                                Wpisz pierwszy znak, aby zobaczyć podpowiedzi z bazy GPW.
+                            </span>
+                            <div className="text-sm text-neutral">
+                                Wybrana spółka: {" "}
+                                <span className="font-semibold text-primary">{selectedDisplayLabel}</span>
+                            </div>
+                        </div>
                         {metricOption ? (
                             <div className="rounded-xl border border-dashed border-soft bg-soft-surface px-3 py-2 text-xs text-subtle">
                                 <div className="font-semibold text-neutral">{metricOption.label}</div>
                                 <div>
                                     Zakres: {lookbackValue} dni • Kierunek: {" "}
-                                    {rule.direction === "asc"
-                                        ? "mniej = lepiej"
-                                        : "więcej = lepiej"}
+                                    {rule.direction === "asc" ? "mniej = lepiej" : "więcej = lepiej"}
                                 </div>
                                 {metricOption.description ? (
                                     <div className="mt-1">{metricOption.description}</div>
@@ -10327,48 +10482,110 @@ function MetricRulePreview({ rule, metricOption, lookbackValue, asOf }: MetricRu
                         </div>
                     ) : null}
                     <div className="space-y-3">
-                        <div className="rounded-2xl border border-soft bg-soft-surface p-4">
-                            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                                <div>
+                        <div className="space-y-4 rounded-2xl border border-soft bg-soft-surface p-4">
+                            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,260px)]">
+                                <div className="space-y-2">
                                     <div className="text-xs uppercase tracking-wide text-muted">
-                                        Zmiana ceny — {activePeriodOption?.label ?? ""}
+                                        Zmiana ceny w wybranym zakresie
                                     </div>
-                                    <div className="mt-1 text-2xl font-semibold text-neutral">
-                                        {selectedSymbol || DEFAULT_METRIC_PREVIEW_SYMBOL}
+                                    <div className="text-2xl font-semibold text-neutral">
+                                        {selectedDisplayLabel}
                                     </div>
-                                    <div className={`mt-2 flex flex-wrap items-baseline gap-2 text-sm ${chartChangeClass}`}>
+                                    <div
+                                        className={`flex flex-wrap items-baseline gap-2 text-sm ${chartChangeClass}`}
+                                    >
                                         <span className="text-lg font-semibold">{chartChangePct}</span>
                                         <span>{chartChangeValue}</span>
                                         <span className="text-xs text-subtle">
-                                            Ostatnia cena: <span className="font-semibold text-neutral">{chartLatestPrice}</span>
+                                            Ostatnia cena: {" "}
+                                            <span className="font-semibold text-neutral">
+                                                {chartLatestPrice}
+                                            </span>
                                         </span>
                                     </div>
+                                    <div className="text-xs text-subtle">
+                                        Okres metryki: {" "}
+                                        {windowDurationDays != null ? `${windowDurationDays} dni` : "—"}
+                                        {lookbackTarget != null
+                                            ? ` • docelowo ${lookbackTarget} dni`
+                                            : null}
+                                    </div>
+                                    {windowStartDate && windowEndDate ? (
+                                        <div className="text-xs text-subtle">
+                                            Zakres dat: {windowStartDate} → {windowEndDate}
+                                        </div>
+                                    ) : null}
                                 </div>
-                                <div className="flex flex-wrap gap-2">
-                                    {PREVIEW_PERIOD_OPTIONS.map((option) => (
-                                        <button
-                                            key={option.label}
-                                            type="button"
-                                            onClick={() => setChartPeriod(option.value)}
-                                            className={`rounded-lg px-3 py-1 text-xs font-medium transition ${
-                                                chartPeriod === option.value
-                                                    ? "bg-primary text-white"
-                                                    : "border border-soft bg-white text-muted hover:border-[var(--color-tech)] hover:text-[var(--color-tech)]"
-                                            }`}
-                                        >
-                                            {option.label}
-                                        </button>
-                                    ))}
+                                <div className="space-y-3">
+                                    <div className="flex items-center justify-between text-xs uppercase tracking-wide text-muted">
+                                        <span>Score</span>
+                                        <span className="text-sm font-semibold text-primary">
+                                            {preview?.score != null ? preview.score.toFixed(3) : "—"}
+                                        </span>
+                                    </div>
+                                    <div className="relative h-2 overflow-hidden rounded-full bg-soft">
+                                        <div
+                                            className="absolute inset-y-0 left-0 rounded-full bg-primary transition-all"
+                                            style={{ width: `${normalizedPercent ?? 0}%` }}
+                                        />
+                                    </div>
+                                    <div className="flex justify-between text-[10px] text-subtle">
+                                        <span>0</span>
+                                        <span>1</span>
+                                    </div>
+                                    <div className="space-y-1">
+                                        <div className="text-xs uppercase tracking-wide text-muted">
+                                            Wartość metryki
+                                        </div>
+                                        {metricRange && preview?.rawValue != null ? (
+                                            <>
+                                                <div className="relative h-2 overflow-hidden rounded-full bg-soft">
+                                                    <div
+                                                        className="absolute inset-0"
+                                                        style={{
+                                                            background:
+                                                                (component?.direction ?? "desc") === "asc"
+                                                                    ? "linear-gradient(to right, #22C55E, #F97316, #EF4444)"
+                                                                    : "linear-gradient(to right, #EF4444, #F97316, #22C55E)",
+                                                        }}
+                                                    />
+                                                    {pointerPosition != null ? (
+                                                        <div
+                                                            className="absolute -top-1 bottom-[-1px] w-[2px] bg-primary"
+                                                            style={{ left: `${pointerPosition}%` }}
+                                                        />
+                                                    ) : null}
+                                                </div>
+                                                <div className="flex justify-between text-[10px] text-subtle">
+                                                    <span>{formatRawValue(metricRange.min)}</span>
+                                                    <span>{formatRawValue(metricRange.max)}</span>
+                                                </div>
+                                                <div className="text-xs text-muted">
+                                                    Aktualna wartość: {" "}
+                                                    <span className="font-semibold text-primary">
+                                                        {formatRawValue(preview.rawValue)}
+                                                    </span>
+                                                </div>
+                                            </>
+                                        ) : (
+                                            <div className="rounded-xl border border-dashed border-soft px-3 py-2 text-xs text-subtle">
+                                                Brak zdefiniowanej skali – pokazujemy jedynie wynik znormalizowany.
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
                             </div>
-                            <div className="mt-4 h-64">
+                            <div className="h-64">
                                 {chartLoading ? (
                                     <div className="flex h-full items-center justify-center text-xs text-subtle">
                                         Ładowanie wykresu…
                                     </div>
                                 ) : chartData.length ? (
                                     <ResponsiveContainer width="100%" height="100%">
-                                        <AreaChart data={chartData} margin={{ top: 10, right: 16, left: 0, bottom: 0 }}>
+                                        <AreaChart
+                                            data={chartData}
+                                            margin={{ top: 10, right: 16, left: 0, bottom: 0 }}
+                                        >
                                             <defs>
                                                 <linearGradient id={chartGradientId} x1="0" y1="0" x2="0" y2="1">
                                                     <stop offset="0%" stopColor={chartPrimaryColor} stopOpacity={0.35} />
@@ -10420,86 +10637,63 @@ function MetricRulePreview({ rule, metricOption, lookbackValue, asOf }: MetricRu
                                     </ResponsiveContainer>
                                 ) : (
                                     <div className="flex h-full items-center justify-center text-xs text-subtle">
-                                        Brak danych cenowych dla wybranego okresu.
+                                        Brak danych cenowych dla wybranego zakresu.
                                     </div>
                                 )}
                             </div>
+                            {sliderAvailable ? (
+                                <div className="space-y-2">
+                                    <div className="h-24 rounded-lg border border-soft bg-surface px-2 py-2">
+                                        <ResponsiveContainer width="100%" height="100%">
+                                            <AreaChart
+                                                data={brushData}
+                                                margin={{ top: 4, right: 16, left: 0, bottom: 0 }}
+                                            >
+                                                <XAxis
+                                                    dataKey="date"
+                                                    tickFormatter={brushTickFormatter}
+                                                    tick={{ fontSize: 10, fill: "#64748B" }}
+                                                    axisLine={false}
+                                                    tickLine={false}
+                                                    minTickGap={32}
+                                                />
+                                                <YAxis hide domain={["auto", "auto"]} />
+                                                <Area
+                                                    type="monotone"
+                                                    dataKey="close"
+                                                    stroke={chartStrokeColor}
+                                                    fill={chartPrimaryColor}
+                                                    fillOpacity={0.15}
+                                                    isAnimationActive={false}
+                                                    dot={false}
+                                                />
+                                                <Brush
+                                                    dataKey="date"
+                                                    height={22}
+                                                    travellerWidth={10}
+                                                    stroke="#2563EB"
+                                                    fill="#E2E8F0"
+                                                    startIndex={windowRange?.startIndex}
+                                                    endIndex={windowRange?.endIndex}
+                                                    onChange={handleBrushSelectionChange}
+                                                    onDragEnd={handleBrushSelectionChange}
+                                                />
+                                            </AreaChart>
+                                        </ResponsiveContainer>
+                                    </div>
+                                    <div className="flex justify-between text-xs text-muted">
+                                        <span>{windowStartDate ?? "—"}</span>
+                                        <span>{windowEndDate ?? "—"}</span>
+                                    </div>
+                                </div>
+                            ) : null}
                             {chartError ? (
-                                <div className="mt-3 rounded-xl border border-negative bg-negative/5 px-3 py-2 text-xs text-negative">
+                                <div className="rounded-xl border border-negative bg-negative/5 px-3 py-2 text-xs text-negative">
                                     {chartError}
                                 </div>
                             ) : null}
                         </div>
-                        {preview && component ? (
-                            <div className="space-y-3 rounded-2xl border border-dashed border-soft p-4">
-                                <div className="flex flex-wrap items-baseline gap-2 text-sm text-neutral">
-                                    <span className="font-semibold">
-                                        {selectedSymbol || DEFAULT_METRIC_PREVIEW_SYMBOL}
-                                    </span>
-                                    {preview.rawValue != null ? (
-                                        <span className="text-muted">
-                                            Wartość: {" "}
-                                            <span className="font-semibold text-primary">
-                                                {formatRawValue(preview.rawValue)}
-                                            </span>
-                                        </span>
-                                    ) : (
-                                        <span className="text-subtle">
-                                            Brak wartości metryki dla tej spółki.
-                                        </span>
-                                    )}
-                                </div>
-                                {metricRange && preview.rawValue != null ? (
-                                    <div className="space-y-1">
-                                        <div className="relative h-2 overflow-hidden rounded-full bg-soft">
-                                            <div
-                                                className="absolute inset-0"
-                                                style={{
-                                                    background:
-                                                        component.direction === "asc"
-                                                            ? "linear-gradient(to right, #22C55E, #F97316, #EF4444)"
-                                                            : "linear-gradient(to right, #EF4444, #F97316, #22C55E)",
-                                                }}
-                                            />
-                                            {pointerPosition != null ? (
-                                                <div
-                                                    className="absolute -top-1 bottom-[-1px] w-[2px] bg-primary"
-                                                    style={{ left: `${pointerPosition}%` }}
-                                                />
-                                            ) : null}
-                                        </div>
-                                        <div className="flex justify-between text-[10px] text-subtle">
-                                            <span>{formatRawValue(metricRange.min)}</span>
-                                            <span>{formatRawValue(metricRange.max)}</span>
-                                        </div>
-                                    </div>
-                                ) : (
-                                    <div className="rounded-xl border border-dashed border-soft px-3 py-2 text-xs text-subtle">
-                                        Brak zdefiniowanej skali – pokazujemy jedynie wynik znormalizowany.
-                                    </div>
-                                )}
-                                {normalizedPercent != null ? (
-                                    <div className="space-y-1">
-                                        <div className="flex items-center justify-between text-xs text-subtle">
-                                            <span>Score</span>
-                                            <span className="font-semibold text-primary">
-                                                {preview.score?.toFixed(3)}
-                                            </span>
-                                        </div>
-                                        <div className="relative h-2 overflow-hidden rounded-full bg-soft">
-                                            <div
-                                                className="absolute inset-y-0 left-0 rounded-full bg-primary"
-                                                style={{ width: `${normalizedPercent}%` }}
-                                            />
-                                        </div>
-                                        <div className="flex justify-between text-[10px] text-subtle">
-                                            <span>0</span>
-                                            <span>1</span>
-                                        </div>
-                                    </div>
-                                ) : null}
-                            </div>
-                        ) : !loading && !error ? (
+                        {!preview && !loading && !error ? (
                             <div className="rounded-2xl border border-dashed border-soft p-4 text-xs text-subtle">
                                 {metricOption
                                     ? "Wprowadź symbol spółki, aby zobaczyć wynik metryki."
@@ -10512,7 +10706,6 @@ function MetricRulePreview({ rule, metricOption, lookbackValue, asOf }: MetricRu
         </div>
     );
 }
-
 /** =========================
  *  Główny komponent dashboardu
  *  ========================= */
