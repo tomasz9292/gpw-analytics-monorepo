@@ -9936,7 +9936,6 @@ function PriceChart({
                             <Brush
                                 {...CHART_BRUSH_COMMON_PROPS}
                                 dataKey="date"
-                                data={brushChartData}
                                 height={34}
                                 startIndex={brushRange?.startIndex}
                                 endIndex={brushRange?.endIndex}
