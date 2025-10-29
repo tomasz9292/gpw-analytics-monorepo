@@ -1649,6 +1649,15 @@ type ComparisonMeta = {
     name?: string | null;
 };
 
+type WatchSnapshot = {
+    latestPrice: number | null;
+    change: number | null;
+    changePct: number | null;
+    kind: SymbolKind;
+};
+
+type WatchlistGroup = "owned" | "wishlist" | "index";
+
 type Row = {
     date: string;
     open: number;
@@ -3175,16 +3184,16 @@ const Card = ({
     right?: React.ReactNode;
     children: React.ReactNode;
 }) => (
-    <div className="bg-surface rounded-2xl shadow-sm border border-soft">
+    <div className="rounded-3xl border border-slate-200/70 bg-white/95 shadow-[0_24px_60px_rgba(15,23,42,0.08)] backdrop-blur">
         {(title || right) && (
-            <div className="px-4 md:px-6 py-3 border-b border-soft flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                {title && <div className="font-semibold text-primary sm:flex-1">{title}</div>}
+            <div className="flex flex-col gap-3 border-b border-slate-200/60 px-5 py-4 md:flex-row md:items-center md:justify-between md:px-8">
+                {title && <div className="text-lg font-semibold text-slate-900 md:flex-1">{title}</div>}
                 {right && (
-                    <div className="flex flex-wrap gap-2 w-full sm:w-auto sm:justify-end">{right}</div>
+                    <div className="flex w-full flex-wrap gap-2 sm:w-auto sm:justify-end">{right}</div>
                 )}
             </div>
         )}
-        <div className="p-4 md:p-6">{children}</div>
+        <div className="px-5 py-5 md:px-8 md:py-8">{children}</div>
     </div>
 );
 
@@ -3204,23 +3213,25 @@ const Section = ({
     children: React.ReactNode;
 }) => (
     <section id={id} className="scroll-mt-28">
-        <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-            <div className="space-y-2">
+        <div className="flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
+            <div className="space-y-3">
                 {kicker && (
-                    <span className="text-xs uppercase tracking-[0.35em] text-subtle">
+                    <span className="text-xs font-semibold uppercase tracking-[0.28em] text-blue-600">
                         {kicker}
                     </span>
                 )}
-                <div className="space-y-1">
-                    <h2 className="text-2xl md:text-3xl font-semibold text-primary">{title}</h2>
+                <div className="space-y-2">
+                    <h2 className="text-3xl font-semibold text-slate-900 md:text-[2.5rem]">
+                        {title}
+                    </h2>
                     {description && (
-                        <p className="text-sm text-muted max-w-2xl">{description}</p>
+                        <p className="max-w-3xl text-base text-slate-500">{description}</p>
                     )}
                 </div>
             </div>
-            {actions && <div className="flex flex-wrap gap-2">{actions}</div>}
+            {actions && <div className="flex flex-wrap gap-3">{actions}</div>}
         </div>
-        <div className="mt-8">{children}</div>
+        <div className="mt-10">{children}</div>
     </section>
 );
 
@@ -7981,10 +7992,10 @@ const Chip = ({
     <button
         onClick={onClick}
         title={title}
-        className={`inline-flex items-center justify-center rounded-full px-3 py-1 text-sm text-center border transition ${
+        className={`inline-flex items-center justify-center rounded-full border px-3 py-1.5 text-sm font-medium transition ${
             active
-                ? "bg-primary text-white border-[var(--color-primary)]"
-                : "bg-surface text-muted border-soft hover:border-[var(--color-primary)] hover:text-primary"
+                ? "border-blue-500 bg-blue-500/10 text-blue-600 shadow-[0_12px_32px_rgba(37,99,235,0.25)]"
+                : "border-slate-200 bg-white text-slate-600 hover:border-blue-300 hover:text-blue-600 hover:shadow-[0_12px_32px_rgba(148,163,184,0.18)]"
         } ${className ?? ""}`}
     >
         {children}
@@ -8751,46 +8762,136 @@ function Watchlist({
     onPick,
     onRemove,
     displayNames,
+    snapshots,
+    group,
 }: {
     items: string[];
     current: string | null;
     onPick: (s: string) => void;
     onRemove: (s: string) => void;
     displayNames?: Record<string, string>;
+    snapshots?: Record<string, WatchSnapshot>;
+    group?: WatchlistGroup;
 }) {
+    const badgeLabel =
+        group === "wishlist" ? "Na radarze" : group === "index" ? "Benchmark" : "Inwestycja";
+    const badgeClasses =
+        group === "wishlist"
+            ? "border-amber-200 bg-amber-50 text-amber-600"
+            : group === "index"
+            ? "border-indigo-200 bg-indigo-50 text-indigo-600"
+            : "border-emerald-200 bg-emerald-50 text-emerald-600";
+
+    const formatValue = (value: number | null | undefined): string | null => {
+        if (typeof value !== "number" || Number.isNaN(value) || !Number.isFinite(value)) {
+            return null;
+        }
+        return value.toLocaleString("pl-PL", {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+        });
+    };
+
     if (!items.length) {
         return (
-            <div className="text-sm text-subtle">
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-white/60 p-6 text-sm text-slate-500">
                 Dodaj spółkę powyżej, aby zbudować własną listę obserwacyjną.
             </div>
         );
     }
 
     return (
-        <div className="flex flex-wrap gap-2">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {items.map((s) => {
                 const label = displayNames?.[s] ?? s;
-                const removeLabel = label === s ? s : `${label} (${s})`;
-                const title = label === s ? undefined : `${label} (${s})`;
+                const snapshot = snapshots?.[s];
+                const change = snapshot?.change ?? null;
+                const changePct = snapshot?.changePct ?? null;
+                const formattedPrice = formatValue(snapshot?.latestPrice ?? null);
+                const formattedChange =
+                    typeof change === "number" && Number.isFinite(change)
+                        ? formatValue(Math.abs(change))
+                        : null;
+                const formattedChangePct =
+                    typeof changePct === "number" && Number.isFinite(changePct)
+                        ? formatValue(Math.abs(changePct))
+                        : null;
+                const direction =
+                    typeof change === "number" && Number.isFinite(change)
+                        ? change > 0
+                            ? "up"
+                            : change < 0
+                            ? "down"
+                            : "flat"
+                        : null;
+                const changeClass =
+                    direction === "up"
+                        ? "text-emerald-600"
+                        : direction === "down"
+                        ? "text-rose-600"
+                        : "text-slate-500";
+                const changeLabel = formattedChange
+                    ? `${direction === "down" ? "−" : direction === "up" ? "+" : ""}${formattedChange} zł${
+                          formattedChangePct ? ` (${formattedChangePct}%)` : ""
+                      }`
+                    : "Brak zmian";
+                const priceLabel = formattedPrice ? `${formattedPrice} zł` : "Brak danych";
                 return (
-                    <div key={s} className="group flex items-center gap-1">
-                        <Chip active={s === current} onClick={() => onPick(s)} title={title}>
-                            {label}
-                        </Chip>
-                        <button
-                            type="button"
-                            onClick={() => onRemove(s)}
-                            className={[
-                                "opacity-0 transition-opacity",
-                                "group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100",
-                                "text-xl leading-none text-subtle hover:text-negative focus-visible:text-negative",
-                                "px-1",
-                            ].join(" ")}
-                            aria-label={`Usuń ${removeLabel} z listy`}
-                        >
-                            ×
-                        </button>
-                    </div>
+                    <button
+                        key={s}
+                        type="button"
+                        onClick={() => onPick(s)}
+                        className={`group relative flex w-full flex-col rounded-2xl border bg-white/95 p-4 text-left shadow-[0_18px_42px_rgba(15,23,42,0.12)] transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/40 focus-visible:ring-offset-2 focus-visible:ring-offset-white ${
+                            s === current
+                                ? "-translate-y-0.5 border-blue-500 shadow-[0_26px_60px_rgba(37,99,235,0.25)]"
+                                : "border-slate-200 hover:-translate-y-1 hover:border-blue-300 hover:shadow-[0_24px_60px_rgba(148,163,184,0.22)]"
+                        }`}
+                        aria-pressed={s === current}
+                    >
+                        <div className="flex items-start justify-between gap-3">
+                            <div>
+                                <p className="text-xs font-semibold uppercase tracking-[0.32em] text-slate-400">
+                                    Symbol
+                                </p>
+                                <div className="mt-2 text-lg font-semibold text-slate-900">
+                                    {label}
+                                    {label !== s ? (
+                                        <span className="ml-2 text-sm font-medium text-slate-400">{s}</span>
+                                    ) : null}
+                                </div>
+                            </div>
+                            <span
+                                className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold tracking-wide ${badgeClasses}`}
+                            >
+                                {badgeLabel}
+                            </span>
+                        </div>
+                        <div className="mt-6 flex items-end justify-between gap-4">
+                            <div>
+                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                                    Kurs
+                                </p>
+                                <p className="mt-1 text-2xl font-semibold text-slate-900">{priceLabel}</p>
+                            </div>
+                            <div className={`text-right text-sm font-semibold ${changeClass}`}>
+                                {changeLabel}
+                            </div>
+                        </div>
+                        <div className="mt-6 flex items-center justify-between text-xs text-slate-400">
+                            <span>{snapshot?.kind === "index" ? "Indeks GPW" : "Akcje GPW"}</span>
+                            <button
+                                type="button"
+                                onClick={(event) => {
+                                    event.stopPropagation();
+                                    onRemove(s);
+                                }}
+                                className="inline-flex items-center gap-1 rounded-full border border-transparent px-2 py-1 font-semibold text-slate-500 transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/40 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
+                                aria-label={`Usuń ${label} z listy`}
+                            >
+                                Usuń
+                            </button>
+                        </div>
+                    </button>
                 );
             })}
         </div>
@@ -11022,6 +11123,156 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
     const [period, setPeriod] = useState<ChartPeriod>(365);
     const [area, setArea] = useState(true);
     const [smaOn, setSmaOn] = useState(true);
+    const [watchSnapshots, setWatchSnapshots] = useState<Record<string, WatchSnapshot>>({});
+    const watchMetaRef = useRef<Record<string, SymbolKind>>({});
+    const [watchlistGroup, setWatchlistGroup] = useState<WatchlistGroup>("owned");
+    const [watchSort, setWatchSort] = useState<"custom" | "price" | "name">("custom");
+
+    useEffect(() => {
+        if (!watch.length) {
+            setWatchSnapshots({});
+            watchMetaRef.current = {};
+            return;
+        }
+        let cancelled = false;
+        const effectivePeriod = period === "max" ? 365 : period;
+        const startISO = computeStartISOForPeriod(effectivePeriod);
+        (async () => {
+            const results = await Promise.all(
+                watch.map(async (sym) => {
+                    const normalized = sym.trim().toUpperCase();
+                    if (!normalized) {
+                        return { symbol: sym, snapshot: null as WatchSnapshot | null };
+                    }
+                    try {
+                        const { rows: seriesRows, kind } = await fetchInstrumentSeries(
+                            normalized,
+                            watchMetaRef.current[normalized],
+                            startISO
+                        );
+                        if (!seriesRows.length) {
+                            return {
+                                symbol: normalized,
+                                snapshot: {
+                                    latestPrice: null,
+                                    change: null,
+                                    changePct: null,
+                                    kind,
+                                } as WatchSnapshot,
+                            };
+                        }
+                        const first = seriesRows[0];
+                        const last = seriesRows[seriesRows.length - 1];
+                        const change = last.close - first.close;
+                        const changePct =
+                            first.close !== 0 ? (change / first.close) * 100 : null;
+                        return {
+                            symbol: normalized,
+                            snapshot: {
+                                latestPrice: last.close ?? null,
+                                change,
+                                changePct,
+                                kind,
+                            } as WatchSnapshot,
+                        };
+                    } catch {
+                        return { symbol: normalized, snapshot: null };
+                    }
+                })
+            );
+            if (cancelled) return;
+            const latest = new Map(results.map((entry) => [entry.symbol, entry.snapshot]));
+            setWatchSnapshots((prev) => {
+                const next: Record<string, WatchSnapshot> = {};
+                watch.forEach((sym) => {
+                    const normalized = sym.trim().toUpperCase();
+                    if (!normalized) return;
+                    const snapshot = latest.get(normalized);
+                    if (snapshot) {
+                        next[normalized] = snapshot;
+                    } else if (prev[normalized]) {
+                        next[normalized] = prev[normalized];
+                    }
+                });
+                return next;
+            });
+            const nextMeta: Record<string, SymbolKind> = { ...watchMetaRef.current };
+            results.forEach((entry) => {
+                if (entry.snapshot) {
+                    nextMeta[entry.symbol] = entry.snapshot.kind;
+                }
+            });
+            Object.keys(nextMeta).forEach((key) => {
+                if (!watch.includes(key)) {
+                    delete nextMeta[key];
+                }
+            });
+            watchMetaRef.current = nextMeta;
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [watch, period]);
+
+    const visibleWatchItems = useMemo(() => {
+        if (!watch.length) {
+            return [];
+        }
+        if (watchSort === "custom") {
+            return [...watch];
+        }
+        const ordered = [...watch];
+        if (watchSort === "price") {
+            const toNumber = (value: number | null | undefined) =>
+                typeof value === "number" && Number.isFinite(value)
+                    ? value
+                    : Number.NEGATIVE_INFINITY;
+            ordered.sort((a, b) => {
+                const bPrice = toNumber(watchSnapshots[b]?.latestPrice);
+                const aPrice = toNumber(watchSnapshots[a]?.latestPrice);
+                return bPrice - aPrice;
+            });
+        } else if (watchSort === "name") {
+            ordered.sort((a, b) => {
+                const aLabel = (symbolDisplayNames[a] ?? a).toUpperCase();
+                const bLabel = (symbolDisplayNames[b] ?? b).toUpperCase();
+                return aLabel.localeCompare(bLabel, "pl-PL");
+            });
+        }
+        return ordered;
+    }, [watch, watchSort, watchSnapshots, symbolDisplayNames]);
+
+    const watchlistSegments = useMemo(
+        () => [
+            { value: "owned" as WatchlistGroup, label: "Posiadanie", count: watch.length },
+            { value: "wishlist" as WatchlistGroup, label: "Do kupienia", count: 0 },
+            {
+                value: "index" as WatchlistGroup,
+                label: "WIG",
+                count: watch.filter((sym) => sym.toUpperCase().includes("WIG")).length,
+            },
+        ],
+        [watch]
+    );
+
+    const activeWatchSegment = useMemo(
+        () => watchlistSegments.find((segment) => segment.value === watchlistGroup),
+        [watchlistSegments, watchlistGroup]
+    );
+
+    const watchSortLabel = useMemo(() => {
+        if (watchSort === "price") {
+            return "ceny";
+        }
+        if (watchSort === "name") {
+            return "nazwy";
+        }
+        return "kolejności własnej";
+    }, [watchSort]);
+
+    const handleCycleWatchSort = useCallback(() => {
+        setWatchSort((prev) => (prev === "custom" ? "price" : prev === "price" ? "name" : "custom"));
+    }, []);
 
     const [rows, setRows] = useState<Row[]>([]);
     const [allRows, setAllRows] = useState<Row[]>([]);
@@ -13546,7 +13797,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                 />
             </aside>
             <div className="flex min-h-screen flex-1 flex-col">
-                <header className="sticky top-0 z-30 border-b border-slate-200/70 bg-[#f5f7fa]/95 text-slate-700 shadow-sm backdrop-blur lg:hidden">
+                <header className="sticky top-0 z-30 border-b border-slate-200/80 bg-white/90 text-slate-700 shadow-[0_12px_30px_rgba(15,23,42,0.08)] backdrop-blur lg:hidden">
                     <div className="mx-auto w-full max-w-6xl px-4 py-2 md:px-8 md:py-3.5">
                         <div className="mb-1.5 flex items-center justify-between lg:mb-0">
                             <div className="flex items-center gap-2">
@@ -13830,19 +14081,78 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                     >
                         <div className="space-y-10">
                             <Card>
-                                <div className="space-y-4">
-                                    <h3 className="text-lg font-semibold text-primary">
-                                        Monitoruj swoje spółki
-                                    </h3>
-                                    <p className="text-sm text-muted">
-                                        Kliknij na symbol, aby przełączyć moduły analizy poniżej. Usuń zbędne pozycje przyciskiem ×.
-                                    </p>
+                                <div className="space-y-6">
+                                    <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+                                        <div className="space-y-3">
+                                            <span className="inline-flex items-center rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.28em] text-blue-600">
+                                                Listy obserwacyjne
+                                            </span>
+                                            <div className="space-y-2">
+                                                <h3 className="text-2xl font-semibold text-slate-900">
+                                                    Twoje spółki i indeksy
+                                                </h3>
+                                                <p className="max-w-xl text-sm text-slate-500">
+                                                    Masz {watch.length} instrument{watch.length === 1 ? "" : watch.length % 10 >= 2 && watch.length % 10 <= 4 && (watch.length % 100 < 10 || watch.length % 100 >= 20) ? "y" : "ów"} na bieżącej liście. Kliknij na pozycję, aby przełączyć moduły analizy poniżej.
+                                                </p>
+                                            </div>
+                                        </div>
+                                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
+                                            <div className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 p-1 shadow-inner">
+                                                {watchlistSegments.map((segment) => (
+                                                    <button
+                                                        key={segment.value}
+                                                        type="button"
+                                                        onClick={() => setWatchlistGroup(segment.value)}
+                                                        className={`flex items-center gap-1 rounded-full px-4 py-2 text-xs font-semibold transition ${
+                                                            watchlistGroup === segment.value
+                                                                ? "bg-white text-slate-900 shadow"
+                                                                : "text-slate-500 hover:text-slate-700"
+                                                        }`}
+                                                    >
+                                                        {segment.label}
+                                                        <span className="text-[11px] font-medium text-slate-400">
+                                                            {segment.count}
+                                                        </span>
+                                                    </button>
+                                                ))}
+                                            </div>
+                                            <button
+                                                type="button"
+                                                className="inline-flex items-center gap-2 rounded-full bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-[0_15px_30px_rgba(37,99,235,0.35)] transition hover:bg-blue-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/60 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
+                                            >
+                                                <span className="text-lg leading-none">+</span>
+                                                Nowa lista obserwacyjna
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                                        <p className="text-sm text-slate-500">
+                                            {activeWatchSegment ? `Wyświetlasz listę: ${activeWatchSegment.label}.` : "Wybierz listę, aby zmienić kontekst obserwacji."}
+                                        </p>
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={handleCycleWatchSort}
+                                                className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 transition hover:border-blue-300 hover:text-blue-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/50 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
+                                            >
+                                                Sortuj według {watchSortLabel}
+                                            </button>
+                                            <button
+                                                type="button"
+                                                className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 transition hover:border-blue-300 hover:text-blue-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/50 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
+                                            >
+                                                Wyświetl jako portfel
+                                            </button>
+                                        </div>
+                                    </div>
                                     <Watchlist
-                                        items={watch}
+                                        items={visibleWatchItems}
                                         current={symbol}
                                         onPick={(sym) => setSymbol(sym)}
                                         onRemove={removeFromWatch}
                                         displayNames={symbolDisplayNames}
+                                        snapshots={watchSnapshots}
+                                        group={watchlistGroup}
                                     />
                                 </div>
                             </Card>

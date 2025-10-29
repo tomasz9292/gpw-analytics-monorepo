@@ -1,25 +1,25 @@
 @import "tailwindcss";
 
 :root {
-  --background: #F5F7FA;
-  --foreground: #2C3E50;
-  --color-primary: #0A2342;
-  --color-accent: #2ECC71;
-  --color-negative: #E74C3C;
-  --color-neutral-bg: #F5F7FA;
-  --color-surface: #FFFFFF;
-  --color-soft-surface: #EEF3F7;
-  --color-border: #BDC3C7;
-  --color-neutral-text: #2C3E50;
-  --color-muted: #5D6D7E;
-  --color-subtle: #95A5A6;
-  --color-tech: #3498DB;
-  --color-primary-strong: #06152A;
-  --color-primary-soft: #123A63;
-  --color-accent-strong: #28B463;
-  --color-accent-deep: #1E8449;
-  --shadow-brand-elevated: 0 20px 45px rgba(10, 35, 66, 0.35);
-  --shadow-brand-floating: 0 8px 20px rgba(10, 35, 66, 0.4);
+  --background: #f4f6fb;
+  --foreground: #0f172a;
+  --color-primary: #2563eb;
+  --color-accent: #16a34a;
+  --color-negative: #ef4444;
+  --color-neutral-bg: #f4f6fb;
+  --color-surface: #ffffff;
+  --color-soft-surface: #eef2ff;
+  --color-border: #d4d8e3;
+  --color-neutral-text: #0f172a;
+  --color-muted: #475569;
+  --color-subtle: #94a3b8;
+  --color-tech: #1d4ed8;
+  --color-primary-strong: #0b1641;
+  --color-primary-soft: #1e3a8a;
+  --color-accent-strong: #15803d;
+  --color-accent-deep: #166534;
+  --shadow-brand-elevated: 0 30px 60px rgba(15, 23, 42, 0.18);
+  --shadow-brand-floating: 0 12px 40px rgba(37, 99, 235, 0.15);
   --font-geist-sans: "Inter", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont,
     "Helvetica Neue", Arial, sans-serif;
   --font-geist-mono: "IBM Plex Mono", "SFMono-Regular", "Menlo", Monaco, Consolas,
