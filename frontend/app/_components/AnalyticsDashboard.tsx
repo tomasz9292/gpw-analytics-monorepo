@@ -378,7 +378,22 @@ type ScoreMetricOption = {
         | "price_change"
         | "rsi"
         | "distance_from_high"
-        | "distance_from_low";
+        | "distance_from_low"
+        | "sma"
+        | "ema"
+        | "macd"
+        | "macd_signal"
+        | "macd_histogram"
+        | "stochastic"
+        | "stochastic_k"
+        | "stochastic_d"
+        | "obv"
+        | "mfi"
+        | "roc"
+        | "bollinger_upper"
+        | "bollinger_lower"
+        | "bollinger_bandwidth"
+        | "bollinger_percent_b";
     lookback: number;
     defaultDirection: "asc" | "desc";
     description?: string;
@@ -497,6 +512,212 @@ const SCORE_METRIC_OPTIONS: ScoreMetricOption[] = [
                 { label: "63 dni", value: 63 },
             ],
             formatLabel: (lookbackDays) => `RSI (${lookbackDays} dni)`,
+        },
+    },
+    {
+        value: "sma_custom",
+        label: "SMA (średnia krocząca)",
+        backendMetric: "sma",
+        lookback: 50,
+        defaultDirection: "desc",
+        description:
+            "Prosta średnia krocząca liczona na podstawie kursów zamknięcia.",
+        customLookback: {
+            min: 5,
+            max: 365,
+            step: 1,
+            default: 50,
+            presets: [
+                { label: "20 dni", value: 20 },
+                { label: "50 dni", value: 50 },
+                { label: "100 dni", value: 100 },
+                { label: "200 dni", value: 200 },
+            ],
+            formatLabel: (lookbackDays) => `SMA (${lookbackDays} dni)`,
+        },
+    },
+    {
+        value: "ema_custom",
+        label: "EMA (średnia wykładnicza)",
+        backendMetric: "ema",
+        lookback: 21,
+        defaultDirection: "desc",
+        description:
+            "Wykładnicza średnia krocząca z silniejszą wagą ostatnich notowań.",
+        customLookback: {
+            min: 5,
+            max: 365,
+            step: 1,
+            default: 21,
+            presets: [
+                { label: "12 dni", value: 12 },
+                { label: "21 dni", value: 21 },
+                { label: "50 dni", value: 50 },
+                { label: "100 dni", value: 100 },
+            ],
+            formatLabel: (lookbackDays) => `EMA (${lookbackDays} dni)`,
+        },
+    },
+    {
+        value: "macd_default",
+        label: "MACD (12/26/9)",
+        backendMetric: "macd",
+        lookback: 26,
+        defaultDirection: "desc",
+        description: "Linia MACD z klasycznymi parametrami 12/26/9.",
+    },
+    {
+        value: "macd_signal",
+        label: "MACD – linia sygnału",
+        backendMetric: "macd_signal",
+        lookback: 26,
+        defaultDirection: "desc",
+        description: "9-okresowa średnia linii MACD używana do generowania sygnałów.",
+    },
+    {
+        value: "macd_histogram",
+        label: "MACD – histogram",
+        backendMetric: "macd_histogram",
+        lookback: 26,
+        defaultDirection: "desc",
+        description: "Różnica między linią MACD a linią sygnału (impet trendu).",
+    },
+    {
+        value: "stochastic_custom",
+        label: "Stochastic %K",
+        backendMetric: "stochastic",
+        lookback: 14,
+        defaultDirection: "asc",
+        description:
+            "Oscylator stochastyczny (%K) wskazujący położenie ceny w zakresie z wybranego okresu.",
+        customLookback: {
+            min: 5,
+            max: 365,
+            step: 1,
+            default: 14,
+            presets: [
+                { label: "9 dni", value: 9 },
+                { label: "14 dni", value: 14 },
+                { label: "21 dni", value: 21 },
+                { label: "63 dni", value: 63 },
+            ],
+            formatLabel: (lookbackDays) => `Stochastic %K (${lookbackDays} dni)`,
+        },
+    },
+    {
+        value: "stochastic_d_custom",
+        label: "Stochastic %D",
+        backendMetric: "stochastic_d",
+        lookback: 14,
+        defaultDirection: "asc",
+        description:
+            "Wygładzona linia %D oscylatora stochastycznego (średnia z wartości %K).",
+        customLookback: {
+            min: 5,
+            max: 365,
+            step: 1,
+            default: 14,
+            presets: [
+                { label: "9 dni", value: 9 },
+                { label: "14 dni", value: 14 },
+                { label: "21 dni", value: 21 },
+                { label: "63 dni", value: 63 },
+            ],
+            formatLabel: (lookbackDays) => `Stochastic %D (${lookbackDays} dni)`,
+        },
+    },
+    {
+        value: "obv_default",
+        label: "On-Balance Volume (OBV)",
+        backendMetric: "obv",
+        lookback: 63,
+        defaultDirection: "desc",
+        description:
+            "Skumulowany wolumen ważony kierunkiem zmiany ceny (akumulacja vs dystrybucja).",
+    },
+    {
+        value: "mfi_custom",
+        label: "Money Flow Index (MFI)",
+        backendMetric: "mfi",
+        lookback: 14,
+        defaultDirection: "asc",
+        description:
+            "Oscylator MFI łączący cenę i wolumen w celu identyfikacji napływów kapitału.",
+        customLookback: {
+            min: 5,
+            max: 365,
+            step: 1,
+            default: 14,
+            presets: [
+                { label: "7 dni", value: 7 },
+                { label: "14 dni", value: 14 },
+                { label: "21 dni", value: 21 },
+                { label: "63 dni", value: 63 },
+            ],
+            formatLabel: (lookbackDays) => `MFI (${lookbackDays} dni)`,
+        },
+    },
+    {
+        value: "roc_custom",
+        label: "Momentum ROC",
+        backendMetric: "roc",
+        lookback: 63,
+        defaultDirection: "desc",
+        description: "Rate of Change – procentowa zmiana ceny w wybranym horyzoncie.",
+        customLookback: {
+            min: 5,
+            max: 365,
+            step: 1,
+            default: 63,
+            presets: [
+                { label: "21 dni", value: 21 },
+                { label: "63 dni", value: 63 },
+                { label: "126 dni", value: 126 },
+                { label: "252 dni", value: 252 },
+            ],
+            formatLabel: (lookbackDays) => `ROC (${lookbackDays} dni)`,
+        },
+    },
+    {
+        value: "bollinger_bandwidth_custom",
+        label: "Szerokość wstęg Bollingera",
+        backendMetric: "bollinger_bandwidth",
+        lookback: 20,
+        defaultDirection: "asc",
+        description:
+            "Odległość między górną a dolną wstęgą Bollingera względem średniej (niżej = węższe wstęgi).",
+        customLookback: {
+            min: 5,
+            max: 365,
+            step: 1,
+            default: 20,
+            presets: [
+                { label: "10 dni", value: 10 },
+                { label: "20 dni", value: 20 },
+                { label: "50 dni", value: 50 },
+            ],
+            formatLabel: (lookbackDays) => `Szerokość Bollinger (${lookbackDays} dni)`,
+        },
+    },
+    {
+        value: "bollinger_percent_b_custom",
+        label: "Pozycja względem wstęg Bollingera (%B)",
+        backendMetric: "bollinger_percent_b",
+        lookback: 20,
+        defaultDirection: "desc",
+        description:
+            "Położenie ceny względem wstęg Bollingera (0 = dolna, 1 = górna).",
+        customLookback: {
+            min: 5,
+            max: 365,
+            step: 1,
+            default: 20,
+            presets: [
+                { label: "10 dni", value: 10 },
+                { label: "20 dni", value: 20 },
+                { label: "50 dni", value: 50 },
+            ],
+            formatLabel: (lookbackDays) => `%B Bollinger (${lookbackDays} dni)`,
         },
     },
 ];
