@@ -10722,119 +10722,133 @@ function MetricRulePreview({
                                     </div>
                                 </div>
                             </div>
-                            <div className="relative h-64">
-                                {chartData.length ? (
-                                    <ResponsiveContainer width="100%" height="100%">
-                                        <AreaChart
-                                            data={chartData}
-                                            margin={{ top: 10, right: 16, left: 0, bottom: 0 }}
-                                        >
-                                            <defs>
-                                                <linearGradient id={chartGradientId} x1="0" y1="0" x2="0" y2="1">
-                                                    <stop offset="0%" stopColor={chartPrimaryColor} stopOpacity={0.35} />
-                                                    <stop offset="95%" stopColor={chartPrimaryColor} stopOpacity={0} />
-                                                </linearGradient>
-                                            </defs>
-                                            <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" vertical={false} />
-                                            <XAxis
-                                                dataKey="date"
-                                                tick={{ fontSize: 11 }}
-                                                tickMargin={10}
-                                                axisLine={false}
-                                                tickLine={false}
-                                                minTickGap={24}
-                                                tickFormatter={axisTickFormatter}
-                                            />
-                                            <YAxis
-                                                width={70}
-                                                tick={{ fontSize: 11 }}
-                                                axisLine={false}
-                                                tickLine={false}
-                                                tickFormatter={(value) => priceFormatter.format(value)}
-                                                domain={["auto", "auto"]}
-                                            />
-                                            <Tooltip<number, string>
-                                                cursor={{ stroke: chartStrokeColor, strokeOpacity: 0.2, strokeWidth: 1 }}
-                                                content={(tooltipProps) => (
-                                                    <ChartTooltipContent
-                                                        {...tooltipProps}
-                                                        priceFormatter={priceFormatter}
-                                                        percentFormatter={percentFormatter}
-                                                        dateFormatter={tooltipDateFormatter}
-                                                        showSMA={false}
-                                                    />
-                                                )}
-                                                wrapperStyle={{ outline: "none" }}
-                                                position={{ y: 24 }}
-                                            />
-                                            <Area
-                                                type="monotone"
-                                                dataKey="close"
-                                                stroke={chartStrokeColor}
-                                                strokeWidth={2}
-                                                fill={`url(#${chartGradientId})`}
-                                                fillOpacity={1}
-                                                isAnimationActive={false}
-                                            />
-                                        </AreaChart>
-                                    </ResponsiveContainer>
-                                ) : !chartLoading ? (
-                                    <div className="flex h-full items-center justify-center text-xs text-subtle">
-                                        Brak danych cenowych dla wybranego zakresu.
-                                    </div>
-                                ) : null}
-                                {chartLoading ? (
-                                    <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-white/80 text-xs text-subtle backdrop-blur-sm">
-                                        Ładowanie wykresu…
-                                    </div>
-                                ) : null}
-                            </div>
-                            {sliderAvailable ? (
+                            <div className="space-y-6">
                                 <div className="space-y-2">
-                                    <div className="h-24 rounded-lg border border-soft bg-surface px-2 py-2">
+                                    <div className="relative h-64 rounded-2xl border border-soft bg-surface px-3 py-4">
+                                        {sliderAvailable ? (
+                                            <ResponsiveContainer width="100%" height="100%">
+                                                <AreaChart
+                                                    data={brushData}
+                                                    margin={{ top: 8, right: 16, left: 0, bottom: 48 }}
+                                                >
+                                                    <XAxis
+                                                        dataKey="date"
+                                                        tickFormatter={brushTickFormatter}
+                                                        tick={{ fontSize: 10, fill: "#64748B" }}
+                                                        tickMargin={12}
+                                                        axisLine={false}
+                                                        tickLine={false}
+                                                        minTickGap={32}
+                                                    />
+                                                    <YAxis hide domain={["auto", "auto"]} />
+                                                    <Area
+                                                        type="monotone"
+                                                        dataKey="close"
+                                                        stroke={chartStrokeColor}
+                                                        fill={chartPrimaryColor}
+                                                        fillOpacity={0.15}
+                                                        isAnimationActive={false}
+                                                        dot={false}
+                                                    />
+                                                    <Brush
+                                                        dataKey="date"
+                                                        height={48}
+                                                        travellerWidth={10}
+                                                        stroke="#2563EB"
+                                                        fill="#E2E8F0"
+                                                        startIndex={windowRange?.startIndex}
+                                                        endIndex={windowRange?.endIndex}
+                                                        onChange={handleBrushSelectionChange}
+                                                        onDragEnd={handleBrushSelectionChange}
+                                                    />
+                                                </AreaChart>
+                                            </ResponsiveContainer>
+                                        ) : !chartLoading ? (
+                                            <div className="flex h-full items-center justify-center text-xs text-subtle">
+                                                Brak danych historycznych.
+                                            </div>
+                                        ) : null}
+                                        {chartLoading ? (
+                                            <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-white/80 text-xs text-subtle backdrop-blur-sm">
+                                                Ładowanie wykresu…
+                                            </div>
+                                        ) : null}
+                                    </div>
+                                    {sliderAvailable ? (
+                                        <div className="flex justify-between text-xs text-muted">
+                                            <span>{windowStartDate ?? "—"}</span>
+                                            <span>{windowEndDate ?? "—"}</span>
+                                        </div>
+                                    ) : null}
+                                </div>
+                                <div className="relative h-64">
+                                    {chartData.length ? (
                                         <ResponsiveContainer width="100%" height="100%">
                                             <AreaChart
-                                                data={brushData}
-                                                margin={{ top: 4, right: 16, left: 0, bottom: 0 }}
+                                                data={chartData}
+                                                margin={{ top: 10, right: 16, left: 0, bottom: 0 }}
                                             >
+                                                <defs>
+                                                    <linearGradient id={chartGradientId} x1="0" y1="0" x2="0" y2="1">
+                                                        <stop offset="0%" stopColor={chartPrimaryColor} stopOpacity={0.35} />
+                                                        <stop offset="95%" stopColor={chartPrimaryColor} stopOpacity={0} />
+                                                    </linearGradient>
+                                                </defs>
+                                                <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" vertical={false} />
                                                 <XAxis
                                                     dataKey="date"
-                                                    tickFormatter={brushTickFormatter}
-                                                    tick={{ fontSize: 10, fill: "#64748B" }}
+                                                    tick={{ fontSize: 11 }}
+                                                    tickMargin={10}
                                                     axisLine={false}
                                                     tickLine={false}
-                                                    minTickGap={32}
+                                                    minTickGap={24}
+                                                    tickFormatter={axisTickFormatter}
                                                 />
-                                                <YAxis hide domain={["auto", "auto"]} />
+                                                <YAxis
+                                                    width={70}
+                                                    tick={{ fontSize: 11 }}
+                                                    axisLine={false}
+                                                    tickLine={false}
+                                                    tickFormatter={(value) => priceFormatter.format(value)}
+                                                    domain={["auto", "auto"]}
+                                                />
+                                                <Tooltip<number, string>
+                                                    cursor={{ stroke: chartStrokeColor, strokeOpacity: 0.2, strokeWidth: 1 }}
+                                                    content={(tooltipProps) => (
+                                                        <ChartTooltipContent
+                                                            {...tooltipProps}
+                                                            priceFormatter={priceFormatter}
+                                                            percentFormatter={percentFormatter}
+                                                            dateFormatter={tooltipDateFormatter}
+                                                            showSMA={false}
+                                                        />
+                                                    )}
+                                                    wrapperStyle={{ outline: "none" }}
+                                                    position={{ y: 24 }}
+                                                />
                                                 <Area
                                                     type="monotone"
                                                     dataKey="close"
                                                     stroke={chartStrokeColor}
-                                                    fill={chartPrimaryColor}
-                                                    fillOpacity={0.15}
+                                                    strokeWidth={2}
+                                                    fill={`url(#${chartGradientId})`}
+                                                    fillOpacity={1}
                                                     isAnimationActive={false}
-                                                    dot={false}
-                                                />
-                                                <Brush
-                                                    dataKey="date"
-                                                    height={22}
-                                                    travellerWidth={10}
-                                                    stroke="#2563EB"
-                                                    fill="#E2E8F0"
-                                                    startIndex={windowRange?.startIndex}
-                                                    endIndex={windowRange?.endIndex}
-                                                    onChange={handleBrushSelectionChange}
-                                                    onDragEnd={handleBrushSelectionChange}
                                                 />
                                             </AreaChart>
                                         </ResponsiveContainer>
-                                    </div>
-                                    <div className="flex justify-between text-xs text-muted">
-                                        <span>{windowStartDate ?? "—"}</span>
-                                        <span>{windowEndDate ?? "—"}</span>
-                                    </div>
+                                    ) : !chartLoading ? (
+                                        <div className="flex h-full items-center justify-center text-xs text-subtle">
+                                            Brak danych cenowych dla wybranego zakresu.
+                                        </div>
+                                    ) : null}
+                                    {chartLoading ? (
+                                        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-white/80 text-xs text-subtle backdrop-blur-sm">
+                                            Ładowanie wykresu…
+                                        </div>
+                                    ) : null}
                                 </div>
-                            ) : null}
+                            </div>
                             {chartError ? (
                                 <div className="rounded-xl border border-negative bg-negative/5 px-3 py-2 text-xs text-negative">
                                     {chartError}
