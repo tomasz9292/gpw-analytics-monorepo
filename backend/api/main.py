@@ -10,6 +10,7 @@ import statistics
 import textwrap
 import unicodedata
 import zipfile
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from math import isfinite, sqrt
 from typing import (
@@ -254,7 +255,32 @@ ALLOWED_SCORE_METRICS = {
     "rsi",
     "distance_from_high",
     "distance_from_low",
+    "sma",
+    "ema",
+    "macd",
+    "macd_signal",
+    "macd_histogram",
+    "stochastic",
+    "stochastic_k",
+    "stochastic_d",
+    "obv",
+    "mfi",
+    "roc",
+    "bollinger_upper",
+    "bollinger_lower",
+    "bollinger_bandwidth",
+    "bollinger_percent_b",
 }
+
+
+@dataclass
+class OhlcvPoint:
+    date: date
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: Optional[float] = None
 
 
 SHAREHOLDER_KEYWORDS = [
@@ -4098,27 +4124,46 @@ def _fetch_close_series(
     return [(str(d), float(c)) for (d, c) in rows]
 
 
-def _fetch_close_history(ch_client, raw_symbol: str) -> List[Tuple[str, float]]:
+def _fetch_ohlcv_history(ch_client, raw_symbol: str) -> List[Tuple[str, float, float, float, float, Optional[float]]]:
     rows = ch_client.query(
         f"""
-        SELECT toString(date) AS date, close
+        SELECT toString(date) AS date, open, high, low, close, volume
         FROM {TABLE_OHLC}
         WHERE symbol = %(sym)s
         ORDER BY date
         """,
         parameters={"sym": raw_symbol},
     ).result_rows
-    return [(str(d), float(c)) for (d, c) in rows]
+    prepared: List[Tuple[str, float, float, float, float, Optional[float]]] = []
+    for row in rows:
+        if len(row) < 5:
+            continue
+        date_raw, open_raw, high_raw, low_raw, close_raw = row[:5]
+        volume_raw = row[5] if len(row) > 5 else None
+        try:
+            prepared.append(
+                (
+                    str(date_raw),
+                    float(open_raw),
+                    float(high_raw),
+                    float(low_raw),
+                    float(close_raw),
+                    float(volume_raw) if volume_raw is not None else None,
+                )
+            )
+        except (TypeError, ValueError):
+            continue
+    return prepared
 
 
-def _collect_close_history_bulk(
+def _collect_ohlcv_history_bulk(
     ch_client,
     symbols: Sequence[str],
     components: Sequence[ScoreComponent],
     *,
     as_of: Optional[date] = None,
-) -> Dict[str, List[Tuple[str, float]]]:
-    """Fetches close history for a batch of symbols using a single ClickHouse query."""
+) -> Dict[str, List[Tuple[str, float, float, float, float, Optional[float]]]]:
+    """Fetches OHLCV history for a batch of symbols using a single ClickHouse query."""
 
     unique_symbols = []
     seen = set()
@@ -4149,7 +4194,7 @@ def _collect_close_history_bulk(
             WHERE symbol IN %(symbols)s{date_filter}
             GROUP BY symbol
         )
-        SELECT o.symbol, toString(o.date) AS date, o.close
+        SELECT o.symbol, toString(o.date) AS date, o.open, o.high, o.low, o.close, o.volume
         FROM {TABLE_OHLC} AS o
         INNER JOIN latest AS l ON o.symbol = l.symbol
         WHERE o.symbol IN %(symbols)s
@@ -4160,9 +4205,26 @@ def _collect_close_history_bulk(
         parameters=params,
     ).result_rows
 
-    history: Dict[str, List[Tuple[str, float]]] = {sym: [] for sym in unique_symbols}
-    for raw_symbol, raw_date, close in rows:
-        history.setdefault(str(raw_symbol), []).append((str(raw_date), float(close)))
+    history: Dict[str, List[Tuple[str, float, float, float, float, Optional[float]]]] = {
+        sym: [] for sym in unique_symbols
+    }
+    for row in rows:
+        if len(row) < 6:
+            continue
+        raw_symbol, raw_date, raw_open, raw_high, raw_low, raw_close = row[:6]
+        raw_volume = row[6] if len(row) > 6 else None
+        try:
+            entry = (
+                str(raw_date),
+                float(raw_open),
+                float(raw_high),
+                float(raw_low),
+                float(raw_close),
+                float(raw_volume) if raw_volume is not None else None,
+            )
+        except (TypeError, ValueError):
+            continue
+        history.setdefault(str(raw_symbol), []).append(entry)
 
     # Ensure all requested symbols are present in the mapping, even if no rows
     # were returned for them.
@@ -4188,69 +4250,120 @@ def _ensure_date(value: object) -> date:
 
 
 def _prepare_metric_series(
-    closes: List[Tuple[str, float]]
-) -> List[Tuple[date, float]]:
-    """Konwertuje listę (data, close) na format dogodny do obliczania metryk."""
+    rows: List[Tuple[str, float, float, float, float, Optional[float]]]
+) -> List[OhlcvPoint]:
+    """Konwertuje surowe rekordy OHLCV na strukturę dogodną do obliczania metryk."""
 
-    prepared: List[Tuple[date, float]] = []
+    prepared: List[OhlcvPoint] = []
     append = prepared.append
-    for raw_date, raw_close in closes:
-        try:
-            dt = _ensure_date(raw_date)
-        except ValueError:
+    for row in rows:
+        if not row:
             continue
         try:
-            close = float(raw_close)
+            raw_date = row[0]
+            dt = _ensure_date(raw_date)
+        except (ValueError, IndexError):
+            continue
+
+        close_raw = None
+        if len(row) >= 5:
+            close_raw = row[4]
+        elif len(row) >= 2:
+            close_raw = row[1]
+        try:
+            close_value = float(close_raw) if close_raw is not None else None
         except (TypeError, ValueError):
             continue
-        append((dt, close))
+        if close_value is None:
+            continue
+
+        try:
+            open_source = row[1] if len(row) > 1 else close_value
+            high_source = row[2] if len(row) > 2 else close_value
+            low_source = row[3] if len(row) > 3 else close_value
+            open_value = float(open_source)
+            high_value = float(high_source)
+            low_value = float(low_source)
+        except (TypeError, ValueError, IndexError):
+            continue
+
+        volume_value: Optional[float] = None
+        if len(row) > 5 and row[5] is not None:
+            try:
+                volume_value = float(row[5])
+            except (TypeError, ValueError):
+                volume_value = None
+
+        append(
+            OhlcvPoint(
+                date=dt,
+                open=open_value,
+                high=high_value,
+                low=low_value,
+                close=close_value,
+                volume=volume_value,
+            )
+        )
     return prepared
 
 
-def _slice_closes_window(
-    closes: Sequence[Tuple[date, float]], lookback_days: int
-) -> List[Tuple[date, float]]:
-    if not closes:
+def _slice_bars_window(
+    bars: Sequence[OhlcvPoint], lookback_days: int
+) -> List[OhlcvPoint]:
+    if not bars:
         return []
 
-    last_dt, _ = closes[-1]
+    last_dt = bars[-1].date
     min_dt = last_dt - timedelta(days=lookback_days)
 
-    window: List[Tuple[date, float]] = []
-    for dt, close in closes:
-        if dt < min_dt or close <= 0:
+    window: List[OhlcvPoint] = []
+    for bar in bars:
+        if bar.date < min_dt or bar.close <= 0:
             continue
-        window.append((dt, close))
+        window.append(bar)
 
     return window
 
 
+def _ema_series(values: Sequence[float], period: int) -> List[float]:
+    if period <= 0 or not values:
+        return []
+    alpha = 2.0 / (period + 1)
+    ema_values: List[float] = []
+    ema = float(values[0])
+    ema_values.append(ema)
+    for value in values[1:]:
+        ema = (float(value) - ema) * alpha + ema
+        ema_values.append(ema)
+    return ema_values
+
+
 def _compute_metric_value(
-    closes: Sequence[Tuple[date, float]], metric: str, lookback_days: int, *, diagnose: bool = False
+    bars: Sequence[OhlcvPoint], metric: str, lookback_days: int, *, diagnose: bool = False
 ) -> Optional[float]:
-    if not closes:
+    if not bars:
         if diagnose:
             raise ScoreComputationError(
                 "Brak danych notowań do obliczenia metryk score."
             )
         return None
 
+    last_bar = bars[-1]
+
     if metric in {"total_return", "price_change"}:
-        last_dt, last_close = closes[-1]
-        if last_close <= 0:
+        if last_bar.close <= 0:
             if diagnose:
                 raise ScoreComputationError(
                     "Ostatnia cena zamknięcia jest niepoprawna lub niedostępna."
                 )
             return None
-        target_dt = last_dt - timedelta(days=lookback_days)
-        base_close = None
-        for dt, close in reversed(closes):
-            if dt <= target_dt:
-                if close > 0:
-                    base_close = close
+        target_dt = last_bar.date - timedelta(days=lookback_days)
+        base_bar: Optional[OhlcvPoint] = None
+        for bar in reversed(bars):
+            if bar.date <= target_dt and bar.close > 0:
+                base_bar = bar
                 break
-        if base_close is None or base_close <= 0:
+        if base_bar is None or base_bar.close <= 0:
             if diagnose:
                 raise ScoreComputationError(
                     (
@@ -4259,12 +4372,12 @@ def _compute_metric_value(
                     ).format(days=lookback_days, metric=metric)
                 )
             return None
-        result = (last_close / base_close) - 1.0
+        result = (last_bar.close / base_bar.close) - 1.0
         if metric == "price_change":
             return result * 100.0
         return result
 
-    window = _slice_closes_window(closes, lookback_days)
+    window = _slice_bars_window(bars, lookback_days)
 
     if metric in {"distance_from_high", "distance_from_low"}:
         if not window:
@@ -4277,7 +4390,7 @@ def _compute_metric_value(
                 )
             return None
 
-        last_close = window[-1][1]
+        last_close = window[-1].close
         if last_close <= 0:
             if diagnose:
                 raise ScoreComputationError(
@@ -4285,7 +4398,7 @@ def _compute_metric_value(
                 )
             return None
 
-        prices = [price for _, price in window if price > 0]
+        prices = [bar.close for bar in window if bar.close > 0]
         if not prices:
             if diagnose:
                 raise ScoreComputationError(
@@ -4325,11 +4438,12 @@ def _compute_metric_value(
             )
         return None
 
+    closes = [bar.close for bar in window if bar.close > 0]
     returns: List[float] = []
-    for (_, prev_close), (_, next_close) in zip(window, window[1:]):
-        if prev_close <= 0:
+    for prev, current in zip(window, window[1:]):
+        if prev.close <= 0 or current.close <= 0:
             continue
-        returns.append(next_close / prev_close - 1.0)
+        returns.append(current.close / prev.close - 1.0)
 
     if metric == "rsi":
         if not returns:
@@ -4378,9 +4492,10 @@ def _compute_metric_value(
         return statistics.pstdev(returns)
 
     if metric == "max_drawdown":
-        peak = window[0][1]
+        peak = window[0].close
         max_dd = 0.0
-        for _, price in window:
+        for bar in window:
+            price = bar.close
             if price > peak:
                 peak = price
             drawdown = price / peak - 1.0
@@ -4404,6 +4519,178 @@ def _compute_metric_value(
                 )
             return None
         return (avg / stdev) * sqrt(252)
+
+    closes_for_average = closes[-max(1, min(len(closes), lookback_days)) :]
+
+    if metric == "sma":
+        if not closes_for_average:
+            if diagnose:
+                raise ScoreComputationError(
+                    "Za mało danych do obliczenia średniej kroczącej."
+                )
+            return None
+        return statistics.mean(closes_for_average)
+
+    if metric == "ema":
+        if len(closes_for_average) < 2:
+            if diagnose:
+                raise ScoreComputationError(
+                    "Za mało danych do obliczenia wykładniczej średniej kroczącej."
+                )
+            return None
+        period = len(closes_for_average)
+        ema_values = _ema_series(closes_for_average, period)
+        if not ema_values:
+            return None
+        return ema_values[-1]
+
+    if metric in {"macd", "macd_signal", "macd_histogram"}:
+        if len(closes) < 3:
+            if diagnose:
+                raise ScoreComputationError(
+                    "Za mało danych do obliczenia MACD."
+                )
+            return None
+        fast_period = min(12, len(closes))
+        slow_period = min(26, len(closes))
+        if slow_period <= fast_period:
+            slow_period = min(len(closes), fast_period + 1)
+        signal_period = min(9, len(closes))
+        fast_emas = _ema_series(closes, fast_period)
+        slow_emas = _ema_series(closes, slow_period)
+        if not fast_emas or not slow_emas:
+            return None
+        macd_series = [f - s for f, s in zip(fast_emas, slow_emas)]
+        if not macd_series:
+            return None
+        signal_series = _ema_series(macd_series, signal_period)
+        macd_value = macd_series[-1]
+        signal_value = signal_series[-1] if signal_series else macd_value
+        histogram_value = macd_value - signal_value
+        if metric == "macd_signal":
+            return signal_value
+        if metric == "macd_histogram":
+            return histogram_value
+        return macd_value
+
+    if metric in {"stochastic", "stochastic_k", "stochastic_d"}:
+        k_period = min(max(lookback_days, 3), len(window))
+        if k_period < 3:
+            if diagnose:
+                raise ScoreComputationError(
+                    "Za mało danych do obliczenia oscylatora stochastycznego."
+                )
+            return None
+        percent_k_values: List[float] = []
+        for idx in range(k_period - 1, len(window)):
+            subset = window[idx - k_period + 1 : idx + 1]
+            highest = max(bar.high for bar in subset)
+            lowest = min(bar.low for bar in subset)
+            current_close = subset[-1].close
+            if highest == lowest:
+                percent_k = 50.0
+            else:
+                percent_k = ((current_close - lowest) / (highest - lowest)) * 100.0
+            percent_k_values.append(percent_k)
+
+        if not percent_k_values:
+            if diagnose:
+                raise ScoreComputationError(
+                    "Za mało danych do obliczenia oscylatora stochastycznego."
+                )
+            return None
+
+        percent_k = percent_k_values[-1]
+        if metric == "stochastic_d":
+            d_period = min(3, len(percent_k_values))
+            return statistics.mean(percent_k_values[-d_period:])
+        return percent_k
+
+    if metric == "obv":
+        total = 0.0
+        prev_close = window[0].close
+        for bar in window[1:]:
+            volume = bar.volume or 0.0
+            if bar.close > prev_close:
+                total += volume
+            elif bar.close < prev_close:
+                total -= volume
+            prev_close = bar.close
+        return total
+
+    if metric == "mfi":
+        if len(window) < 2:
+            if diagnose:
+                raise ScoreComputationError(
+                    "Za mało danych do obliczenia MFI."
+                )
+            return None
+        positive_flow = 0.0
+        negative_flow = 0.0
+        prev_typical = (
+            window[0].high + window[0].low + window[0].close
+        ) / 3.0
+        for bar in window[1:]:
+            typical_price = (bar.high + bar.low + bar.close) / 3.0
+            volume = bar.volume or 0.0
+            money_flow = typical_price * volume
+            if typical_price > prev_typical:
+                positive_flow += money_flow
+            elif typical_price < prev_typical:
+                negative_flow += money_flow
+            prev_typical = typical_price
+        if negative_flow <= 1e-12:
+            if positive_flow <= 1e-12:
+                return 50.0
+            return 100.0
+        money_ratio = positive_flow / negative_flow
+        return 100.0 - (100.0 / (1.0 + money_ratio))
+
+    if metric == "roc":
+        if len(window) < 2:
+            if diagnose:
+                raise ScoreComputationError(
+                    "Za mało danych do obliczenia ROC."
+                )
+            return None
+        period = min(len(window) - 1, max(1, lookback_days))
+        reference_bar = window[-period - 1]
+        if reference_bar.close <= 0:
+            if diagnose:
+                raise ScoreComputationError("Cena odniesienia do ROC jest niepoprawna.")
+            return None
+        return ((window[-1].close / reference_bar.close) - 1.0) * 100.0
+
+    if metric in {
+        "bollinger_upper",
+        "bollinger_lower",
+        "bollinger_bandwidth",
+        "bollinger_percent_b",
+    }:
+        if len(closes) < 2:
+            if diagnose:
+                raise ScoreComputationError(
+                    "Za mało danych do obliczenia wstęg Bollingera."
+                )
+            return None
+        period = min(max(lookback_days, 2), len(closes))
+        sample = closes[-period:]
+        mean = statistics.mean(sample)
+        stdev = statistics.pstdev(sample) if period > 1 else 0.0
+        upper = mean + 2 * stdev
+        lower = mean - 2 * stdev
+        if metric == "bollinger_upper":
+            return upper
+        if metric == "bollinger_lower":
+            return lower
+        if metric == "bollinger_bandwidth":
+            if mean == 0:
+                return 0.0
+            return (upper - lower) / mean
+        if upper == lower:
+            return 0.5
+        last_close = closes[-1]
+        return (last_close - lower) / (upper - lower)
 
     if diagnose:
         raise ScoreComputationError(f"Metryka {metric} nie jest obsługiwana.")
@@ -4461,7 +4748,7 @@ def _normalize_component_score(value: float, component: ScoreComponent) -> float
 
 
 def _evaluate_components_for_prepared(
-    closes: Sequence[Tuple[date, float]],
+    closes: Sequence[OhlcvPoint],
     components: List[ScoreComponent],
     *,
     include_metrics: bool = False,
@@ -4475,7 +4762,7 @@ def _evaluate_components_for_prepared(
 
 
 def _evaluate_components_internal(
-    closes: Sequence[Tuple[date, float]],
+    closes: Sequence[OhlcvPoint],
     components: List[ScoreComponent],
     *,
     include_metrics: bool,
@@ -4521,7 +4808,7 @@ def _evaluate_components_internal(
 
 
 def _calculate_score_from_prepared(
-    closes: Sequence[Tuple[date, float]],
+    closes: Sequence[OhlcvPoint],
     components: List[ScoreComponent],
     include_metrics: bool = False,
 ) -> Optional[Tuple[float, Dict[str, float]] | float]:
@@ -4552,12 +4839,12 @@ def _calculate_symbol_score(
     components: List[ScoreComponent],
     include_metrics: bool = False,
     *,
-    preloaded_closes: Optional[List[Tuple[str, float]]] = None,
+    preloaded_closes: Optional[List[Tuple[str, float, float, float, float, Optional[float]]]] = None,
 ) -> Optional[Tuple[float, Dict[str, float]] | float]:
     if preloaded_closes is not None:
         closes_raw = preloaded_closes
     else:
-        closes_raw = _fetch_close_history(ch_client, raw_symbol)
+        closes_raw = _fetch_ohlcv_history(ch_client, raw_symbol)
     closes = _prepare_metric_series(closes_raw)
     if not closes:
         return None
@@ -5208,7 +5495,7 @@ def _rank_symbols_by_score(
     as_of: Optional[date] = None,
     collect_failures: bool = False,
 ) -> Union[RankedScoreList, Tuple[RankedScoreList, Dict[str, str]]]:
-    history_map = _collect_close_history_bulk(
+    history_map = _collect_ohlcv_history_bulk(
         ch_client, candidates, components, as_of=as_of
     )
     evaluated: Dict[str, Dict[str, object]] = {}
@@ -5868,7 +6155,7 @@ def _run_backtest(req: BacktestPortfolioRequest) -> PortfolioResp:
         buffer_days = max_lookback + 30
         fetch_start = dt_start - timedelta(days=buffer_days)
 
-        prepared_series: Dict[str, List[Tuple[date, float]]] = {}
+        prepared_series: Dict[str, List[OhlcvPoint]] = {}
         prepared_dates: Dict[str, List[date]] = {}
         closes_ordered: "OrderedDict[str, List[Tuple[str, float]]]" = OrderedDict()
 
@@ -5880,7 +6167,7 @@ def _run_backtest(req: BacktestPortfolioRequest) -> PortfolioResp:
             if not prepared:
                 continue
             prepared_series[sym] = prepared
-            prepared_dates[sym] = [dt for (dt, _) in prepared]
+            prepared_dates[sym] = [bar.date for bar in prepared]
 
             trimmed = [(d, c) for (d, c) in series_full if d >= dt_start.isoformat()]
             if trimmed:

@@ -3,7 +3,8 @@ from pathlib import Path
 import sys
 
 import pytest
-from typing import List
+import statistics
+from typing import List, Optional
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -70,10 +71,20 @@ class FakeClickHouse:
                 cutoff = last_date - timedelta(days=window)
                 for dt, close in parsed_history:
                     if dt >= cutoff:
-                        rows.append((sym, dt.isoformat(), close))
+                        rows.append(
+                            (
+                                sym,
+                                dt.isoformat(),
+                                float(close),
+                                float(close),
+                                float(close),
+                                float(close),
+                                0.0,
+                            )
+                        )
             return FakeResult(rows)
 
-        if "SELECT toString(date) as date, open, high, low, close, volume" in normalized_sql:
+        if "select tostring(date) as date, open, high, low, close, volume" in normalized_sql.lower():
             symbol = parameters.get("sym")
             start = parameters.get("dt")
             if isinstance(start, date):
@@ -121,6 +132,28 @@ class FakeClickHouse:
             return FakeResult(rows)
 
         raise AssertionError(f"Unexpected query: {sql}")
+
+
+def make_bar(
+    day: date,
+    close: float,
+    *,
+    open_: Optional[float] = None,
+    high: Optional[float] = None,
+    low: Optional[float] = None,
+    volume: float = 1_000.0,
+) -> main.OhlcvPoint:
+    open_value = open_ if open_ is not None else close
+    high_value = high if high is not None else max(open_value, close)
+    low_value = low if low is not None else min(open_value, close)
+    return main.OhlcvPoint(
+        date=day,
+        open=open_value,
+        high=high_value,
+        low=low_value,
+        close=close,
+        volume=volume,
+    )
 
 
 def test_rank_symbols_with_multiple_components():
@@ -690,50 +723,165 @@ def test_linear_clamped_scoring_equal_bounds_binary():
 
 
 def test_price_change_metric_returns_percent():
-    closes = [
-        (date(2023, 1, 1), 100.0),
-        (date(2023, 1, 5), 150.0),
+    bars = [
+        make_bar(date(2023, 1, 1), 100.0),
+        make_bar(date(2023, 1, 5), 150.0),
     ]
 
-    result = main._compute_metric_value(closes, "price_change", 4)
+    result = main._compute_metric_value(bars, "price_change", 4)
     assert result == pytest.approx(50.0)
 
 
 def test_distance_from_high_metric_uses_window_extreme():
-    closes = [
-        (date(2023, 1, 1), 100.0),
-        (date(2023, 1, 2), 120.0),
-        (date(2023, 1, 3), 110.0),
+    bars = [
+        make_bar(date(2023, 1, 1), 100.0),
+        make_bar(date(2023, 1, 2), 120.0),
+        make_bar(date(2023, 1, 3), 110.0),
     ]
 
-    result = main._compute_metric_value(closes, "distance_from_high", 3)
+    result = main._compute_metric_value(bars, "distance_from_high", 3)
     expected = (120.0 - 110.0) / 120.0
     assert result == pytest.approx(expected)
 
 
 def test_distance_from_low_metric_uses_window_extreme():
-    closes = [
-        (date(2023, 1, 1), 90.0),
-        (date(2023, 1, 2), 100.0),
-        (date(2023, 1, 3), 110.0),
+    bars = [
+        make_bar(date(2023, 1, 1), 90.0),
+        make_bar(date(2023, 1, 2), 100.0),
+        make_bar(date(2023, 1, 3), 110.0),
     ]
 
-    result = main._compute_metric_value(closes, "distance_from_low", 3)
+    result = main._compute_metric_value(bars, "distance_from_low", 3)
     expected = (110.0 - 90.0) / 90.0
     assert result == pytest.approx(expected)
 
 
 def test_rsi_metric_uses_average_gains_and_losses():
-    closes = [
-        (date(2023, 1, 1), 100.0),
-        (date(2023, 1, 2), 102.0),
-        (date(2023, 1, 3), 101.0),
-        (date(2023, 1, 4), 105.0),
-        (date(2023, 1, 5), 103.0),
+    bars = [
+        make_bar(date(2023, 1, 1), 100.0),
+        make_bar(date(2023, 1, 2), 102.0),
+        make_bar(date(2023, 1, 3), 101.0),
+        make_bar(date(2023, 1, 4), 105.0),
+        make_bar(date(2023, 1, 5), 103.0),
     ]
 
-    result = main._compute_metric_value(closes, "rsi", 4)
+    result = main._compute_metric_value(bars, "rsi", 4)
     assert result == pytest.approx(67.3829888632)
+
+
+def test_sma_metric_returns_mean():
+    bars = [
+        make_bar(date(2023, 1, 1), 10.0),
+        make_bar(date(2023, 1, 2), 11.0),
+        make_bar(date(2023, 1, 3), 12.0),
+    ]
+
+    result = main._compute_metric_value(bars, "sma", 3)
+    assert result == pytest.approx(11.0)
+
+
+def test_ema_metric_smooths_recent_prices():
+    bars = [
+        make_bar(date(2023, 1, 1), 100.0),
+        make_bar(date(2023, 1, 2), 110.0),
+        make_bar(date(2023, 1, 3), 120.0),
+    ]
+
+    result = main._compute_metric_value(bars, "ema", 3)
+    assert result == pytest.approx(112.5)
+
+
+def test_macd_metrics_are_consistent():
+    bars = [
+        make_bar(date(2023, 1, 1), 100.0),
+        make_bar(date(2023, 1, 2), 101.0),
+        make_bar(date(2023, 1, 3), 102.0),
+        make_bar(date(2023, 1, 4), 103.0),
+        make_bar(date(2023, 1, 5), 104.0),
+        make_bar(date(2023, 1, 6), 105.0),
+    ]
+
+    macd = main._compute_metric_value(bars, "macd", 6)
+    signal = main._compute_metric_value(bars, "macd_signal", 6)
+    hist = main._compute_metric_value(bars, "macd_histogram", 6)
+
+    assert macd is not None and signal is not None and hist is not None
+    assert hist == pytest.approx(macd - signal)
+
+
+def test_stochastic_metrics_use_highs_and_lows():
+    bars = [
+        make_bar(date(2023, 1, 1), 10.0, high=12.0, low=8.0),
+        make_bar(date(2023, 1, 2), 13.0, high=14.0, low=9.0),
+        make_bar(date(2023, 1, 3), 14.0, high=15.0, low=10.0),
+        make_bar(date(2023, 1, 4), 12.0, high=16.0, low=12.0),
+    ]
+
+    stochastic = main._compute_metric_value(bars, "stochastic", 3)
+    stochastic_d = main._compute_metric_value(bars, "stochastic_d", 3)
+
+    assert stochastic == pytest.approx((12.0 - 9.0) / (16.0 - 9.0) * 100.0)
+    assert stochastic_d == pytest.approx((
+        ((14.0 - 8.0) / (15.0 - 8.0) * 100.0)
+        + ((12.0 - 9.0) / (16.0 - 9.0) * 100.0)
+    ) / 2.0)
+
+
+def test_obv_accumulates_volume_on_trend():
+    bars = [
+        make_bar(date(2023, 1, 1), 10.0, volume=100.0),
+        make_bar(date(2023, 1, 2), 12.0, volume=200.0),
+        make_bar(date(2023, 1, 3), 11.0, volume=300.0),
+        make_bar(date(2023, 1, 4), 13.0, volume=400.0),
+    ]
+
+    result = main._compute_metric_value(bars, "obv", 4)
+    assert result == pytest.approx(200.0 - 300.0 + 400.0)
+
+
+def test_mfi_distinguishes_money_flows():
+    bars = [
+        make_bar(date(2023, 1, 1), 10.0, high=11.0, low=9.0, volume=100.0),
+        make_bar(date(2023, 1, 2), 12.0, high=13.0, low=11.0, volume=150.0),
+    ]
+
+    result = main._compute_metric_value(bars, "mfi", 2)
+    assert result == pytest.approx(100.0)
+
+
+def test_roc_uses_lookback_reference():
+    bars = [
+        make_bar(date(2023, 1, 1), 100.0),
+        make_bar(date(2023, 1, 2), 110.0),
+        make_bar(date(2023, 1, 3), 121.0),
+    ]
+
+    result = main._compute_metric_value(bars, "roc", 2)
+    assert result == pytest.approx(21.0)
+
+
+def test_bollinger_metrics_are_coherent():
+    bars = [
+        make_bar(date(2023, 1, 1), 10.0),
+        make_bar(date(2023, 1, 2), 11.0),
+        make_bar(date(2023, 1, 3), 12.0),
+        make_bar(date(2023, 1, 4), 13.0),
+    ]
+
+    upper = main._compute_metric_value(bars, "bollinger_upper", 4)
+    lower = main._compute_metric_value(bars, "bollinger_lower", 4)
+    bandwidth = main._compute_metric_value(bars, "bollinger_bandwidth", 4)
+    percent_b = main._compute_metric_value(bars, "bollinger_percent_b", 4)
+
+    mean = statistics.mean([10.0, 11.0, 12.0, 13.0])
+    stdev = statistics.pstdev([10.0, 11.0, 12.0, 13.0])
+    expected_upper = mean + 2 * stdev
+    expected_lower = mean - 2 * stdev
+
+    assert upper == pytest.approx(expected_upper)
+    assert lower == pytest.approx(expected_lower)
+    assert bandwidth == pytest.approx((expected_upper - expected_lower) / mean)
+    assert percent_b == pytest.approx((13.0 - expected_lower) / (expected_upper - expected_lower))
 
 
 def test_percentile_after_scale_changes_ranking():
