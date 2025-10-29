@@ -5,10 +5,6 @@ import { createPortal } from "react-dom";
 import Image from "next/image";
 import Link from "next/link";
 import Script from "next/script";
-import MiniScoreChart, {
-    type MetricScale as MiniMetricScale,
-    type Stock as MiniScoreStock,
-} from "@/components/MiniScoreChart";
 import { formatPct } from "@/lib/format";
 import {
     LineChart,
@@ -9869,6 +9865,7 @@ type MetricRulePreviewProps = {
     metricOption?: ScoreMetricOption;
     lookbackValue: number;
     asOf?: string | null;
+    onLookbackChange?: (value: number) => void;
 };
 
 const computePreviewStartISO = (period: number | "max"): string => {
@@ -9880,6 +9877,29 @@ const computePreviewStartISO = (period: number | "max"): string => {
 };
 
 type ChartWindowRange = { startIndex: number; endIndex: number };
+
+function InfoHint({ text }: { text: string }) {
+    const tooltipId = useId();
+    return (
+        <span className="group relative inline-flex">
+            <span
+                tabIndex={0}
+                aria-describedby={tooltipId}
+                aria-label={text}
+                className="inline-flex h-4 w-4 cursor-help items-center justify-center rounded-full border border-soft text-[10px] font-semibold text-muted transition group-hover:border-primary group-hover:text-primary group-focus-visible:border-primary group-focus-visible:text-primary"
+            >
+                i
+            </span>
+            <span
+                role="tooltip"
+                id={tooltipId}
+                className="pointer-events-none absolute left-1/2 top-full z-20 mt-2 hidden w-64 -translate-x-1/2 rounded-lg bg-neutral px-3 py-2 text-[11px] font-medium text-white opacity-0 shadow-lg transition group-hover:block group-hover:translate-y-1 group-hover:opacity-100 group-focus-visible:block group-focus-visible:translate-y-1 group-focus-visible:opacity-100"
+            >
+                {text}
+            </span>
+        </span>
+    );
+}
 
 const safeParseDate = (value: string | null | undefined): Date | null => {
     if (typeof value !== "string" || !value.trim()) {
@@ -9964,7 +9984,13 @@ const computeWindowDurationDays = (
     return diff < 0 ? 0 : Math.round(diff / DAY_MS);
 };
 
-function MetricRulePreview({ rule, metricOption, lookbackValue, asOf }: MetricRulePreviewProps) {
+function MetricRulePreview({
+    rule,
+    metricOption,
+    lookbackValue,
+    asOf,
+    onLookbackChange,
+}: MetricRulePreviewProps) {
     const chartGradientId = useId();
     const [selectedSymbol, setSelectedSymbol] = useState<string>(() => DEFAULT_METRIC_PREVIEW_SYMBOL);
     const [selectedSymbolMeta, setSelectedSymbolMeta] = useState<SymbolRow | null>(null);
@@ -9981,6 +10007,9 @@ function MetricRulePreview({ rule, metricOption, lookbackValue, asOf }: MetricRu
     const [chartLoading, setChartLoading] = useState(false);
     const [chartError, setChartError] = useState<string | null>(null);
     const [windowRange, setWindowRange] = useState<ChartWindowRange | null>(null);
+    const [manualWindowRange, setManualWindowRange] = useState<ChartWindowRange | null>(null);
+    const chartRowsRef = useRef<Row[]>([]);
+    const lastFetchParamsRef = useRef<{ symbol: string; startISO: string } | null>(null);
 
     const sanitizedRule = useMemo(() => {
         const weightNumeric = Number(rule.weight);
@@ -10108,31 +10137,68 @@ function MetricRulePreview({ rule, metricOption, lookbackValue, asOf }: MetricRu
     }, [component, selectedSymbol, effectiveAsOf, metricOption, rule]);
 
     useEffect(() => {
+        chartRowsRef.current = chartRows;
+    }, [chartRows]);
+
+    const previousSymbolRef = useRef<string | null>(null);
+
+    useEffect(() => {
         const normalizedSymbol = selectedSymbol.trim().toUpperCase();
         if (!normalizedSymbol) {
             setChartRows([]);
             setChartError(null);
             setWindowRange(null);
+            setManualWindowRange(null);
+            chartRowsRef.current = [];
+            lastFetchParamsRef.current = null;
+            previousSymbolRef.current = null;
             return;
         }
-        let cancelled = false;
-        setChartLoading(true);
-        setChartError(null);
+
+        const symbolChanged = previousSymbolRef.current !== normalizedSymbol;
+        previousSymbolRef.current = normalizedSymbol;
+
+        if (symbolChanged) {
+            setChartRows([]);
+            setWindowRange(null);
+            setManualWindowRange(null);
+            chartRowsRef.current = [];
+        }
+
         const fallbackDays =
             Number.isFinite(lookbackValue) && lookbackValue > 0
                 ? Math.max(Math.floor(lookbackValue * 6), 365)
                 : 365;
         const startISO = computePreviewStartISO(fallbackDays);
+        const desiredStartDate = safeParseDate(startISO);
+        const existingRows = chartRowsRef.current;
+        const earliestExistingDate = safeParseDate(existingRows[0]?.date);
+        const lastParams = lastFetchParamsRef.current;
+        const needsMoreHistory =
+            !earliestExistingDate ||
+            !desiredStartDate ||
+            earliestExistingDate.getTime() > desiredStartDate.getTime();
+        if (!symbolChanged && lastParams && !needsMoreHistory && lastParams.startISO <= startISO) {
+            return;
+        }
+
+        let cancelled = false;
+        setChartLoading(true);
+        setChartError(null);
         fetchQuotes(normalizedSymbol, startISO)
             .then((rows) => {
                 if (cancelled) return;
                 setChartRows(rows);
+                chartRowsRef.current = rows;
+                lastFetchParamsRef.current = { symbol: normalizedSymbol, startISO };
             })
             .catch((err: unknown) => {
                 if (cancelled) return;
                 setChartRows([]);
                 setWindowRange(null);
+                setManualWindowRange(null);
                 setChartError(resolveErrorMessage(err, "Nie udało się pobrać danych cenowych."));
+                lastFetchParamsRef.current = null;
             })
             .finally(() => {
                 if (!cancelled) {
@@ -10147,18 +10213,69 @@ function MetricRulePreview({ rule, metricOption, lookbackValue, asOf }: MetricRu
     useEffect(() => {
         if (!chartRows.length) {
             setWindowRange(null);
+            setManualWindowRange(null);
             return;
         }
-        const targetEnd = findEndIndexForDate(chartRows, asOf) ?? chartRows.length - 1;
-        const safeEnd = Math.max(0, Math.min(targetEnd, chartRows.length - 1));
-        const startIndex = computeWindowStartIndex(chartRows, safeEnd, lookbackValue);
+        const total = chartRows.length;
+        const manualRange = (() => {
+            if (!manualWindowRange) return null;
+            const rawStart = Math.max(0, Math.min(manualWindowRange.startIndex, total - 1));
+            const rawEnd = Math.max(0, Math.min(manualWindowRange.endIndex, total - 1));
+            return {
+                startIndex: Math.min(rawStart, rawEnd),
+                endIndex: Math.max(rawStart, rawEnd),
+            };
+        })();
+        const targetEnd = manualRange
+            ? manualRange.endIndex
+            : findEndIndexForDate(chartRows, asOf) ?? total - 1;
+        const safeEnd = Math.max(0, Math.min(targetEnd, total - 1));
+        const startIndex = manualRange
+            ? manualRange.startIndex
+            : computeWindowStartIndex(chartRows, safeEnd, lookbackValue);
+        const normalizedRange = {
+            startIndex: Math.min(startIndex, safeEnd),
+            endIndex: Math.max(startIndex, safeEnd),
+        };
         setWindowRange((current) => {
-            if (current && current.startIndex === startIndex && current.endIndex === safeEnd) {
+            if (
+                current &&
+                current.startIndex === normalizedRange.startIndex &&
+                current.endIndex === normalizedRange.endIndex
+            ) {
                 return current;
             }
-            return { startIndex, endIndex: safeEnd };
+            return normalizedRange;
         });
-    }, [chartRows, lookbackValue, asOf]);
+        if (manualRange) {
+            setManualWindowRange((current) => {
+                if (!current) return null;
+                if (
+                    current.startIndex === normalizedRange.startIndex &&
+                    current.endIndex === normalizedRange.endIndex
+                ) {
+                    return current;
+                }
+                return normalizedRange;
+            });
+        }
+    }, [chartRows, lookbackValue, asOf, manualWindowRange]);
+
+    useEffect(() => {
+        setManualWindowRange(null);
+    }, [selectedSymbol, asOf]);
+
+    useEffect(() => {
+        if (!manualWindowRange) return;
+        const manualDuration = computeWindowDurationDays(chartRows, manualWindowRange);
+        if (
+            manualDuration == null ||
+            !Number.isFinite(lookbackValue) ||
+            Math.abs(manualDuration - lookbackValue) > 1
+        ) {
+            setManualWindowRange(null);
+        }
+    }, [lookbackValue, chartRows, manualWindowRange]);
 
     useEffect(() => {
         setMissingReason(null);
@@ -10401,17 +10518,34 @@ function MetricRulePreview({ rule, metricOption, lookbackValue, asOf }: MetricRu
                 typeof range.startIndex === "number" ? range.startIndex : range.endIndex ?? 0;
             const rawEnd =
                 typeof range.endIndex === "number" ? range.endIndex : range.startIndex ?? 0;
-            const nextEnd = Math.max(0, Math.min(Math.max(rawStart, rawEnd), total - 1));
-            const nextStart = computeWindowStartIndex(chartRows, nextEnd, lookbackValue);
+            const clampedStart = Math.max(0, Math.min(rawStart, total - 1));
+            const clampedEnd = Math.max(0, Math.min(rawEnd, total - 1));
+            const nextStart = Math.min(clampedStart, clampedEnd);
+            const nextEnd = Math.max(clampedStart, clampedEnd);
+            const nextRange: ChartWindowRange = { startIndex: nextStart, endIndex: nextEnd };
             setWindowRange((current) => {
                 if (current && current.startIndex === nextStart && current.endIndex === nextEnd) {
                     return current;
                 }
-                return { startIndex: nextStart, endIndex: nextEnd };
+                return nextRange;
+            });
+            setManualWindowRange((current) => {
+                if (current && current.startIndex === nextStart && current.endIndex === nextEnd) {
+                    return current;
+                }
+                return nextRange;
             });
             setMissingReason(null);
+            if (onLookbackChange) {
+                const duration = computeWindowDurationDays(chartRows, nextRange);
+                if (duration != null && Number.isFinite(duration) && duration > 0) {
+                    onLookbackChange(duration);
+                } else if (nextEnd > nextStart) {
+                    onLookbackChange(nextEnd - nextStart);
+                }
+            }
         },
-        [chartRows, lookbackValue]
+        [chartRows, onLookbackChange]
     );
 
     const selectedDisplayLabel = useMemo(() => {
@@ -14010,6 +14144,30 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                         )
                                             ? String(lookbackValue)
                                             : "custom";
+                                        const updateLookback = (nextLookback: number | null | undefined) => {
+                                            setScoreRules((prev) =>
+                                                prev.map((r) => {
+                                                    if (r.id !== rule.id) return r;
+                                                    const optionForRule = SCORE_METRIC_OPTIONS.find(
+                                                        (option) => option.value === r.metric
+                                                    );
+                                                    const normalized = resolveLookbackDays(
+                                                        optionForRule,
+                                                        nextLookback
+                                                    );
+                                                    const nextLabel =
+                                                        computeMetricLabel(
+                                                            optionForRule,
+                                                            normalized
+                                                        ) ?? r.metric;
+                                                    return {
+                                                        ...r,
+                                                        lookbackDays: normalized,
+                                                        label: nextLabel,
+                                                    };
+                                                })
+                                            );
+                                        };
                                         const displayLabel =
                                             computeMetricLabel(metricOption, lookbackValue) ??
                                             rule.label ??
@@ -14054,7 +14212,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                             metricOption?.backendMetric === "price_change"
                                                 ? camelMetricKey
                                                 : baseMetricKey;
-                                        const metricScale: MiniMetricScale | null = isCustomTotalReturn
+                                        const metricScale = isCustomTotalReturn
                                             ? {
                                                   worst: previewWorst,
                                                   best: previewBest,
@@ -14063,68 +14221,6 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                   metricKey: canonicalMetricKey,
                                               }
                                             : null;
-                                        const metricAliases = Array.from(
-                                            new Set(
-                                                [
-                                                    canonicalMetricKey,
-                                                    baseMetricKey,
-                                                    camelMetricKey,
-                                                    metricOption?.value,
-                                                    rule.metric,
-                                                ]
-                                                    .filter(
-                                                        (key): key is string =>
-                                                            typeof key === "string" && key.length > 0
-                                                    )
-                                                    .map((key) => key.trim())
-                                            )
-                                        );
-                                        const chartStocks: MiniScoreStock[] = [];
-                                        if (metricScale) {
-                                            (scoreResults?.rows ?? []).forEach((row, rowIdx) => {
-                                                const metricsRecord: Record<string, number | undefined> = {
-                                                    ...(row.metrics ?? {}),
-                                                };
-                                                const entries = Object.entries(metricsRecord)
-                                                    .filter(
-                                                        (entry): entry is [string, number] =>
-                                                            typeof entry[1] === "number" &&
-                                                            Number.isFinite(entry[1] as number)
-                                                    )
-                                                    .map(([key, value]) => ({
-                                                        key,
-                                                        normalized: key
-                                                            .replace(/[^a-z0-9]+/gi, "")
-                                                            .toLowerCase(),
-                                                        value,
-                                                    }));
-                                                let resolvedValue: number | undefined;
-                                                for (const alias of metricAliases) {
-                                                    const normalizedAlias = alias
-                                                        .replace(/[^a-z0-9]+/gi, "")
-                                                        .toLowerCase();
-                                                    const match = entries.find(
-                                                        (entry) => entry.normalized === normalizedAlias
-                                                    );
-                                                    if (match) {
-                                                        resolvedValue = match.value;
-                                                        break;
-                                                    }
-                                                }
-                                                if (resolvedValue === undefined) {
-                                                    return;
-                                                }
-                                                metricsRecord[metricScale.metricKey] = resolvedValue;
-                                                const ticker = row.symbol ?? `symbol-${rowIdx + 1}`;
-                                                const name = row.name ?? ticker;
-                                                chartStocks.push({
-                                                    id: `${ticker}-${rowIdx}`,
-                                                    ticker,
-                                                    name,
-                                                    metrics: metricsRecord,
-                                                });
-                                            });
-                                        }
                                         const clampScaleInput = (value: string): string => {
                                             const parsed = parseOptionalNumber(value);
                                             if (typeof parsed !== "number") return value;
@@ -14254,48 +14350,13 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                                             value={presetValue}
                                                                             onChange={(e) => {
                                                                                 const value = e.target.value;
-                                                                                setScoreRules((prev) =>
-                                                                                    prev.map((r) => {
-                                                                                        if (r.id !== rule.id) return r;
-                                                                                        if (value === "custom") {
-                                                                                            const optionForRule = SCORE_METRIC_OPTIONS.find(
-                                                                                                (option) => option.value === r.metric
-                                                                                            );
-                                                                                            const nextLookback = resolveLookbackDays(
-                                                                                                optionForRule,
-                                                                                                r.lookbackDays
-                                                                                            );
-                                                                                            const nextLabel =
-                                                                                                computeMetricLabel(
-                                                                                                    optionForRule,
-                                                                                                    nextLookback
-                                                                                                ) ?? r.metric;
-                                                                                            return {
-                                                                                                ...r,
-                                                                                                lookbackDays: nextLookback,
-                                                                                                label: nextLabel,
-                                                                                            };
-                                                                                        }
-                                                                                        const numeric = Number(value);
-                                                                                        const optionForRule = SCORE_METRIC_OPTIONS.find(
-                                                                                            (option) => option.value === r.metric
-                                                                                        );
-                                                                                        const nextLookback = resolveLookbackDays(
-                                                                                            optionForRule,
-                                                                                            numeric
-                                                                                        );
-                                                                                        const nextLabel =
-                                                                                            computeMetricLabel(
-                                                                                                optionForRule,
-                                                                                                nextLookback
-                                                                                            ) ?? r.metric;
-                                                                                        return {
-                                                                                            ...r,
-                                                                                            lookbackDays: nextLookback,
-                                                                                            label: nextLabel,
-                                                                                        };
-                                                                                    })
-                                                                                );
+                                                                                if (value === "custom") {
+                                                                                    updateLookback(
+                                                                                        rule.lookbackDays ?? lookbackValue
+                                                                                    );
+                                                                                    return;
+                                                                                }
+                                                                                updateLookback(Number(value));
                                                                             }}
                                                                             className={inputBaseClasses}
                                                                         >
@@ -14315,28 +14376,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                                         value={lookbackValue}
                                                                         onChange={(e) => {
                                                                             const numeric = Number(e.target.value);
-                                                                            setScoreRules((prev) =>
-                                                                                prev.map((r) => {
-                                                                                    if (r.id !== rule.id) return r;
-                                                                                    const optionForRule = SCORE_METRIC_OPTIONS.find(
-                                                                                        (option) => option.value === r.metric
-                                                                                    );
-                                                                                    const nextLookback = resolveLookbackDays(
-                                                                                        optionForRule,
-                                                                                        numeric
-                                                                                    );
-                                                                                    const nextLabel =
-                                                                                        computeMetricLabel(
-                                                                                            optionForRule,
-                                                                                            nextLookback
-                                                                                        ) ?? r.metric;
-                                                                                    return {
-                                                                                        ...r,
-                                                                                        lookbackDays: nextLookback,
-                                                                                        label: nextLabel,
-                                                                                    };
-                                                                                })
-                                                                            );
+                                                                            updateLookback(numeric);
                                                                         }}
                                                                         className={inputBaseClasses}
                                                                     />
@@ -14358,7 +14398,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                             {metricOption.description}
                                                         </div>
                                                     )}
-                                                    <div className="grid gap-3 md:grid-cols-3">
+                                                    <div className="grid gap-3 md:grid-cols-[minmax(0,220px)_minmax(0,1fr)] md:items-start">
                                                         <div>
                                                             <span className="text-xs uppercase tracking-wide text-muted">
                                                                 Kierunek
@@ -14397,18 +14437,10 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                             </div>
                                                         </div>
                                                         {isCustomTotalReturn && metricScale ? (
-                                                            <div className="md:col-span-2 space-y-3 rounded-2xl border border-soft bg-surface p-4">
+                                                            <div className="space-y-2 rounded-2xl border border-soft bg-surface p-4">
                                                                 <div className="flex items-center gap-2 text-sm font-medium text-primary">
                                                                     Skala punktacji
-                                                                    <span
-                                                                        className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-soft text-[10px] text-muted"
-                                                                        title="Skala liniowa, obcięta do [0,1]. r ≤ najgorszy → 0; r ≥ najlepszy → 1; pomiędzy → liniowo."
-                                                                    >
-                                                                        i
-                                                                    </span>
-                                                                </div>
-                                                                <div className="text-xs text-subtle">
-                                                                    Skala liniowa, obcięta do [0,1]. Wartości r poniżej „Najgorszego wyniku” dostają 0, powyżej „Najlepszego” otrzymują 1.
+                                                                    <InfoHint text="Skala liniowa, obcięta do [0,1]. Wartości r poniżej „Najgorszego wyniku” dostają 0, powyżej „Najlepszego” otrzymują 1." />
                                                                 </div>
                                                                 <div className="grid gap-3 sm:grid-cols-2">
                                                                     <label className="flex flex-col gap-2">
@@ -14486,10 +14518,9 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                                         </div>
                                                                     </label>
                                                                 </div>
-                                                                <MiniScoreChart scale={metricScale} stocks={chartStocks} />
                                                             </div>
                                                         ) : (
-                                                            <>
+                                                            <div className="grid gap-3 sm:grid-cols-2">
                                                                 <label className="flex flex-col gap-2">
                                                                     <span className="text-xs uppercase tracking-wide text-muted">
                                                                         Minimalna wartość
@@ -14528,7 +14559,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                                         className={inputBaseClasses}
                                                                     />
                                                                 </label>
-                                                            </>
+                                                            </div>
                                                         )}
                                                     </div>
                                                     <div className="grid gap-3 md:grid-cols-2">
@@ -14595,6 +14626,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                         metricOption={metricOption}
                                                         lookbackValue={lookbackValue}
                                                         asOf={scoreAsOf}
+                                                        onLookbackChange={updateLookback}
                                                     />
                                                 ) : null}
                                             </div>
