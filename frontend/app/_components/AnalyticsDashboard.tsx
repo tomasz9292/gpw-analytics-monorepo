@@ -155,8 +155,8 @@ const PERCENT_BASED_SCORE_METRICS = new Set<ScoreComponentRequest["metric"]>([
 ]);
 
 const CHART_BRUSH_CLASS = "metric-chart-brush";
-const CHART_BRUSH_STROKE = "#2563EB";
-const CHART_BRUSH_BACKGROUND_FILL = "#E7EEFF";
+const CHART_BRUSH_STROKE = "#4663F0";
+const CHART_BRUSH_BACKGROUND_FILL = "#E6EBFF";
 const CHART_BRUSH_TRAVELLER_WIDTH = 18;
 
 const ChartBrushTraveller: React.FC<BrushTravellerProps> = ({
@@ -1717,11 +1717,11 @@ const computeVisibleRangeForRows = (
 };
 
 const COMPARISON_COLORS = [
-    "#2563EB",
+    "#4663F0",
     "#F59E0B",
     "#8B5CF6",
     "#EC4899",
-    "#0EA5E9",
+    "#38BDF8",
     "#16A34A",
     "#F97316",
 ];
@@ -12677,7 +12677,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
         return {
             symbol: label,
             label,
-            color: "#2563EB",
+            color: "#4663F0",
             rows: pfBenchmarkVisibleRows,
         };
     }, [pfBenchmarkVisibleRows, pfLastBenchmark]);
