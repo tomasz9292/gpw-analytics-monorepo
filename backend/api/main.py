@@ -245,7 +245,14 @@ _MST_DEFAULT_COLUMN_ORDER_WITH_SYMBOL = {
     "volume": 6,
 }
 
-ALLOWED_SCORE_METRICS = {"total_return", "volatility", "max_drawdown", "sharpe", "price_change"}
+ALLOWED_SCORE_METRICS = {
+    "total_return",
+    "volatility",
+    "max_drawdown",
+    "sharpe",
+    "price_change",
+    "rsi",
+}
 
 
 SHAREHOLDER_KEYWORDS = [
@@ -4271,6 +4278,43 @@ def _compute_metric_value(
         if prev_close <= 0:
             continue
         returns.append(next_close / prev_close - 1.0)
+
+    if metric == "rsi":
+        if not returns:
+            if diagnose:
+                raise ScoreComputationError(
+                    "Za mało prawidłowych stóp zwrotu do obliczenia RSI."
+                )
+            return None
+
+        sample_size = min(len(returns), max(1, lookback_days))
+        relevant_returns = returns[-sample_size:]
+        gains = 0.0
+        losses = 0.0
+        for value in relevant_returns:
+            if value > 0:
+                gains += value
+            elif value < 0:
+                losses += -value
+
+        period = len(relevant_returns)
+        if period == 0:
+            if diagnose:
+                raise ScoreComputationError(
+                    "Za mało prawidłowych stóp zwrotu do obliczenia RSI."
+                )
+            return None
+
+        avg_gain = gains / period
+        avg_loss = losses / period
+
+        if avg_loss <= 1e-12:
+            if avg_gain <= 1e-12:
+                return 50.0
+            return 100.0
+
+        relative_strength = avg_gain / avg_loss
+        return 100.0 - (100.0 / (1.0 + relative_strength))
 
     if metric == "volatility":
         if len(returns) < 2:
