@@ -3184,7 +3184,7 @@ const Card = ({
     right?: React.ReactNode;
     children: React.ReactNode;
 }) => (
-    <div className="rounded-3xl border border-slate-200/70 bg-white/95 shadow-[0_24px_60px_rgba(15,23,42,0.08)] backdrop-blur">
+    <div className="rounded-3xl border border-slate-200/70 bg-white shadow-[0_18px_40px_rgba(15,23,42,0.08)]">
         {(title || right) && (
             <div className="flex flex-col gap-3 border-b border-slate-200/60 px-5 py-4 md:flex-row md:items-center md:justify-between md:px-8">
                 {title && <div className="text-lg font-semibold text-slate-900 md:flex-1">{title}</div>}
@@ -8308,7 +8308,7 @@ function RebalanceTimeline({
                                         key={`${event.date}-${idx}`}
                                         type="button"
                                         onClick={() => setSelected(item)}
-                                        className="group w-full rounded-2xl border border-soft bg-soft-surface/70 p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-[var(--color-primary)] hover:bg-white hover:shadow-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]/40"
+                                        className="group w-full rounded-2xl border border-soft bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-[var(--color-primary)] hover:shadow-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]/40"
                                     >
                                         <div className="flex items-start justify-between gap-3">
                                             <div className="text-sm font-semibold text-primary">{formattedDate}</div>
