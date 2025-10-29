@@ -699,6 +699,30 @@ def test_price_change_metric_returns_percent():
     assert result == pytest.approx(50.0)
 
 
+def test_distance_from_high_metric_uses_window_extreme():
+    closes = [
+        (date(2023, 1, 1), 100.0),
+        (date(2023, 1, 2), 120.0),
+        (date(2023, 1, 3), 110.0),
+    ]
+
+    result = main._compute_metric_value(closes, "distance_from_high", 3)
+    expected = (120.0 - 110.0) / 120.0
+    assert result == pytest.approx(expected)
+
+
+def test_distance_from_low_metric_uses_window_extreme():
+    closes = [
+        (date(2023, 1, 1), 90.0),
+        (date(2023, 1, 2), 100.0),
+        (date(2023, 1, 3), 110.0),
+    ]
+
+    result = main._compute_metric_value(closes, "distance_from_low", 3)
+    expected = (110.0 - 90.0) / 90.0
+    assert result == pytest.approx(expected)
+
+
 def test_rsi_metric_uses_average_gains_and_losses():
     closes = [
         (date(2023, 1, 1), 100.0),
