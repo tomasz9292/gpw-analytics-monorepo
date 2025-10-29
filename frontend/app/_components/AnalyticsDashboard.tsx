@@ -10853,7 +10853,7 @@ function MetricRulePreview({
                                         </div>
                                     ) : null}
                                     {chartLoading ? (
-                                        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-white/80 text-xs text-subtle backdrop-blur-sm">
+                                        <div className="pointer-events-none absolute right-3 top-3 z-10 text-[11px] text-muted">
                                             Ładowanie wykresu…
                                         </div>
                                     ) : null}
@@ -10902,7 +10902,7 @@ function MetricRulePreview({
                                             </div>
                                         ) : null}
                                         {chartLoading ? (
-                                            <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-white/80 text-xs text-subtle backdrop-blur-sm">
+                                            <div className="pointer-events-none absolute bottom-3 right-3 z-10 text-[11px] text-muted">
                                                 Ładowanie wykresu…
                                             </div>
                                         ) : null}
