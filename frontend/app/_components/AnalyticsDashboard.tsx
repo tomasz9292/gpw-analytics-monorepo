@@ -352,6 +352,89 @@ const buildScoreComponents = (rules: ScoreBuilderRule[]): ScoreComponentRequest[
         return acc;
     }, []);
 
+const toScorePreviewRulePayload = (
+    component: ScoreComponentRequest
+): ScorePreviewRulePayload => {
+    const payload: ScorePreviewRulePayload = {
+        metric: `${component.metric}_${component.lookback_days}`,
+        weight: component.weight,
+        direction: component.direction,
+        normalize: component.normalize ?? "none",
+    };
+
+    if (component.label) {
+        payload.label = component.label;
+    }
+    if (Number.isFinite(component.lookback_days)) {
+        payload.lookbackDays = component.lookback_days;
+    }
+    if (typeof component.min_value === "number") {
+        payload.min_value = component.min_value;
+    }
+    if (typeof component.max_value === "number") {
+        payload.max_value = component.max_value;
+    }
+    if (component.scoring) {
+        payload.scoring = component.scoring;
+    }
+
+    return payload;
+};
+
+const extractMetricValueFromRow = (
+    row: ScorePreviewRow,
+    component: ScoreComponentRequest,
+    rule: ScoreBuilderRule,
+    option?: ScoreMetricOption
+): number | undefined => {
+    const metricsRecord = row.metrics;
+    if (!metricsRecord) {
+        return undefined;
+    }
+
+    const entries = Object.entries(metricsRecord)
+        .filter(([, value]) => typeof value === "number" && Number.isFinite(value))
+        .map(([key, value]) => ({
+            key,
+            normalized: key.replace(/[^a-z0-9]+/gi, "").toLowerCase(),
+            value: value as number,
+        }));
+
+    if (!entries.length) {
+        return undefined;
+    }
+
+    const baseMetricKey = `${component.metric}_${component.lookback_days}`;
+    const camelMetricKey = baseMetricKey.replace(/_([a-z0-9])/gi, (_, char: string) => char.toUpperCase());
+    const canonicalMetricKey =
+        component.metric === "price_change" ? camelMetricKey : baseMetricKey;
+
+    const aliasCandidates = [
+        canonicalMetricKey,
+        baseMetricKey,
+        camelMetricKey,
+        component.metric,
+        component.label,
+        option?.value,
+        option?.label,
+        option?.backendMetric,
+        rule.metric,
+        rule.label ?? undefined,
+    ].filter((key): key is string => typeof key === "string" && key.trim().length > 0);
+
+    const aliases = Array.from(new Set(aliasCandidates.map((key) => key.trim())));
+
+    for (const alias of aliases) {
+        const normalizedAlias = alias.replace(/[^a-z0-9]+/gi, "").toLowerCase();
+        const match = entries.find((entry) => entry.normalized === normalizedAlias);
+        if (match) {
+            return match.value;
+        }
+    }
+
+    return undefined;
+};
+
 const createRuleId = () =>
     `rule-${Math.random().toString(36).slice(2, 8)}-${Date.now().toString(36)}`;
 
@@ -734,6 +817,8 @@ const SCORE_UNIVERSE_FALLBACK: string[] = [
     "OPL.WA",
     "MRC.WA",
 ];
+
+const DEFAULT_METRIC_PREVIEW_SYMBOL = "CDR.WA";
 
 const SCORE_TEMPLATE_STORAGE_KEY = "gpw_score_templates_v1";
 const AUTH_USER_STORAGE_KEY = "gpw_auth_user_v1";
@@ -2926,7 +3011,10 @@ const normalizeScoreRankingResponse = (raw: unknown): ScorePreviewResult => {
     return { rows, missing, meta };
 };
 
-async function previewScoreRanking(payload: ScorePreviewRequest): Promise<ScorePreviewResult> {
+async function previewScoreRanking(
+    payload: ScorePreviewRequest,
+    options?: { signal?: AbortSignal }
+): Promise<ScorePreviewResult> {
     if (!payload.rules.length) {
         throw new Error("Dodaj co najmniej jedną metrykę scoringową.");
     }
@@ -2958,6 +3046,7 @@ async function previewScoreRanking(payload: ScorePreviewRequest): Promise<ScoreP
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(prepared),
+        signal: options?.signal,
     });
 
     if (!response.ok) {
@@ -9747,6 +9836,385 @@ function RsiChart({ rows }: { rows: RowRSI[] }) {
     );
 }
 
+type MetricRulePreviewProps = {
+    rule: ScoreBuilderRule;
+    metricOption?: ScoreMetricOption;
+    lookbackValue: number;
+    asOf?: string | null;
+};
+
+function MetricRulePreview({ rule, metricOption, lookbackValue, asOf }: MetricRulePreviewProps) {
+    const datalistId = useId();
+    const [symbolInput, setSymbolInput] = useState<string>(() => DEFAULT_METRIC_PREVIEW_SYMBOL);
+    const [selectedSymbol, setSelectedSymbol] = useState<string>(() => DEFAULT_METRIC_PREVIEW_SYMBOL);
+    const [symbolOptions, setSymbolOptions] = useState<SymbolRow[]>([]);
+    const [symbolsLoading, setSymbolsLoading] = useState(false);
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [missingReason, setMissingReason] = useState<string | null>(null);
+    const [preview, setPreview] = useState<{
+        rawValue: number | null;
+        score: number | null;
+        metricKey: string;
+    } | null>(null);
+
+    const sanitizedRule = useMemo(() => {
+        const weightNumeric = Number(rule.weight);
+        const normalizedWeight =
+            Number.isFinite(weightNumeric) && weightNumeric > 0 ? weightNumeric : 1;
+        return {
+            ...rule,
+            weight: normalizedWeight,
+            lookbackDays: lookbackValue,
+        };
+    }, [rule, lookbackValue]);
+
+    const component = useMemo(() => {
+        const [single] = buildScoreComponents([sanitizedRule]);
+        return single ?? null;
+    }, [sanitizedRule]);
+
+    const percentBased = useMemo(
+        () =>
+            metricOption
+                ? metricOption.backendMetric === "price_change" ||
+                  PERCENT_BASED_SCORE_METRICS.has(metricOption.backendMetric)
+                : false,
+        [metricOption]
+    );
+
+    useEffect(() => {
+        const query = symbolInput.trim();
+        if (query.length < 2) {
+            setSymbolOptions([]);
+            setSymbolsLoading(false);
+            return;
+        }
+        let active = true;
+        setSymbolsLoading(true);
+        searchSymbols(query, ["stock"]) // realtime suggestions
+            .then((rows) => {
+                if (!active) return;
+                const unique = new Map<string, SymbolRow>();
+                rows.forEach((row) => {
+                    const key = row.symbol.toUpperCase();
+                    if (!unique.has(key)) {
+                        unique.set(key, row);
+                    }
+                });
+                setSymbolOptions(Array.from(unique.values()).slice(0, 20));
+            })
+            .catch(() => {
+                if (!active) return;
+                setSymbolOptions([]);
+            })
+            .finally(() => {
+                if (!active) return;
+                setSymbolsLoading(false);
+            });
+        return () => {
+            active = false;
+        };
+    }, [symbolInput]);
+
+    useEffect(() => {
+        const normalized = symbolInput.trim().toUpperCase();
+        const timer = window.setTimeout(() => {
+            setSelectedSymbol((prev) => {
+                if (!normalized) {
+                    return "";
+                }
+                return prev === normalized ? prev : normalized;
+            });
+        }, 250);
+        return () => {
+            window.clearTimeout(timer);
+        };
+    }, [symbolInput]);
+
+    useEffect(() => {
+        if (!component) {
+            setPreview(null);
+            return;
+        }
+        const normalizedSymbol = selectedSymbol.trim().toUpperCase();
+        if (!normalizedSymbol) {
+            setPreview(null);
+            return;
+        }
+        const payload = toScorePreviewRulePayload(component);
+        let cancelled = false;
+        const controller = new AbortController();
+        const timer = window.setTimeout(() => {
+            setLoading(true);
+            setError(null);
+            setMissingReason(null);
+            previewScoreRanking(
+                {
+                    rules: [payload],
+                    limit: 1,
+                    universe: normalizedSymbol,
+                    sort: component.direction === "asc" ? "asc" : "desc",
+                    as_of: asOf?.trim() ? asOf : undefined,
+                },
+                { signal: controller.signal }
+            )
+                .then((result) => {
+                    if (cancelled) return;
+                    const missingEntry = result.missing.find(
+                        (item) => item.symbol?.toUpperCase() === normalizedSymbol
+                    );
+                    if (missingEntry) {
+                        setPreview(null);
+                        setMissingReason(
+                            missingEntry.reason ?? "Brak danych dla wskazanej spółki."
+                        );
+                        return;
+                    }
+                    const row =
+                        result.rows.find(
+                            (entry) => entry.symbol?.toUpperCase() === normalizedSymbol
+                        ) ?? result.rows[0];
+                    if (!row) {
+                        setPreview(null);
+                        setMissingReason("Brak wyników dla wskazanej spółki.");
+                        return;
+                    }
+                    const metricValue = extractMetricValueFromRow(
+                        row,
+                        component,
+                        rule,
+                        metricOption
+                    );
+                    const scoreValue = typeof row.score === "number" ? row.score : null;
+                    setPreview({
+                        rawValue: typeof metricValue === "number" ? metricValue : null,
+                        score: scoreValue,
+                        metricKey: payload.metric,
+                    });
+                })
+                .catch((err: unknown) => {
+                    if (cancelled) return;
+                    if (err instanceof DOMException && err.name === "AbortError") {
+                        return;
+                    }
+                    setError(resolveErrorMessage(err, "Nie udało się obliczyć metryki."));
+                    setPreview(null);
+                })
+                .finally(() => {
+                    if (!cancelled) {
+                        setLoading(false);
+                    }
+                });
+        }, 200);
+        return () => {
+            cancelled = true;
+            window.clearTimeout(timer);
+            controller.abort();
+        };
+    }, [component, selectedSymbol, asOf, metricOption, rule]);
+
+    const metricRange = useMemo(() => {
+        if (!component) return null;
+        if (component.scoring?.type === "linear_clamped") {
+            const { worst, best } = component.scoring;
+            const min = Math.min(worst, best);
+            const max = Math.max(worst, best);
+            return { min, max } as const;
+        }
+        if (
+            typeof component.min_value === "number" &&
+            typeof component.max_value === "number"
+        ) {
+            const min = Math.min(component.min_value, component.max_value);
+            const max = Math.max(component.min_value, component.max_value);
+            return { min, max } as const;
+        }
+        return null;
+    }, [component]);
+
+    const pointerPosition = useMemo(() => {
+        if (!metricRange || preview?.rawValue == null) return null;
+        const lower = Math.min(metricRange.min, metricRange.max);
+        const upper = Math.max(metricRange.min, metricRange.max);
+        if (!Number.isFinite(lower) || !Number.isFinite(upper) || upper === lower) {
+            return null;
+        }
+        const clamped = Math.min(Math.max(preview.rawValue, lower), upper);
+        return ((clamped - lower) / (upper - lower)) * 100;
+    }, [metricRange, preview]);
+
+    const normalizedPercent = useMemo(() => {
+        if (preview?.score == null || Number.isNaN(preview.score)) {
+            return null;
+        }
+        const clamped = Math.max(0, Math.min(1, preview.score));
+        return clamped * 100;
+    }, [preview]);
+
+    const formatRawValue = useCallback(
+        (value: number) => {
+            if (!Number.isFinite(value)) {
+                return "—";
+            }
+            if (percentBased) {
+                return `${value.toFixed(2)}%`;
+            }
+            const fractionDigits = Math.abs(value) >= 100 ? 1 : 2;
+            return value.toLocaleString("pl-PL", {
+                minimumFractionDigits: fractionDigits,
+                maximumFractionDigits: fractionDigits,
+            });
+        },
+        [percentBased]
+    );
+
+    return (
+        <div className="space-y-3 rounded-2xl border border-soft bg-surface p-4">
+            <div className="flex items-center justify-between gap-3">
+                <div>
+                    <div className="text-sm font-medium text-primary">Podgląd metryki</div>
+                    <div className="text-xs text-subtle">
+                        Aktualna wartość dla wybranej spółki – aktualizuje się wraz ze zmianą
+                        parametrów.
+                    </div>
+                </div>
+                {loading ? (
+                    <span className="text-[11px] text-muted">Ładowanie…</span>
+                ) : null}
+            </div>
+            <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                <label className="flex flex-col gap-2">
+                    <span className="text-xs uppercase tracking-wide text-muted">Spółka</span>
+                    <input
+                        value={symbolInput}
+                        onChange={(event) => setSymbolInput(event.target.value)}
+                        list={datalistId}
+                        placeholder="np. CDR.WA"
+                        className="w-full rounded-xl border border-soft bg-surface px-3 py-2 text-sm text-neutral focus:border-[var(--color-tech)] focus:outline-none focus:ring-2 focus:ring-[rgba(52,152,219,0.15)]"
+                    />
+                    <datalist id={datalistId}>
+                        {symbolOptions.map((option) => (
+                            <option
+                                key={option.symbol}
+                                value={option.symbol.toUpperCase()}
+                            >
+                                {option.symbol.toUpperCase()}
+                                {option.name ? ` — ${option.name}` : ""}
+                            </option>
+                        ))}
+                    </datalist>
+                    {symbolsLoading ? (
+                        <span className="text-[11px] text-subtle">Ładowanie listy spółek…</span>
+                    ) : null}
+                </label>
+                {metricOption ? (
+                    <div className="rounded-xl border border-dashed border-soft bg-soft-surface px-3 py-2 text-xs text-subtle">
+                        <div className="font-semibold text-neutral">{metricOption.label}</div>
+                        <div>
+                            Zakres: {lookbackValue} dni • Kierunek: {" "}
+                            {rule.direction === "asc"
+                                ? "mniej = lepiej"
+                                : "więcej = lepiej"}
+                        </div>
+                        {metricOption.description ? (
+                            <div className="mt-1">{metricOption.description}</div>
+                        ) : null}
+                    </div>
+                ) : (
+                    <div className="rounded-xl border border-dashed border-soft px-3 py-2 text-xs text-subtle">
+                        Wybierz metrykę powyżej, aby zobaczyć podgląd wartości.
+                    </div>
+                )}
+            </div>
+            {error ? (
+                <div className="rounded-xl border border-negative bg-negative/5 px-3 py-2 text-xs text-negative">
+                    {error}
+                </div>
+            ) : null}
+            {missingReason ? (
+                <div className="rounded-xl border border-soft px-3 py-2 text-xs text-subtle">
+                    {missingReason}
+                </div>
+            ) : null}
+            {preview && component ? (
+                <div className="space-y-3">
+                    <div className="flex flex-wrap items-baseline gap-2 text-sm text-neutral">
+                        <span className="font-semibold">{selectedSymbol || DEFAULT_METRIC_PREVIEW_SYMBOL}</span>
+                        {preview.rawValue != null ? (
+                            <span className="text-muted">
+                                Wartość: {" "}
+                                <span className="font-semibold text-primary">
+                                    {formatRawValue(preview.rawValue)}
+                                </span>
+                            </span>
+                        ) : (
+                            <span className="text-subtle">
+                                Brak wartości metryki dla tej spółki.
+                            </span>
+                        )}
+                    </div>
+                    {metricRange && preview.rawValue != null ? (
+                        <div className="space-y-1">
+                            <div className="relative h-2 overflow-hidden rounded-full bg-soft">
+                                <div
+                                    className="absolute inset-0"
+                                    style={{
+                                        background:
+                                            component.direction === "asc"
+                                                ? "linear-gradient(to right, #22C55E, #F97316, #EF4444)"
+                                                : "linear-gradient(to right, #EF4444, #F97316, #22C55E)",
+                                    }}
+                                />
+                                {pointerPosition != null ? (
+                                    <div
+                                        className="absolute -top-1 bottom-[-1px] w-[2px] bg-primary"
+                                        style={{ left: `${pointerPosition}%` }}
+                                    />
+                                ) : null}
+                            </div>
+                            <div className="flex justify-between text-[10px] text-subtle">
+                                <span>{formatRawValue(metricRange.min)}</span>
+                                <span>{formatRawValue(metricRange.max)}</span>
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="rounded-xl border border-dashed border-soft px-3 py-2 text-xs text-subtle">
+                            Brak zdefiniowanej skali – pokazujemy jedynie wynik znormalizowany.
+                        </div>
+                    )}
+                    {normalizedPercent != null ? (
+                        <div className="space-y-1">
+                            <div className="flex items-center justify-between text-xs text-subtle">
+                                <span>Score</span>
+                                <span className="font-semibold text-primary">
+                                    {preview.score?.toFixed(3)}
+                                </span>
+                            </div>
+                            <div className="relative h-2 overflow-hidden rounded-full bg-soft">
+                                <div
+                                    className="absolute inset-y-0 left-0 rounded-full bg-primary"
+                                    style={{ width: `${normalizedPercent}%` }}
+                                />
+                            </div>
+                            <div className="flex justify-between text-[10px] text-subtle">
+                                <span>0</span>
+                                <span>1</span>
+                            </div>
+                        </div>
+                    ) : null}
+                </div>
+            ) : !loading && !error ? (
+                <div className="text-xs text-subtle">
+                    {metricOption
+                        ? "Wprowadź symbol spółki, aby zobaczyć wynik metryki."
+                        : "Wybierz metrykę, aby zobaczyć podgląd."}
+                </div>
+            ) : null}
+        </div>
+    );
+}
+
 /** =========================
  *  Główny komponent dashboardu
  *  ========================= */
@@ -13612,17 +14080,25 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                                 </select>
                                                             </label>
                                                         )}
-                                                        <div className="text-xs text-subtle">
-                                                            {isCustomTotalReturn
-                                                                ? "Percentyle liczone po score."
-                                                                : "Metryki korzystają z danych cenowych (zwroty, zmienność, Sharpe). Wagi są skalowane automatycznie."}
-                                                        </div>
+                                                    <div className="text-xs text-subtle">
+                                                        {isCustomTotalReturn
+                                                            ? "Percentyle liczone po score."
+                                                            : "Metryki korzystają z danych cenowych (zwroty, zmienność, Sharpe). Wagi są skalowane automatycznie."}
                                                     </div>
                                                 </div>
-                                            {idx === scoreRules.length - 1 && (
-                                                <div className="mt-3 text-xs text-subtle">
-                                                    Zmieniaj wagi i parametry, aby zobaczyć wpływ na ranking.
-                                                </div>
+                                                {metricOption ? (
+                                                    <MetricRulePreview
+                                                        rule={rule}
+                                                        metricOption={metricOption}
+                                                        lookbackValue={lookbackValue}
+                                                        asOf={scoreAsOf}
+                                                    />
+                                                ) : null}
+                                            </div>
+                                        {idx === scoreRules.length - 1 && (
+                                            <div className="mt-3 text-xs text-subtle">
+                                                Zmieniaj wagi i parametry, aby zobaczyć wpływ na ranking.
+                                            </div>
                                             )}
                                             </div>
                                         );
