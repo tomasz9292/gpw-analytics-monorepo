@@ -8280,6 +8280,148 @@ function RebalanceTimeline({
     );
 }
 
+type MetricTone = "positive" | "negative" | "neutral" | "primary";
+
+const METRIC_TONE_STYLES: Record<MetricTone, string> = {
+    positive:
+        "border-[rgba(46,204,113,0.35)] bg-[rgba(46,204,113,0.08)] text-accent",
+    negative:
+        "border-[rgba(231,76,60,0.35)] bg-[rgba(231,76,60,0.08)] text-negative",
+    neutral: "border-soft bg-soft-surface text-neutral",
+    primary:
+        "border-[rgba(10,35,66,0.25)] bg-[rgba(10,35,66,0.08)] text-primary",
+};
+
+const prettifyMetricLabel = (raw: string) =>
+    raw
+        .replace(/[_-]+/g, " ")
+        .trim()
+        .replace(/\s+/g, " ")
+        .replace(/\b\w/g, (char) => char.toUpperCase());
+
+const normalizeMetricKey = (value: string) =>
+    value.replace(/[^a-z0-9]+/gi, "").toLowerCase();
+
+const toCamel = (value: string) =>
+    value.replace(/_([a-z0-9])/gi, (_, char: string) => char.toUpperCase());
+
+const toSnake = (value: string) =>
+    value
+        .replace(/([A-Z])/g, "_$1")
+        .replace(/__+/g, "_")
+        .toLowerCase();
+
+type MetricBadgeProps = {
+    label: string;
+    value: React.ReactNode;
+    tone?: MetricTone;
+};
+
+const MetricBadge = ({ label, value, tone = "neutral" }: MetricBadgeProps) => (
+    <div
+        className={`flex min-w-[140px] flex-1 flex-col gap-1 rounded-2xl border px-4 py-3 transition-shadow sm:flex-none ${
+            METRIC_TONE_STYLES[tone]
+        } shadow-[0_1px_4px_rgba(10,35,66,0.04)]`}
+    >
+        <span className="text-xs font-medium uppercase tracking-wide text-subtle">
+            {label}
+        </span>
+        <span className="text-lg font-semibold leading-tight">{value}</span>
+    </div>
+);
+
+const buildNormalizedMap = (metrics: Record<string, number> | undefined) => {
+    const map = new Map<string, number>();
+    if (!metrics) return map;
+    Object.entries(metrics).forEach(([key, value]) => {
+        if (typeof value !== "number" || Number.isNaN(value)) return;
+        map.set(normalizeMetricKey(key), value);
+    });
+    return map;
+};
+
+const findValue = (map: Map<string, number>, aliases: string[]) => {
+    for (const alias of aliases) {
+        const normalized = normalizeMetricKey(alias);
+        if (!normalized) continue;
+        if (map.has(normalized)) {
+            return map.get(normalized);
+        }
+    }
+    return undefined;
+};
+
+const resolvePriceChangePercent = (
+    map: Map<string, number>,
+    key: string
+): number | undefined => {
+    const camel = toCamel(key);
+    const snake = toSnake(key);
+    const normalizedKey = normalizeMetricKey(key);
+    const direct = findValue(map, [key, camel, snake, normalizedKey]);
+    if (typeof direct === "number") {
+        return direct;
+    }
+    const diff = findValue(map, [
+        `${key}Diff`,
+        `${key}_diff`,
+        `${camel}Diff`,
+        `${snake}_diff`,
+        `${normalizedKey}diff`,
+        `${normalizedKey}value`,
+        "pricechangediff",
+        "pricechangevalue",
+    ]);
+    const priceNow = findValue(map, [
+        "priceNow",
+        "price_now",
+        "lastPrice",
+        "last_price",
+        "close",
+        "closePrice",
+        "price",
+    ]);
+    if (typeof diff === "number" && typeof priceNow === "number") {
+        const priceThen = priceNow - diff;
+        if (Math.abs(priceThen) > 1e-9) {
+            return (priceNow / priceThen - 1) * 100;
+        }
+    }
+    return undefined;
+};
+
+const formatMetricNumber = (value: number) => {
+    const magnitude = Math.abs(value);
+    if (magnitude >= 1000) {
+        return value.toLocaleString("pl-PL", {
+            maximumFractionDigits: 0,
+        });
+    }
+    if (magnitude >= 100) {
+        return value.toLocaleString("pl-PL", {
+            minimumFractionDigits: 0,
+            maximumFractionDigits: 0,
+        });
+    }
+    if (magnitude >= 10) {
+        return value.toLocaleString("pl-PL", {
+            minimumFractionDigits: 1,
+            maximumFractionDigits: 1,
+        });
+    }
+    return value.toLocaleString("pl-PL", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+    });
+};
+
+const shouldHighlightPositiveMetric = (key: string) => {
+    const normalized = key.replace(/[_-]+/g, " ").toLowerCase();
+    return /return|growth|momentum|profit|yield|performance|alpha|cagr|roi|gain|trend|stopa/.test(
+        normalized
+    );
+};
+
 function ScoreRankingTable({ rows }: { rows: ScorePreviewRow[] }) {
     if (!rows.length) return null;
 
@@ -8287,139 +8429,116 @@ function ScoreRankingTable({ rows }: { rows: ScorePreviewRow[] }) {
         new Set(rows.flatMap((row) => Object.keys(row.metrics ?? {})))
     ).slice(0, 4);
 
-    const normalizeMetricKey = (value: string) =>
-        value.replace(/[^a-z0-9]+/gi, "").toLowerCase();
-    const toCamel = (value: string) =>
-        value.replace(/_([a-z0-9])/gi, (_, char: string) => char.toUpperCase());
-    const toSnake = (value: string) =>
-        value
-            .replace(/([A-Z])/g, "_$1")
-            .replace(/__+/g, "_")
-            .toLowerCase();
-
-    const buildNormalizedMap = (metrics: Record<string, number> | undefined) => {
-        const map = new Map<string, number>();
-        if (!metrics) return map;
-        Object.entries(metrics).forEach(([key, value]) => {
-            if (typeof value !== "number" || Number.isNaN(value)) return;
-            map.set(normalizeMetricKey(key), value);
-        });
-        return map;
-    };
-
-    const findValue = (map: Map<string, number>, aliases: string[]) => {
-        for (const alias of aliases) {
-            const normalized = normalizeMetricKey(alias);
-            if (!normalized) continue;
-            if (map.has(normalized)) {
-                return map.get(normalized);
-            }
-        }
-        return undefined;
-    };
-
-    const resolvePriceChangePercent = (
-        map: Map<string, number>,
-        key: string
-    ): number | undefined => {
-        const camel = toCamel(key);
-        const snake = toSnake(key);
-        const normalizedKey = normalizeMetricKey(key);
-        const direct = findValue(map, [key, camel, snake, normalizedKey]);
-        if (typeof direct === "number") {
-            return direct;
-        }
-        const diff = findValue(map, [
-            `${key}Diff`,
-            `${key}_diff`,
-            `${camel}Diff`,
-            `${snake}_diff`,
-            `${normalizedKey}diff`,
-            `${normalizedKey}value`,
-            "pricechangediff",
-            "pricechangevalue",
-        ]);
-        const priceNow = findValue(map, [
-            "priceNow",
-            "price_now",
-            "lastPrice",
-            "last_price",
-            "close",
-            "closePrice",
-            "price",
-        ]);
-        if (typeof diff === "number" && typeof priceNow === "number") {
-            const priceThen = priceNow - diff;
-            if (Math.abs(priceThen) > 1e-9) {
-                return (priceNow / priceThen - 1) * 100;
-            }
-        }
-        return undefined;
-    };
-
     return (
-        <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
-                <thead className="text-left text-subtle">
-                    <tr className="border-b border-soft">
-                        <th className="py-2 pr-4 font-medium">Pozycja</th>
-                        <th className="py-2 pr-4 font-medium">Spółka</th>
-                        <th className="py-2 pr-4 font-medium">Score</th>
-                        <th className="py-2 pr-4 font-medium">Waga</th>
-                        {metricKeys.map((key) => (
-                            <th key={key} className="py-2 pr-4 font-medium capitalize">
-                                {key.replace(/_/g, " ")}
-                            </th>
-                        ))}
-                    </tr>
-                </thead>
-                <tbody>
-                    {rows.map((row, idx) => {
-                        const metricMap = buildNormalizedMap(row.metrics);
-                        return (
-                            <tr key={`${row.symbol}-${idx}`} className="border-b border-soft">
-                            <td className="py-2 pr-4 font-medium text-subtle">#{row.rank ?? idx + 1}</td>
-                            <td className="py-2 pr-4">
-                                <div className="font-semibold text-primary">{row.symbol}</div>
-                                {row.name && <div className="text-xs text-subtle">{row.name}</div>}
-                            </td>
-                            <td className="py-2 pr-4">
-                                {typeof row.score === "number" ? row.score.toFixed(2) : "—"}
-                            </td>
-                            <td className="py-2 pr-4">
-                                {typeof row.weight === "number" ? formatPercent(row.weight) : "—"}
-                            </td>
-                            {metricKeys.map((key) => {
-                                const isPriceChange = /price[_-]?change/i.test(key);
-                                let content: React.ReactNode = "—";
-                                if (isPriceChange) {
-                                    const pct = resolvePriceChangePercent(metricMap, key);
-                                    if (typeof pct === "number") {
-                                        const digits = Math.abs(pct) >= 100 ? 0 : 2;
-                                        content = (
-                                            <span className={pct >= 0 ? "text-positive" : "text-negative"}>
-                                                {formatPct(pct, digits)}
-                                            </span>
+        <div className="space-y-4">
+            {rows.map((row, idx) => {
+                const metricMap = buildNormalizedMap(row.metrics);
+                const baseRank = row.rank ?? idx + 1;
+                const scoreValue =
+                    typeof row.score === "number"
+                        ? row.score.toFixed(2)
+                        : "—";
+                const weightValue =
+                    typeof row.weight === "number"
+                        ? formatPercent(row.weight)
+                        : "—";
+
+                return (
+                    <article
+                        key={`${row.symbol}-${idx}`}
+                        className="rounded-3xl border border-soft bg-surface p-5 shadow-[0_18px_45px_rgba(10,35,66,0.08)] transition-shadow hover:shadow-[0_24px_65px_rgba(10,35,66,0.12)]"
+                    >
+                        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                            <div className="flex items-start gap-4">
+                                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary text-base font-semibold text-white shadow-[0_10px_25px_rgba(10,35,66,0.25)]">
+                                    #{baseRank}
+                                </div>
+                                <div>
+                                    <div className="text-lg font-semibold text-primary">
+                                        {row.symbol}
+                                    </div>
+                                    {row.name && (
+                                        <div className="text-sm text-subtle">{row.name}</div>
+                                    )}
+                                </div>
+                            </div>
+                            <div className="flex flex-wrap gap-3">
+                                <MetricBadge label="Score" value={scoreValue} tone="primary" />
+                                <MetricBadge label="Waga" value={weightValue} />
+                                {metricKeys.map((key) => {
+                                    const label = prettifyMetricLabel(key);
+                                    const isPriceChange = /price[_-]?change/i.test(key);
+                                    let tone: MetricTone = "neutral";
+                                    let valueNode: React.ReactNode = (
+                                        <span className="text-subtle">—</span>
+                                    );
+
+                                    if (isPriceChange) {
+                                        const pct = resolvePriceChangePercent(
+                                            metricMap,
+                                            key
                                         );
+                                        if (typeof pct === "number") {
+                                            const digits =
+                                                Math.abs(pct) >= 100 ? 0 : 2;
+                                            tone =
+                                                pct > 0
+                                                    ? "positive"
+                                                    : pct < 0
+                                                        ? "negative"
+                                                        : "neutral";
+                                            valueNode = (
+                                                <span className="flex items-baseline gap-1">
+                                                    {pct !== 0 && (
+                                                        <span className="text-xs font-semibold">
+                                                            {pct > 0 ? "▲" : "▼"}
+                                                        </span>
+                                                    )}
+                                                    <span>{formatPct(pct, digits)}</span>
+                                                </span>
+                                            );
+                                        }
+                                    } else {
+                                        const normalizedKey =
+                                            normalizeMetricKey(key);
+                                        const fromMap = metricMap.get(
+                                            normalizedKey
+                                        );
+                                        const direct = row.metrics?.[key];
+                                        const numeric =
+                                            typeof direct === "number" &&
+                                            Number.isFinite(direct)
+                                                ? direct
+                                                : typeof fromMap === "number"
+                                                    ? fromMap
+                                                    : undefined;
+                                        if (typeof numeric === "number") {
+                                            tone =
+                                                numeric < 0
+                                                    ? "negative"
+                                                    : shouldHighlightPositiveMetric(key)
+                                                        ? "positive"
+                                                        : "neutral";
+                                            valueNode = (
+                                                <span>{formatMetricNumber(numeric)}</span>
+                                            );
+                                        }
                                     }
-                                } else if (
-                                    row.metrics &&
-                                    typeof row.metrics[key] === "number" &&
-                                    Number.isFinite(row.metrics[key])
-                                ) {
-                                    content = row.metrics[key].toFixed(2);
-                                }
-                                return (
-                                    <td key={key} className="py-2 pr-4">
-                                        {content}
-                                    </td>
-                                );
-                            })}
-                        </tr>
-                        );
-                    })}
-                </tbody>
-            </table>
+
+                                    return (
+                                        <MetricBadge
+                                            key={key}
+                                            label={label}
+                                            value={valueNode}
+                                            tone={tone}
+                                        />
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    </article>
+                );
+            })}
         </div>
     );
 }
