@@ -699,6 +699,19 @@ def test_price_change_metric_returns_percent():
     assert result == pytest.approx(50.0)
 
 
+def test_rsi_metric_uses_average_gains_and_losses():
+    closes = [
+        (date(2023, 1, 1), 100.0),
+        (date(2023, 1, 2), 102.0),
+        (date(2023, 1, 3), 101.0),
+        (date(2023, 1, 4), 105.0),
+        (date(2023, 1, 5), 103.0),
+    ]
+
+    result = main._compute_metric_value(closes, "rsi", 4)
+    assert result == pytest.approx(67.3829888632)
+
+
 def test_percentile_after_scale_changes_ranking():
     data = {
         "AAA": [

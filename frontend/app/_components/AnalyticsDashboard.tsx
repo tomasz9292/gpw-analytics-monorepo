@@ -368,7 +368,13 @@ type ScoreMetricLookbackConfig = {
 type ScoreMetricOption = {
     value: string;
     label: string;
-    backendMetric: "total_return" | "volatility" | "max_drawdown" | "sharpe" | "price_change";
+    backendMetric:
+        | "total_return"
+        | "volatility"
+        | "max_drawdown"
+        | "sharpe"
+        | "price_change"
+        | "rsi";
     lookback: number;
     defaultDirection: "asc" | "desc";
     description?: string;
@@ -446,6 +452,29 @@ const SCORE_METRIC_OPTIONS: ScoreMetricOption[] = [
             ],
             formatLabel: (lookbackDays) =>
                 `Zmiana ceny (${lookbackDays} dni)`,
+        },
+    },
+    {
+        value: "rsi_custom",
+        label: "RSI (dowolny okres)",
+        backendMetric: "rsi",
+        lookback: 14,
+        defaultDirection: "asc",
+        description:
+            "Wskaźnik siły względnej (RSI) z możliwością wyboru horyzontu w dniach.",
+        customLookback: {
+            min: 5,
+            max: 365,
+            step: 1,
+            default: 14,
+            presets: [
+                { label: "7 dni", value: 7 },
+                { label: "14 dni", value: 14 },
+                { label: "21 dni", value: 21 },
+                { label: "28 dni", value: 28 },
+                { label: "63 dni", value: 63 },
+            ],
+            formatLabel: (lookbackDays) => `RSI (${lookbackDays} dni)`,
         },
     },
 ];
