@@ -209,7 +209,7 @@ const ChartBrushTraveller: React.FC<BrushTravellerProps> = ({
 const CHART_BRUSH_COMMON_PROPS = {
     className: CHART_BRUSH_CLASS,
     travellerWidth: CHART_BRUSH_TRAVELLER_WIDTH,
-    traveller: React.createElement(ChartBrushTraveller, {} as BrushTravellerProps),
+    traveller: (props: BrushTravellerProps) => <ChartBrushTraveller {...props} />,
     stroke: CHART_BRUSH_STROKE,
     fill: CHART_BRUSH_BACKGROUND_FILL,
 } satisfies Partial<BrushProps>;
