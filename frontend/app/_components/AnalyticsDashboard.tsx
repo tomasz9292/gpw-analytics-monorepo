@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useMemo, useState, useEffect, useId, useCallback, useRef } from "react";
+import type { SVGAttributes } from "react";
 import { createPortal } from "react-dom";
 import Image from "next/image";
 import Link from "next/link";
@@ -24,7 +25,15 @@ import type { TooltipContentProps } from "recharts";
 import type { CategoricalChartFunc } from "recharts/types/chart/types";
 import type { MouseHandlerDataParam } from "recharts/types/synchronisation/types";
 import type { BrushStartEndIndex } from "recharts/types/context/brushUpdateContext";
-import type { Props as BrushProps, TravellerProps } from "recharts/types/cartesian/Brush";
+import type { Props as BrushProps } from "recharts/types/cartesian/Brush";
+
+type BrushTravellerProps = {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    stroke?: SVGAttributes<SVGElement>["stroke"];
+};
 
 declare global {
     interface Window {
@@ -150,7 +159,7 @@ const CHART_BRUSH_STROKE = "#2563EB";
 const CHART_BRUSH_BACKGROUND_FILL = "#E7EEFF";
 const CHART_BRUSH_TRAVELLER_WIDTH = 18;
 
-const ChartBrushTraveller: React.FC<TravellerProps> = ({
+const ChartBrushTraveller: React.FC<BrushTravellerProps> = ({
     x,
     y,
     width,
