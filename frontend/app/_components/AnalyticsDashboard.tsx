@@ -8551,7 +8551,7 @@ function ScoreRankingTable({ rows }: { rows: ScorePreviewRow[] }) {
 
         return (
             <span
-                className={`inline-flex items-center gap-1 rounded-xl px-3 py-1 text-sm font-semibold shadow-[0_1px_3px_rgba(10,35,66,0.08)] ${METRIC_TONE_PILL_STYLES[tone]}`}
+                className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-sm font-medium ${METRIC_TONE_PILL_STYLES[tone]}`}
             >
                 {value}
             </span>
@@ -8559,24 +8559,23 @@ function ScoreRankingTable({ rows }: { rows: ScorePreviewRow[] }) {
     };
 
     return (
-        <div className="rounded-3xl border border-soft bg-surface shadow-[0_18px_45px_rgba(10,35,66,0.08)]">
-            <div className="overflow-x-auto">
-                <table className="min-w-full text-sm">
-                    <thead className="bg-soft-surface/80 text-left text-xs font-semibold uppercase tracking-wide text-subtle">
-                        <tr>
-                            <th className="px-4 py-3 text-center">#</th>
-                            <th className="px-4 py-3">Spółka</th>
-                            <th className="px-4 py-3">Score</th>
-                            <th className="px-4 py-3">Waga</th>
-                            {metricKeys.map((key) => (
-                                <th key={key} className="px-4 py-3">
-                                    {prettifyMetricLabel(key)}
-                                </th>
-                            ))}
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {rows.map((row, idx) => {
+        <div className="overflow-x-auto rounded-xl border border-soft bg-white">
+            <table className="min-w-full text-sm">
+                <thead className="bg-soft-surface text-left text-xs font-semibold uppercase tracking-wide text-muted">
+                    <tr className="border-b border-soft">
+                        <th className="px-4 py-3 text-center">#</th>
+                        <th className="px-4 py-3">Spółka</th>
+                        <th className="px-4 py-3">Score</th>
+                        <th className="px-4 py-3">Waga</th>
+                        {metricKeys.map((key) => (
+                            <th key={key} className="px-4 py-3">
+                                {prettifyMetricLabel(key)}
+                            </th>
+                        ))}
+                    </tr>
+                </thead>
+                <tbody className="divide-y divide-soft">
+                    {rows.map((row, idx) => {
                             const metricMap = buildNormalizedMap(row.metrics);
                             const baseRank = row.rank ?? idx + 1;
                             const scoreValue =
@@ -8587,15 +8586,10 @@ function ScoreRankingTable({ rows }: { rows: ScorePreviewRow[] }) {
                                 typeof row.weight === "number"
                                     ? formatPercent(row.weight)
                                     : "—";
-                            const rowBackground =
-                                idx % 2 === 0
-                                    ? "bg-white/70"
-                                    : "bg-soft-surface/60";
-
                             return (
                                 <tr
                                     key={`${row.symbol}-${idx}`}
-                                    className={`${rowBackground} border-t border-soft transition-colors hover:bg-white`}
+                                    className="bg-white"
                                 >
                                     <td className="px-4 py-3 text-center text-sm font-semibold text-primary">
                                         {baseRank}
@@ -8644,9 +8638,8 @@ function ScoreRankingTable({ rows }: { rows: ScorePreviewRow[] }) {
                                 </tr>
                             );
                         })}
-                    </tbody>
-                </table>
-            </div>
+                </tbody>
+            </table>
         </div>
     );
 }
