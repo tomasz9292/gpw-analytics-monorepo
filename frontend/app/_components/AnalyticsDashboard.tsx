@@ -10791,62 +10791,6 @@ function MetricRulePreview({
                                 </div>
                             </div>
                             <div className="space-y-6">
-                                <div className="space-y-2">
-                                    <div className="relative h-64 rounded-2xl border border-soft bg-surface px-3 py-4">
-                                        {sliderAvailable ? (
-                                            <ResponsiveContainer width="100%" height="100%">
-                                                <AreaChart
-                                                    data={brushData}
-                                                    margin={{ top: 8, right: 16, left: 0, bottom: 48 }}
-                                                >
-                                                    <XAxis
-                                                        dataKey="date"
-                                                        tickFormatter={brushTickFormatter}
-                                                        tick={{ fontSize: 10, fill: "#64748B" }}
-                                                        tickMargin={12}
-                                                        axisLine={false}
-                                                        tickLine={false}
-                                                        minTickGap={32}
-                                                    />
-                                                    <YAxis hide domain={["auto", "auto"]} />
-                                                    <Area
-                                                        type="monotone"
-                                                        dataKey="close"
-                                                        stroke={chartStrokeColor}
-                                                        fill={chartPrimaryColor}
-                                                        fillOpacity={0.15}
-                                                        isAnimationActive={false}
-                                                        dot={false}
-                                                    />
-                                                    <Brush
-                                                        {...CHART_BRUSH_COMMON_PROPS}
-                                                        dataKey="date"
-                                                        height={56}
-                                                        startIndex={windowRange?.startIndex}
-                                                        endIndex={windowRange?.endIndex}
-                                                        onChange={handleBrushSelectionChange}
-                                                        onDragEnd={handleBrushSelectionChange}
-                                                    />
-                                                </AreaChart>
-                                            </ResponsiveContainer>
-                                        ) : !chartLoading ? (
-                                            <div className="flex h-full items-center justify-center text-xs text-subtle">
-                                                Brak danych historycznych.
-                                            </div>
-                                        ) : null}
-                                        {chartLoading ? (
-                                            <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-white/80 text-xs text-subtle backdrop-blur-sm">
-                                                Ładowanie wykresu…
-                                            </div>
-                                        ) : null}
-                                    </div>
-                                    {sliderAvailable ? (
-                                        <div className="flex justify-between text-xs text-muted">
-                                            <span>{windowStartDate ?? "—"}</span>
-                                            <span>{windowEndDate ?? "—"}</span>
-                                        </div>
-                                    ) : null}
-                                </div>
                                 <div className="relative h-64">
                                     {chartData.length ? (
                                         <ResponsiveContainer width="100%" height="100%">
@@ -10911,6 +10855,62 @@ function MetricRulePreview({
                                     {chartLoading ? (
                                         <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-white/80 text-xs text-subtle backdrop-blur-sm">
                                             Ładowanie wykresu…
+                                        </div>
+                                    ) : null}
+                                </div>
+                                <div className="space-y-2">
+                                    <div className="relative h-32 rounded-2xl border border-soft bg-surface px-3 py-4">
+                                        {sliderAvailable ? (
+                                            <ResponsiveContainer width="100%" height="100%">
+                                                <AreaChart
+                                                    data={brushData}
+                                                    margin={{ top: 8, right: 16, left: 0, bottom: 16 }}
+                                                >
+                                                    <XAxis
+                                                        dataKey="date"
+                                                        tickFormatter={brushTickFormatter}
+                                                        tick={{ fontSize: 10, fill: "#64748B" }}
+                                                        tickMargin={12}
+                                                        axisLine={false}
+                                                        tickLine={false}
+                                                        minTickGap={32}
+                                                    />
+                                                    <YAxis hide domain={["auto", "auto"]} />
+                                                    <Area
+                                                        type="monotone"
+                                                        dataKey="close"
+                                                        stroke={chartStrokeColor}
+                                                        fill={chartPrimaryColor}
+                                                        fillOpacity={0.15}
+                                                        isAnimationActive={false}
+                                                        dot={false}
+                                                    />
+                                                    <Brush
+                                                        {...CHART_BRUSH_COMMON_PROPS}
+                                                        dataKey="date"
+                                                        height={48}
+                                                        startIndex={windowRange?.startIndex}
+                                                        endIndex={windowRange?.endIndex}
+                                                        onChange={handleBrushSelectionChange}
+                                                        onDragEnd={handleBrushSelectionChange}
+                                                    />
+                                                </AreaChart>
+                                            </ResponsiveContainer>
+                                        ) : !chartLoading ? (
+                                            <div className="flex h-full items-center justify-center text-xs text-subtle">
+                                                Brak danych historycznych.
+                                            </div>
+                                        ) : null}
+                                        {chartLoading ? (
+                                            <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-white/80 text-xs text-subtle backdrop-blur-sm">
+                                                Ładowanie wykresu…
+                                            </div>
+                                        ) : null}
+                                    </div>
+                                    {sliderAvailable ? (
+                                        <div className="flex justify-between text-xs text-muted">
+                                            <span>{windowStartDate ?? "—"}</span>
+                                            <span>{windowEndDate ?? "—"}</span>
                                         </div>
                                     ) : null}
                                 </div>
