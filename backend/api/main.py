@@ -252,6 +252,8 @@ ALLOWED_SCORE_METRICS = {
     "sharpe",
     "price_change",
     "rsi",
+    "distance_from_high",
+    "distance_from_low",
 }
 
 
@@ -4263,6 +4265,56 @@ def _compute_metric_value(
         return result
 
     window = _slice_closes_window(closes, lookback_days)
+
+    if metric in {"distance_from_high", "distance_from_low"}:
+        if not window:
+            if diagnose:
+                raise ScoreComputationError(
+                    (
+                        "Za mało notowań ({count}) do obliczenia metryki {metric} "
+                        "w horyzoncie {days} dni."
+                    ).format(count=0, metric=metric, days=lookback_days)
+                )
+            return None
+
+        last_close = window[-1][1]
+        if last_close <= 0:
+            if diagnose:
+                raise ScoreComputationError(
+                    "Ostatnia cena zamknięcia jest niepoprawna lub niedostępna."
+                )
+            return None
+
+        prices = [price for _, price in window if price > 0]
+        if not prices:
+            if diagnose:
+                raise ScoreComputationError(
+                    (
+                        "Za mało prawidłowych notowań do obliczenia metryki {metric} "
+                        "w horyzoncie {days} dni."
+                    ).format(metric=metric, days=lookback_days)
+                )
+            return None
+
+        if metric == "distance_from_high":
+            highest = max(prices)
+            if highest <= 0:
+                if diagnose:
+                    raise ScoreComputationError(
+                        "Brak prawidłowych danych do obliczenia odległości od maksimum."
+                    )
+                return None
+            return (highest - last_close) / highest
+
+        lowest = min(prices)
+        if lowest <= 0:
+            if diagnose:
+                raise ScoreComputationError(
+                    "Brak prawidłowych danych do obliczenia odległości od minimum."
+                )
+            return None
+        return (last_close - lowest) / lowest
+
     if len(window) < 2:
         if diagnose:
             raise ScoreComputationError(

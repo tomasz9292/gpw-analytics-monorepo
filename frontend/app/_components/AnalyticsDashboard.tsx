@@ -144,6 +144,8 @@ const PERCENT_BASED_SCORE_METRICS = new Set<ScoreComponentRequest["metric"]>([
     "total_return",
     "volatility",
     "max_drawdown",
+    "distance_from_high",
+    "distance_from_low",
 ]);
 
 type PortfolioSimulationStage = "preparing" | "ranking" | "building" | "finalizing";
@@ -374,7 +376,9 @@ type ScoreMetricOption = {
         | "max_drawdown"
         | "sharpe"
         | "price_change"
-        | "rsi";
+        | "rsi"
+        | "distance_from_high"
+        | "distance_from_low";
     lookback: number;
     defaultDirection: "asc" | "desc";
     description?: string;
@@ -429,6 +433,24 @@ const SCORE_METRIC_OPTIONS: ScoreMetricOption[] = [
         lookback: 252,
         defaultDirection: "desc",
         description: "Współczynnik Sharpe'a liczony na danych dziennych (ostatni rok).",
+    },
+    {
+        value: "distance_from_high_252",
+        label: "Odległość od 52-tyg. maksimum",
+        backendMetric: "distance_from_high",
+        lookback: 252,
+        defaultDirection: "asc",
+        description:
+            "Procentowe odchylenie od najwyższej ceny zamknięcia w ostatnim roku (niżej = bliżej szczytu).",
+    },
+    {
+        value: "distance_from_low_252",
+        label: "Odległość od 52-tyg. minimum",
+        backendMetric: "distance_from_low",
+        lookback: 252,
+        defaultDirection: "desc",
+        description:
+            "Procentowy dystans od najniższej ceny zamknięcia w ostatnim roku (wyżej = dalej od dna).",
     },
     {
         value: "total_return_custom",
