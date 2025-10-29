@@ -9349,6 +9349,7 @@ function PriceChart({
     comparisonSeries?: ComparisonSeries[];
 }) {
     const gradientId = useId();
+    const brushGradientId = useId();
     const priceFormatter = useMemo(
         () =>
             new Intl.NumberFormat("pl-PL", {
@@ -9436,6 +9437,24 @@ function PriceChart({
             return { ...row, change, changePct };
         });
     }, [brushDataRows]);
+
+    const brushDomain = useMemo<[number, number] | null>(() => {
+        if (!brushChartData?.length) return null;
+        let min = brushChartData[0].close;
+        let max = brushChartData[0].close;
+        for (const point of brushChartData) {
+            if (point.close < min) min = point.close;
+            if (point.close > max) max = point.close;
+        }
+        if (!Number.isFinite(min) || !Number.isFinite(max)) {
+            return null;
+        }
+        if (min === max) {
+            const padding = min === 0 ? 1 : Math.abs(min) * 0.02;
+            return [min - padding, max + padding];
+        }
+        return [min, max];
+    }, [brushChartData]);
 
     const hasComparisons = comparisonDescriptors.some((descriptor) => descriptor.hasData);
 
@@ -9975,31 +9994,50 @@ function PriceChart({
                 </div>
             )}
             {showBrushControls && brushChartData && (
-                <div className="h-24 rounded-lg border border-soft bg-surface px-2 py-2">
+                <div className="h-20 rounded-lg border border-soft bg-surface px-2.5 py-2">
                     <ResponsiveContainer width="100%" height="100%">
-                        <AreaChart data={brushChartData} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+                        <AreaChart
+                            data={brushChartData}
+                            margin={{ top: 6, right: 16, left: 0, bottom: 0 }}
+                        >
+                            <defs>
+                                <linearGradient id={brushGradientId} x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="0%" stopColor="#2563EB" stopOpacity={0.3} />
+                                    <stop offset="100%" stopColor="#2563EB" stopOpacity={0} />
+                                </linearGradient>
+                            </defs>
+                            <CartesianGrid stroke="#E2E8F0" vertical horizontal={false} strokeDasharray="3 3" />
                             <XAxis
                                 dataKey="date"
                                 tickFormatter={brushTickFormatter}
-                                tick={{ fontSize: 10, fill: "#64748B" }}
-                                axisLine={false}
+                                tick={{ fontSize: 10, fill: "#475569" }}
+                                axisLine={{ stroke: "#E2E8F0" }}
                                 tickLine={false}
-                                minTickGap={32}
+                                minTickGap={28}
+                                tickMargin={8}
                             />
-                            <YAxis hide domain={["auto", "auto"]} />
+                            <YAxis
+                                hide
+                                domain={
+                                    brushDomain
+                                        ? [brushDomain[0], brushDomain[1]]
+                                        : ["auto", "auto"]
+                                }
+                            />
                             <Area
                                 type="monotone"
                                 dataKey="close"
-                                stroke={strokeColor}
-                                fill={primaryColor}
-                                fillOpacity={0.15}
+                                stroke="#2563EB"
+                                strokeWidth={1.5}
+                                fill={`url(#${brushGradientId})`}
+                                fillOpacity={1}
                                 isAnimationActive={false}
                                 dot={false}
                             />
                             <Brush
                                 {...CHART_BRUSH_COMMON_PROPS}
                                 dataKey="date"
-                                height={30}
+                                height={34}
                                 startIndex={brushRange?.startIndex}
                                 endIndex={brushRange?.endIndex}
                                 onChange={handleBrushUpdate}
