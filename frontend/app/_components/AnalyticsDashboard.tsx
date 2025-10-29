@@ -10152,6 +10152,7 @@ function MetricRulePreview({
             chartRowsRef.current = [];
             lastFetchParamsRef.current = null;
             previousSymbolRef.current = null;
+            setChartLoading(false);
             return;
         }
 
@@ -10721,12 +10722,8 @@ function MetricRulePreview({
                                     </div>
                                 </div>
                             </div>
-                            <div className="h-64">
-                                {chartLoading ? (
-                                    <div className="flex h-full items-center justify-center text-xs text-subtle">
-                                        Ładowanie wykresu…
-                                    </div>
-                                ) : chartData.length ? (
+                            <div className="relative h-64">
+                                {chartData.length ? (
                                     <ResponsiveContainer width="100%" height="100%">
                                         <AreaChart
                                             data={chartData}
@@ -10781,11 +10778,16 @@ function MetricRulePreview({
                                             />
                                         </AreaChart>
                                     </ResponsiveContainer>
-                                ) : (
+                                ) : !chartLoading ? (
                                     <div className="flex h-full items-center justify-center text-xs text-subtle">
                                         Brak danych cenowych dla wybranego zakresu.
                                     </div>
-                                )}
+                                ) : null}
+                                {chartLoading ? (
+                                    <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-white/80 text-xs text-subtle backdrop-blur-sm">
+                                        Ładowanie wykresu…
+                                    </div>
+                                ) : null}
                             </div>
                             {sliderAvailable ? (
                                 <div className="space-y-2">
