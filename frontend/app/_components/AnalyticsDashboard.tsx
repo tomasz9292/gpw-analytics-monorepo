@@ -3185,10 +3185,10 @@ const Card = ({
     right?: React.ReactNode;
     children: React.ReactNode;
 }) => (
-    <div className="rounded-3xl border border-slate-200/70 bg-white shadow-[0_18px_40px_rgba(15,23,42,0.08)]">
+    <div className="rounded-3xl border border-soft bg-surface shadow-[0_18px_40px_rgba(15,23,42,0.08)]">
         {(title || right) && (
-            <div className="flex flex-col gap-3 border-b border-slate-200/60 px-5 py-4 md:flex-row md:items-center md:justify-between md:px-8">
-                {title && <div className="text-lg font-semibold text-slate-900 md:flex-1">{title}</div>}
+            <div className="flex flex-col gap-3 border-b border-soft/60 px-5 py-4 md:flex-row md:items-center md:justify-between md:px-8">
+                {title && <div className="text-lg font-semibold text-neutral md:flex-1">{title}</div>}
                 {right && (
                     <div className="flex w-full flex-wrap gap-2 sm:w-auto sm:justify-end">{right}</div>
                 )}
@@ -3217,16 +3217,16 @@ const Section = ({
         <div className="flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
             <div className="space-y-3">
                 {kicker && (
-                    <span className="text-xs font-semibold uppercase tracking-[0.28em] text-blue-600">
+                    <span className="text-xs font-semibold uppercase tracking-[0.28em] text-primary">
                         {kicker}
                     </span>
                 )}
                 <div className="space-y-2">
-                    <h2 className="text-3xl font-semibold text-slate-900 md:text-[2.5rem]">
+                    <h2 className="text-3xl font-semibold text-neutral md:text-[2.5rem]">
                         {title}
                     </h2>
                     {description && (
-                        <p className="max-w-3xl text-base text-slate-500">{description}</p>
+                        <p className="max-w-3xl text-base text-subtle">{description}</p>
                     )}
                 </div>
             </div>
@@ -5350,8 +5350,8 @@ const CompanySyncPanel = ({ symbol, setSymbol }: CompanySyncPanelProps) => {
                         <form onSubmit={handleUniverseSubmit} className="space-y-4">
                             <p className="text-sm text-muted">
                                 Wpisz filtry dokładnie w takim formacie, w jakim przesyła je frontend
-                                (np. <code className="rounded bg-slate-100 px-1">index:WIG40</code> lub
-                                <code className="rounded bg-slate-100 px-1">isin:PLLOTOS00025</code>).
+                                (np. <code className="rounded bg-soft-surface px-1">index:WIG40</code> lub
+                                <code className="rounded bg-soft-surface px-1">isin:PLLOTOS00025</code>).
                             </p>
                             <label className="flex flex-col gap-2 text-sm font-medium text-primary">
                                 <span>Filtry uniwersum</span>
@@ -5363,7 +5363,7 @@ const CompanySyncPanel = ({ symbol, setSymbol }: CompanySyncPanelProps) => {
                                 />
                                 <span className="text-xs font-normal text-subtle">
                                     Oddziel filtry spacją, przecinkiem lub nową linią. Prefiks
-                                    <code className="mx-1 rounded bg-slate-100 px-1">index:</code>
+                                    <code className="mx-1 rounded bg-soft-surface px-1">index:</code>
                                     wczytuje skład indeksu z tabel GPW Benchmark.
                                 </span>
                             </label>
@@ -5434,7 +5434,7 @@ const CompanySyncPanel = ({ symbol, setSymbol }: CompanySyncPanelProps) => {
                             {universeCandidates.length > 0 && (
                                 <div className="overflow-auto rounded-xl border border-soft">
                                     <table className="min-w-full divide-y divide-soft text-sm">
-                                        <thead className="bg-slate-50 text-xs uppercase tracking-wide text-subtle">
+                                        <thead className="bg-soft-surface text-xs uppercase tracking-wide text-subtle">
                                             <tr>
                                                 <th className="px-3 py-2 text-left font-semibold">#</th>
                                                 <th className="px-3 py-2 text-left font-semibold">Symbol</th>
@@ -6889,7 +6889,7 @@ const CompanySyncPanel = ({ symbol, setSymbol }: CompanySyncPanelProps) => {
                                                                 )
                                                             }
                                                             placeholder="np. CDR.WA"
-                                                            className="w-full rounded-xl border border-soft bg-white px-3 py-2 text-sm text-primary shadow-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/40 sm:w-40"
+                                                            className="w-full rounded-xl border border-soft bg-surface px-3 py-2 text-sm text-primary shadow-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/40 sm:w-40"
                                                         />
                                                         <button
                                                             type="button"
@@ -7983,7 +7983,7 @@ const SidebarContent = ({
                             {collapsed ? "Zaloguj" : "Zaloguj się"}
                         </button>
                         <button
-                            className={`w-full rounded-2xl bg-white font-semibold text-[#0f172a] shadow transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60 ${
+                            className={`w-full rounded-2xl bg-surface font-semibold text-[#0f172a] shadow transition hover:bg-soft-surface disabled:cursor-not-allowed disabled:opacity-60 ${
                                 collapsed ? "py-2" : "px-4 py-3"
                             }`}
                             onClick={() => openAuthDialog("signup")}
@@ -8029,8 +8029,8 @@ const Chip = ({
         title={title}
         className={`inline-flex items-center justify-center rounded-full border px-3 py-1.5 text-sm font-medium transition ${
             active
-                ? "border-blue-500 bg-blue-500/10 text-blue-600 shadow-[0_12px_32px_rgba(37,99,235,0.25)]"
-                : "border-slate-200 bg-white text-slate-600 hover:border-blue-300 hover:text-blue-600 hover:shadow-[0_12px_32px_rgba(148,163,184,0.18)]"
+                ? "border-primary bg-primary-glow text-primary shadow-primary-glow"
+                : "border-soft bg-surface text-muted hover:border-primary hover:text-primary hover:shadow-primary-glow"
         } ${className ?? ""}`}
     >
         {children}
@@ -8038,7 +8038,7 @@ const Chip = ({
 );
 
 const inputBaseClasses =
-    "rounded-xl border border-soft bg-surface px-3 py-2 text-neutral focus:outline-none focus:border-[var(--color-tech)] focus:ring-2 focus:ring-[rgba(52,152,219,0.15)] disabled:cursor-not-allowed disabled:opacity-60";
+    "rounded-xl border border-soft bg-surface px-3 py-2 text-neutral transition-colors focus:outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[rgba(16,163,127,0.25)] disabled:cursor-not-allowed disabled:opacity-60";
 
 const toRatio = (value: number) => {
     const abs = Math.abs(value);
@@ -8343,7 +8343,7 @@ function RebalanceTimeline({
                                         key={`${event.date}-${idx}`}
                                         type="button"
                                         onClick={() => setSelected(item)}
-                                        className="group w-full rounded-2xl border border-soft bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-[var(--color-primary)] hover:shadow-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]/40"
+                                        className="group w-full rounded-2xl border border-soft bg-surface p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-[var(--color-primary)] hover:shadow-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]/40"
                                     >
                                         <div className="flex items-start justify-between gap-3">
                                             <div className="text-sm font-semibold text-primary">{formattedDate}</div>
@@ -8378,7 +8378,7 @@ function RebalanceTimeline({
             {selected && (
                 <div className="fixed inset-0 z-40 flex items-center justify-center px-4 py-8">
                     <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={closeModal} />
-                    <div className="relative z-50 max-h-[90vh] w-full max-w-5xl overflow-hidden rounded-3xl bg-white p-6 shadow-2xl">
+                    <div className="relative z-50 max-h-[90vh] w-full max-w-5xl overflow-hidden rounded-3xl bg-surface p-6 shadow-2xl">
                         <div className="flex flex-wrap items-start justify-between gap-4">
                             <div>
                                 <div className="text-xs uppercase tracking-wide text-muted">{selected.event.date}</div>
@@ -8671,7 +8671,7 @@ function ScoreRankingTable({ rows }: { rows: ScorePreviewRow[] }) {
     };
 
     return (
-        <div className="overflow-x-auto rounded-xl border border-soft bg-white">
+        <div className="overflow-x-auto rounded-xl border border-soft bg-surface">
             <table className="min-w-full text-sm">
                 <thead className="bg-soft-surface text-left text-xs font-semibold uppercase tracking-wide text-muted">
                     <tr className="border-b border-soft">
@@ -8701,7 +8701,7 @@ function ScoreRankingTable({ rows }: { rows: ScorePreviewRow[] }) {
                             return (
                                 <tr
                                     key={`${row.symbol}-${idx}`}
-                                    className="bg-white"
+                                    className="bg-surface"
                                 >
                                     <td className="px-4 py-3 text-center text-sm font-semibold text-primary">
                                         {baseRank}
@@ -8829,7 +8829,7 @@ function Watchlist({
 
     if (!items.length) {
         return (
-            <div className="rounded-2xl border border-dashed border-slate-300 bg-white/60 p-6 text-sm text-slate-500">
+            <div className="rounded-2xl border border-dashed border-soft bg-white/60 p-6 text-sm text-subtle">
                 Dodaj spółkę powyżej, aby zbudować własną listę obserwacyjną.
             </div>
         );
@@ -8864,7 +8864,7 @@ function Watchlist({
                         ? "text-emerald-600"
                         : direction === "down"
                         ? "text-rose-600"
-                        : "text-slate-500";
+                        : "text-subtle";
                 const changeLabel = formattedChange
                     ? `${direction === "down" ? "−" : direction === "up" ? "+" : ""}${formattedChange} zł${
                           formattedChangePct ? ` (${formattedChangePct}%)` : ""
@@ -8876,22 +8876,22 @@ function Watchlist({
                         key={s}
                         type="button"
                         onClick={() => onPick(s)}
-                        className={`group relative flex w-full flex-col rounded-2xl border bg-white/95 p-4 text-left shadow-[0_18px_42px_rgba(15,23,42,0.12)] transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/40 focus-visible:ring-offset-2 focus-visible:ring-offset-white ${
+                        className={`group relative flex w-full flex-col rounded-2xl border bg-white/95 p-4 text-left shadow-[0_18px_42px_rgba(15,23,42,0.12)] transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-soft focus-visible:ring-offset-2 focus-visible:ring-offset-primary-soft ${
                             s === current
-                                ? "-translate-y-0.5 border-blue-500 shadow-[0_26px_60px_rgba(37,99,235,0.25)]"
-                                : "border-slate-200 hover:-translate-y-1 hover:border-blue-300 hover:shadow-[0_24px_60px_rgba(148,163,184,0.22)]"
+                                ? "-translate-y-0.5 border-primary shadow-primary-glow"
+                                : "border-soft hover:-translate-y-1 hover:border-primary hover:shadow-primary-glow"
                         }`}
                         aria-pressed={s === current}
                     >
                         <div className="flex items-start justify-between gap-3">
                             <div>
-                                <p className="text-xs font-semibold uppercase tracking-[0.32em] text-slate-400">
+                                <p className="text-xs font-semibold uppercase tracking-[0.32em] text-subtle">
                                     Symbol
                                 </p>
-                                <div className="mt-2 text-lg font-semibold text-slate-900">
+                                <div className="mt-2 text-lg font-semibold text-neutral">
                                     {label}
                                     {label !== s ? (
-                                        <span className="ml-2 text-sm font-medium text-slate-400">{s}</span>
+                                        <span className="ml-2 text-sm font-medium text-subtle">{s}</span>
                                     ) : null}
                                 </div>
                             </div>
@@ -8903,16 +8903,16 @@ function Watchlist({
                         </div>
                         <div className="mt-6 flex items-end justify-between gap-4">
                             <div>
-                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                                <p className="text-xs font-semibold uppercase tracking-wide text-subtle">
                                     Kurs
                                 </p>
-                                <p className="mt-1 text-2xl font-semibold text-slate-900">{priceLabel}</p>
+                                <p className="mt-1 text-2xl font-semibold text-neutral">{priceLabel}</p>
                             </div>
                             <div className={`text-right text-sm font-semibold ${changeClass}`}>
                                 {changeLabel}
                             </div>
                         </div>
-                        <div className="mt-6 flex items-center justify-between text-xs text-slate-400">
+                        <div className="mt-6 flex items-center justify-between text-xs text-subtle">
                             <span>{snapshot?.kind === "index" ? "Indeks GPW" : "Akcje GPW"}</span>
                             <button
                                 type="button"
@@ -8920,7 +8920,7 @@ function Watchlist({
                                     event.stopPropagation();
                                     onRemove(s);
                                 }}
-                                className="inline-flex items-center gap-1 rounded-full border border-transparent px-2 py-1 font-semibold text-slate-500 transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/40 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
+                                className="inline-flex items-center gap-1 rounded-full border border-transparent px-2 py-1 font-semibold text-subtle transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/40 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
                                 aria-label={`Usuń ${label} z listy`}
                             >
                                 Usuń
@@ -13832,14 +13832,14 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                 />
             </aside>
             <div className="flex min-h-screen flex-1 flex-col">
-                <header className="sticky top-0 z-30 border-b border-slate-200/80 bg-white/90 text-slate-700 shadow-[0_12px_30px_rgba(15,23,42,0.08)] backdrop-blur lg:hidden">
+                <header className="sticky top-0 z-30 border-b border-soft bg-white/90 text-muted shadow-[0_12px_30px_rgba(15,23,42,0.08)] backdrop-blur lg:hidden">
                     <div className="mx-auto w-full max-w-6xl px-4 py-2 md:px-8 md:py-3.5">
                         <div className="mb-1.5 flex items-center justify-between lg:mb-0">
                             <div className="flex items-center gap-2">
                                 <button
                                     type="button"
                                     onClick={() => setSidebarMobileOpen(true)}
-                                    className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-300/80 text-slate-600 transition hover:border-slate-400 hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 lg:hidden"
+                                    className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-soft/80 text-muted transition hover:border-primary hover:text-neutral focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 lg:hidden"
                                     aria-label="Otwórz menu"
                                     aria-expanded={sidebarMobileOpen}
                                 >
@@ -13858,7 +13858,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                         />
                                     </svg>
                                 </button>
-                                <span className="text-sm font-semibold text-slate-700 lg:hidden">GPW Analytics</span>
+                                <span className="text-sm font-semibold text-muted lg:hidden">GPW Analytics</span>
                             </div>
                         </div>
                         <div className="mt-6 hidden space-y-4">
@@ -13905,7 +13905,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                             Zaloguj się
                                         </button>
                                         <button
-                                            className="flex-1 rounded-lg bg-white px-4 py-2 text-sm font-semibold text-primary shadow-lg shadow-black/10 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                                            className="flex-1 rounded-lg bg-surface px-4 py-2 text-sm font-semibold text-primary shadow-lg shadow-black/10 transition hover:bg-soft-surface disabled:cursor-not-allowed disabled:opacity-60"
                                             onClick={() => openAuthDialog("signup")}
                                             disabled={authLoading}
                                         >
@@ -13941,22 +13941,22 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                     onClick={closeAuthDialog}
                 >
                     <div
-                        className="w-full max-w-lg rounded-3xl bg-white text-slate-900 shadow-2xl"
+                        className="w-full max-w-lg rounded-3xl bg-surface text-neutral shadow-2xl"
                         onClick={(event) => event.stopPropagation()}
                     >
-                        <div className="flex items-start justify-between border-b border-slate-100 px-6 py-5">
+                        <div className="flex items-start justify-between border-b border-soft px-6 py-5">
                             <div className="space-y-1">
-                                <p className="text-xs font-semibold uppercase tracking-[0.35em] text-slate-400">
+                                <p className="text-xs font-semibold uppercase tracking-[0.35em] text-subtle">
                                     {authDialogSectionLabel}
                                 </p>
-                                <h2 id="auth-dialog-title" className="text-xl font-semibold text-slate-900">
+                                <h2 id="auth-dialog-title" className="text-xl font-semibold text-neutral">
                                     {authDialogHeading}
                                 </h2>
                             </div>
                             <button
                                 type="button"
                                 onClick={closeAuthDialog}
-                                className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 text-lg text-slate-400 transition hover:border-slate-300 hover:text-slate-600"
+                                className="flex h-9 w-9 items-center justify-center rounded-full border border-soft text-lg text-subtle transition hover:border-soft hover:text-muted"
                                 aria-label="Zamknij okno logowania"
                             >
                                 ×
@@ -13967,39 +13967,39 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                 <button
                                     type="button"
                                     disabled
-                                    className="flex w-full items-center justify-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-400"
+                                    className="flex w-full items-center justify-center gap-3 rounded-xl border border-soft bg-soft-surface px-4 py-3 text-sm font-semibold text-subtle"
                                 >
                                     Kontynuuj przez Facebook
                                 </button>
                                 <button
                                     type="button"
                                     disabled
-                                    className="flex w-full items-center justify-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-400"
+                                    className="flex w-full items-center justify-center gap-3 rounded-xl border border-soft bg-soft-surface px-4 py-3 text-sm font-semibold text-subtle"
                                 >
                                     Kontynuuj przez Apple
                                 </button>
                                 <button
                                     type="button"
                                     onClick={triggerGoogleAuth}
-                                    className="flex w-full items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-primary shadow hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                    className="flex w-full items-center justify-center gap-3 rounded-xl border border-soft bg-surface px-4 py-3 text-sm font-semibold text-primary shadow hover:bg-soft-surface disabled:cursor-not-allowed disabled:opacity-60"
                                     disabled={authLoading || !GOOGLE_CLIENT_ID}
                                 >
                                     {authLoading ? "Ładowanie logowania..." : "Kontynuuj przez konto Google"}
                                 </button>
                             </div>
-                            <div className="flex items-center gap-3 text-slate-400">
-                                <span className="h-px flex-1 bg-slate-200" />
+                            <div className="flex items-center gap-3 text-subtle">
+                                <span className="h-px flex-1 bg-soft-surface" />
                                 <span className="text-xs uppercase tracking-[0.3em]">lub</span>
-                                <span className="h-px flex-1 bg-slate-200" />
+                                <span className="h-px flex-1 bg-soft-surface" />
                             </div>
-                            <div className="flex items-center gap-2 rounded-full bg-slate-100 p-1 text-sm font-semibold text-slate-500">
+                            <div className="flex items-center gap-2 rounded-full bg-soft-surface p-1 text-sm font-semibold text-subtle">
                                 <button
                                     type="button"
                                     onClick={() => setAuthDialogMode("login")}
                                     className={`flex-1 rounded-full px-4 py-2 transition ${
                                         authDialogMode === "login"
-                                            ? "bg-white text-slate-900 shadow"
-                                            : "hover:text-slate-700"
+                                            ? "bg-surface text-neutral shadow"
+                                            : "hover:text-muted"
                                     }`}
                                 >
                                     Zaloguj się
@@ -14009,29 +14009,29 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                     onClick={() => setAuthDialogMode("signup")}
                                     className={`flex-1 rounded-full px-4 py-2 transition ${
                                         authDialogMode === "signup"
-                                            ? "bg-white text-slate-900 shadow"
-                                            : "hover:text-slate-700"
+                                            ? "bg-surface text-neutral shadow"
+                                            : "hover:text-muted"
                                     }`}
                                 >
                                     Załóż konto
                                 </button>
                             </div>
                             <div className="space-y-4">
-                                <label className="flex flex-col gap-2 text-sm font-medium text-slate-700">
+                                <label className="flex flex-col gap-2 text-sm font-medium text-muted">
                                     <span>E-mail</span>
                                     <input
                                         type="email"
                                         placeholder="adres@email.com"
-                                        className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-slate-500 shadow-inner"
+                                        className="rounded-xl border border-soft bg-soft-surface px-3 py-2 text-subtle shadow-inner"
                                         disabled
                                     />
                                 </label>
-                                <label className="flex flex-col gap-2 text-sm font-medium text-slate-700">
+                                <label className="flex flex-col gap-2 text-sm font-medium text-muted">
                                     <span>Hasło</span>
                                     <input
                                         type="password"
                                         placeholder="••••••••"
-                                        className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-slate-500 shadow-inner"
+                                        className="rounded-xl border border-soft bg-soft-surface px-3 py-2 text-subtle shadow-inner"
                                         disabled
                                     />
                                 </label>
@@ -14042,7 +14042,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                 >
                                     {authDialogCtaLabel}
                                 </button>
-                                <p className="text-xs text-slate-500">
+                                <p className="text-xs text-subtle">
                                     Obsługujemy obecnie logowanie przez Google. Formularz e-mailowy będzie dostępny wkrótce.
                                 </p>
                                 {(authError || profileError) && (
@@ -14119,20 +14119,20 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                 <div className="space-y-6">
                                     <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
                                         <div className="space-y-3">
-                                            <span className="inline-flex items-center rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.28em] text-blue-600">
+                                            <span className="inline-flex items-center rounded-full bg-primary-soft-glow px-3 py-1 text-xs font-semibold uppercase tracking-[0.28em] text-primary">
                                                 Listy obserwacyjne
                                             </span>
                                             <div className="space-y-2">
-                                                <h3 className="text-2xl font-semibold text-slate-900">
+                                                <h3 className="text-2xl font-semibold text-neutral">
                                                     Twoje spółki i indeksy
                                                 </h3>
-                                                <p className="max-w-xl text-sm text-slate-500">
+                                                <p className="max-w-xl text-sm text-subtle">
                                                     Masz {watch.length} instrument{watch.length === 1 ? "" : watch.length % 10 >= 2 && watch.length % 10 <= 4 && (watch.length % 100 < 10 || watch.length % 100 >= 20) ? "y" : "ów"} na bieżącej liście. Kliknij na pozycję, aby przełączyć moduły analizy poniżej.
                                                 </p>
                                             </div>
                                         </div>
                                         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
-                                            <div className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 p-1 shadow-inner">
+                                            <div className="inline-flex items-center gap-1 rounded-full border border-soft bg-soft-surface p-1 shadow-inner">
                                                 {watchlistSegments.map((segment) => (
                                                     <button
                                                         key={segment.value}
@@ -14140,12 +14140,12 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                         onClick={() => setWatchlistGroup(segment.value)}
                                                         className={`flex items-center gap-1 rounded-full px-4 py-2 text-xs font-semibold transition ${
                                                             watchlistGroup === segment.value
-                                                                ? "bg-white text-slate-900 shadow"
-                                                                : "text-slate-500 hover:text-slate-700"
+                                                                ? "bg-surface text-neutral shadow"
+                                                                : "text-subtle hover:text-muted"
                                                         }`}
                                                     >
                                                         {segment.label}
-                                                        <span className="text-[11px] font-medium text-slate-400">
+                                                        <span className="text-[11px] font-medium text-subtle">
                                                             {segment.count}
                                                         </span>
                                                     </button>
@@ -14153,7 +14153,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                             </div>
                                             <button
                                                 type="button"
-                                                className="inline-flex items-center gap-2 rounded-full bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-[0_15px_30px_rgba(37,99,235,0.35)] transition hover:bg-blue-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/60 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
+                                                className="inline-flex items-center gap-2 rounded-full bg-primary px-4 py-2 text-sm font-semibold text-white shadow-[0_15px_30px_rgba(16,163,127,0.35)] transition hover:bg-[color:color-mix(in_srgb,var(--color-primary)_92%,var(--color-primary-strong)_8%)] focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-strong focus-visible:ring-offset-2 focus-visible:ring-offset-primary-soft"
                                             >
                                                 <span className="text-lg leading-none">+</span>
                                                 Nowa lista obserwacyjna
@@ -14161,20 +14161,20 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                         </div>
                                     </div>
                                     <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                                        <p className="text-sm text-slate-500">
+                                        <p className="text-sm text-subtle">
                                             {activeWatchSegment ? `Wyświetlasz listę: ${activeWatchSegment.label}.` : "Wybierz listę, aby zmienić kontekst obserwacji."}
                                         </p>
                                         <div className="flex flex-wrap items-center gap-2">
                                             <button
                                                 type="button"
                                                 onClick={handleCycleWatchSort}
-                                                className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 transition hover:border-blue-300 hover:text-blue-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/50 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
+                                                className="inline-flex items-center gap-2 rounded-full border border-soft bg-surface px-4 py-2 text-sm font-semibold text-muted transition hover:border-primary hover:text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-soft focus-visible:ring-offset-2 focus-visible:ring-offset-primary-soft"
                                             >
                                                 Sortuj według {watchSortLabel}
                                             </button>
                                             <button
                                                 type="button"
-                                                className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 transition hover:border-blue-300 hover:text-blue-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/50 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
+                                                className="inline-flex items-center gap-2 rounded-full border border-soft bg-surface px-4 py-2 text-sm font-semibold text-muted transition hover:border-primary hover:text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-soft focus-visible:ring-offset-2 focus-visible:ring-offset-primary-soft"
                                             >
                                                 Wyświetl jako portfel
                                             </button>
@@ -14422,9 +14422,9 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                     <span className="text-xs text-subtle">
                                         Pozostaw puste, aby uwzględnić wszystkie spółki
                                         GPW dostępne w bazie danych. Możesz też łączyć kilka
-                                        indeksów, np. <code className="rounded bg-slate-100 px-1">index:MWIG40</code>{" "}
+                                        indeksów, np. <code className="rounded bg-soft-surface px-1">index:MWIG40</code>{" "}
                                         <span className="text-muted">+</span>{" "}
-                                        <code className="rounded bg-slate-100 px-1">index:SWIG80</code>,
+                                        <code className="rounded bg-soft-surface px-1">index:SWIG80</code>,
                                         oraz własne konfiguracje.
                                     </span>
                                     {benchmarkUniverseOptions.length > 0 && (
@@ -15241,7 +15241,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                     </button>
                                 </div>
                                 {customIndexFormOpen && (
-                                    <div className="space-y-3 rounded-xl border border-dashed border-soft bg-white px-4 py-4">
+                                    <div className="space-y-3 rounded-xl border border-dashed border-soft bg-surface px-4 py-4">
                                         <div className="grid gap-3 md:grid-cols-2">
                                             <label className="flex flex-col gap-2">
                                                 <span className="text-xs uppercase tracking-wide text-muted">
@@ -15353,7 +15353,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                             return (
                                                 <div
                                                     key={index.id}
-                                                    className="flex flex-wrap items-start justify-between gap-3 rounded-xl border border-soft bg-white px-3 py-3 shadow-sm"
+                                                    className="flex flex-wrap items-start justify-between gap-3 rounded-xl border border-soft bg-surface px-3 py-3 shadow-sm"
                                                 >
                                                     <div className="space-y-1">
                                                         <div className="text-sm font-semibold text-primary">
@@ -15826,9 +15826,9 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                     )}
                                                     <span className="text-xs text-subtle">
                                                         Możesz łączyć kilka indeksów oraz własne konfiguracje,
-                                                        np. <code className="rounded bg-slate-100 px-1">index:MWIG40</code>{" "}
+                                                        np. <code className="rounded bg-soft-surface px-1">index:MWIG40</code>{" "}
                                                         <span className="text-muted">+</span>{" "}
-                                                        <code className="rounded bg-slate-100 px-1">index:SWIG80</code>.
+                                                        <code className="rounded bg-soft-surface px-1">index:SWIG80</code>.
                                                     </span>
                                                 </label>
                                             </div>
@@ -16172,7 +16172,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                     onClick={() =>
                                                         setPfTimelineOpen((prev) => !prev)
                                                     }
-                                                    className="inline-flex items-center gap-2 rounded-full border border-soft bg-white px-4 py-2 text-sm font-semibold text-primary transition hover:border-[var(--color-primary)] hover:text-[var(--color-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]/40"
+                                                    className="inline-flex items-center gap-2 rounded-full border border-soft bg-surface px-4 py-2 text-sm font-semibold text-primary transition hover:border-[var(--color-primary)] hover:text-[var(--color-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]/40"
                                                     aria-expanded={pfTimelineOpen}
                                                 >
                                                     {pfTimelineOpen
