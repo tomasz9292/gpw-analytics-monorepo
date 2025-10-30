@@ -7387,7 +7387,7 @@ const SidebarToggleGlyph = ({ className }: { className?: string }) => (
 );
 
 const collapsedFloatingTooltipClass =
-    "pointer-events-none fixed z-[9999] -translate-y-1/2 whitespace-nowrap rounded-lg bg-primary-soft px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.28em] text-white shadow-brand-floating ring-1 ring-white/10";
+    "pointer-events-none fixed z-[9999] -translate-y-1/2 whitespace-nowrap rounded-lg bg-primary-soft px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.28em] text-neutral shadow-brand-floating ring-1 ring-[rgba(16,163,127,0.25)]";
 
 const SidebarNav = ({
     items,
@@ -7500,8 +7500,8 @@ const SidebarNav = ({
                                 collapsed ? "justify-center" : "gap-3"
                             } ${
                                 active
-                                    ? "bg-white/10 text-white shadow-[0_0_0_1px_rgba(255,255,255,0.08)]"
-                                    : "text-white/70 hover:border-white/10 hover:text-white hover:bg-white/5"
+                                    ? "bg-primary-soft text-primary shadow-[0_0_0_1px_rgba(16,163,127,0.2)]"
+                                    : "text-muted hover:border-soft hover:text-neutral hover:bg-soft-surface"
                             }`}
                             title={item.label}
                             onClick={() => onNavigate?.()}
@@ -7524,9 +7524,9 @@ const SidebarNav = ({
                                     aria-hidden
                                     className={`relative z-10 inline-flex items-center justify-center rounded-lg transition ${
                                         collapsed
-                                            ? "h-12 w-12 bg-white/5"
-                                            : "h-10 w-10 bg-white/10 group-hover:bg-white/15"
-                                    } ${active ? "text-white" : "text-white/60 group-hover:text-white"}`}
+                                            ? "h-12 w-12 bg-soft-surface"
+                                            : "h-10 w-10 bg-soft-surface group-hover:bg-primary-soft"
+                                    } ${active ? "text-primary" : "text-muted group-hover:text-neutral"}`}
                                 >
                                     <Icon className="h-5 w-5" />
                                 </span>
@@ -7545,8 +7545,8 @@ const SidebarNav = ({
                                     xmlns="http://www.w3.org/2000/svg"
                                     className={`relative z-10 h-4 w-4 transition ${
                                         active
-                                            ? "text-white"
-                                            : "text-white/40 group-hover:text-white/70"
+                                            ? "text-primary"
+                                            : "text-subtle group-hover:text-neutral"
                                     }`}
                                     aria-hidden
                                 >
@@ -7746,7 +7746,7 @@ const SidebarContent = ({
         ? "left-0 bottom-full mb-3"
         : "right-0 bottom-full mb-3";
     const accountMenuBaseClass =
-        "absolute z-20 flex flex-col gap-2 rounded-2xl border border-white/10 bg-primary-soft p-3 shadow-brand-elevated";
+        "absolute z-20 flex flex-col gap-2 rounded-2xl border border-soft bg-primary-soft p-3 shadow-brand-elevated";
     const accountMenuClassName = collapsed
         ? `${accountMenuBaseClass} ${accountMenuPositionClass} min-w-[260px]`
         : `${accountMenuBaseClass} ${accountMenuPositionClass} w-full`;
@@ -7763,10 +7763,10 @@ const SidebarContent = ({
         <div className="flex w-full items-center gap-3">
             <div className="group relative">{renderBrandBadge()}</div>
             <div className="leading-tight">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-white/50">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-muted">
                     GPW Analytics
                 </p>
-                <p className="text-base font-semibold text-white">Panel demo</p>
+                <p className="text-base font-semibold text-neutral">Panel demo</p>
             </div>
         </div>
     );
@@ -7774,7 +7774,7 @@ const SidebarContent = ({
         <button
             type="button"
             onClick={onToggleCollapse}
-            className="group relative flex h-10 w-10 items-center justify-center rounded-xl text-white transition focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-primary-strong hover:shadow-[0_0_0_1px_rgba(255,255,255,0.35)] active:shadow-[0_0_0_1px_rgba(255,255,255,0.35)]"
+            className="group relative flex h-10 w-10 items-center justify-center rounded-xl text-muted transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(16,163,127,0.35)] focus-visible:ring-offset-2 focus-visible:ring-offset-primary-strong hover:shadow-[0_0_0_1px_rgba(15,23,42,0.12)] active:shadow-[0_0_0_1px_rgba(15,23,42,0.12)]"
             aria-label={collapseToggleLabel}
             aria-expanded={!collapsed}
             onMouseEnter={(event) => showToggleFloatingLabel(event.currentTarget)}
@@ -7782,7 +7782,7 @@ const SidebarContent = ({
             onMouseLeave={hideToggleFloatingLabel}
             onBlur={hideToggleFloatingLabel}
         >
-            <SidebarToggleGlyph className="h-[1.625rem] w-[1.625rem] text-white" />
+            <SidebarToggleGlyph className="h-[1.625rem] w-[1.625rem] text-neutral" />
         </button>
     );
     const headerAlignment = collapsed
@@ -7791,7 +7791,7 @@ const SidebarContent = ({
         ? "justify-between"
         : "justify-start";
     return (
-        <div className="flex h-full flex-col bg-primary-strong text-white">
+        <div className="flex h-full flex-col bg-primary-strong text-neutral">
             {toggleFloatingLabel
                 ? createPortal(
                       <span
@@ -7845,7 +7845,7 @@ const SidebarContent = ({
             >
                 <div className="space-y-3">
                     {!collapsed && (
-                        <p className="text-[11px] font-semibold uppercase tracking-[0.32em] text-white/40">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.32em] text-muted">
                             Nawigacja
                         </p>
                     )}
@@ -7859,7 +7859,7 @@ const SidebarContent = ({
                 </div>
             </div>
             <div
-                className={`border-t border-white/10 ${sectionPadding} ${
+                className={`border-t border-soft ${sectionPadding} ${
                     collapsed ? "py-5" : "py-6"
                 } text-sm`}
             >
@@ -7868,7 +7868,7 @@ const SidebarContent = ({
                         <button
                             type="button"
                             onClick={() => setAccountMenuOpen((prev) => !prev)}
-                            className={`group w-full rounded-2xl border border-white/10 bg-white/5 text-left transition hover:border-white/20 hover:bg-white/10 focus:outline-none focus-visible:ring-0 focus-visible:ring-offset-0 disabled:cursor-not-allowed disabled:opacity-60 ${
+                            className={`group w-full rounded-2xl border border-soft bg-soft-surface text-left transition hover:border-primary hover:bg-primary-soft focus:outline-none focus-visible:ring-0 focus-visible:ring-offset-0 disabled:cursor-not-allowed disabled:opacity-60 ${
                                 collapsed ? "p-2" : "px-4 py-3"
                             }`}
                             aria-haspopup="menu"
@@ -7886,17 +7886,17 @@ const SidebarContent = ({
                                         alt="Avatar"
                                         width={40}
                                         height={40}
-                                        className="h-10 w-10 rounded-full border border-white/20 object-cover"
+                                        className="h-10 w-10 rounded-full border border-soft object-cover"
                                         unoptimized
                                     />
                                 ) : (
-                                    <div className="flex h-10 w-10 items-center justify-center rounded-full border border-white/15 bg-white/10 text-sm font-semibold">
+                                    <div className="flex h-10 w-10 items-center justify-center rounded-full border border-soft bg-soft-surface text-sm font-semibold">
                                         {(authUser?.name ?? authUser?.email ?? "U").charAt(0).toUpperCase()}
                                     </div>
                                 )}
                                 {!collapsed && (
                                     <div className="flex-1">
-                                        <p className="font-semibold text-white">
+                                        <p className="font-semibold text-neutral">
                                             {authUser?.name ?? authUser?.email ?? "Użytkownik Google"}
                                         </p>
                                         {authUser?.email ? <span className="sr-only">{authUser.email}</span> : null}
@@ -7908,34 +7908,34 @@ const SidebarContent = ({
                         {accountMenuOpen && (
                             <div className={accountMenuClassName} role="menu">
                                 {authUser?.email ? (
-                                    <div className="rounded-xl bg-white/5 px-3 py-2">
-                                        <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-white/40">
+                                    <div className="rounded-xl bg-soft-surface px-3 py-2">
+                                        <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-muted">
                                             Zalogowano jako
                                         </p>
-                                        <p className="mt-1 break-all text-sm font-semibold text-white">{authUser.email}</p>
+                                        <p className="mt-1 break-all text-sm font-semibold text-neutral">{authUser.email}</p>
                                     </div>
                                 ) : null}
                                 <div className="mt-2 space-y-3">
                                     <div className="space-y-1">
                                         <button
                                             type="button"
-                                            className="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-white transition hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-primary-soft"
+                                            className="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-neutral transition hover:bg-primary-soft focus:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(16,163,127,0.35)] focus-visible:ring-offset-2 focus-visible:ring-offset-primary-soft"
                                             onClick={() => setAccountMenuOpen(false)}
                                         >
                                             Rozszerz plan
                                         </button>
                                     </div>
-                                    <div className="rounded-xl border border-white/10 bg-white/5 p-3">
-                                        <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-white/40">
+                                    <div className="rounded-xl border border-soft bg-soft-surface p-3">
+                                        <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-muted">
                                             Wygląd
                                         </p>
                                         <div className="mt-2 grid grid-cols-2 gap-2">
                                             {themeOptions.map(({ value, label }) => {
                                                 const isActive = theme === value;
-                                                const buttonClasses = `w-full rounded-xl border px-3 py-2 text-left text-sm font-semibold transition focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-primary-soft ${
+                                                const buttonClasses = `w-full rounded-xl border px-3 py-2 text-left text-sm font-semibold transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(16,163,127,0.35)] focus-visible:ring-offset-2 focus-visible:ring-offset-primary-soft ${
                                                     isActive
-                                                        ? "border-white/40 bg-white/10 text-white focus-visible:ring-white/40"
-                                                        : "border-white/10 text-white/70 hover:border-white/20 hover:bg-white/5 focus-visible:ring-white/30"
+                                                        ? "border-primary bg-primary-soft text-primary"
+                                                        : "border-soft text-muted hover:border-primary hover:bg-primary-soft hover:text-neutral"
                                                 }`;
                                                 return (
                                                     <button
@@ -7954,7 +7954,7 @@ const SidebarContent = ({
                                     </div>
                                     <button
                                         type="button"
-                                        className="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-white transition hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-200/80 focus-visible:ring-offset-2 focus-visible:ring-offset-primary-soft disabled:cursor-not-allowed disabled:opacity-60"
+                                        className="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-neutral transition hover:bg-primary-soft focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-200/80 focus-visible:ring-offset-2 focus-visible:ring-offset-primary-soft disabled:cursor-not-allowed disabled:opacity-60"
                                         onClick={() => {
                                             setAccountMenuOpen(false);
                                             handleLogout();
@@ -7971,10 +7971,10 @@ const SidebarContent = ({
                     <div
                         className={`space-y-3 ${
                             collapsed ? "text-center text-[11px]" : "text-sm"
-                        } text-white/70`}
+                        } text-muted`}
                     >
                         <button
-                            className={`w-full rounded-2xl border border-white/15 bg-white/5 font-semibold text-white transition hover:border-white/25 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60 ${
+                            className={`w-full rounded-2xl border border-soft bg-soft-surface font-semibold text-neutral transition hover:border-primary hover:bg-primary-soft disabled:cursor-not-allowed disabled:opacity-60 ${
                                 collapsed ? "py-2" : "px-4 py-3"
                             }`}
                             onClick={() => openAuthDialog("login")}
@@ -7983,7 +7983,7 @@ const SidebarContent = ({
                             {collapsed ? "Zaloguj" : "Zaloguj się"}
                         </button>
                         <button
-                            className={`w-full rounded-2xl bg-surface font-semibold text-[#0f172a] shadow transition hover:bg-soft-surface disabled:cursor-not-allowed disabled:opacity-60 ${
+                            className={`w-full rounded-2xl bg-surface font-semibold text-neutral shadow transition hover:bg-soft-surface disabled:cursor-not-allowed disabled:opacity-60 ${
                                 collapsed ? "py-2" : "px-4 py-3"
                             }`}
                             onClick={() => openAuthDialog("signup")}
@@ -13782,7 +13782,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                 />
             )}
             <div
-                className={`fixed inset-y-0 left-0 z-50 w-80 transform border-r border-white/10 bg-primary-strong text-white shadow-brand-elevated transition-transform duration-300 ease-in-out lg:hidden ${
+                className={`fixed inset-y-0 left-0 z-50 w-80 transform border-r border-soft bg-primary-strong text-neutral shadow-brand-elevated transition-transform duration-300 ease-in-out lg:hidden ${
                     sidebarMobileOpen ? "translate-x-0" : "-translate-x-full"
                 }`}
                 role="dialog"
@@ -13806,7 +13806,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                     <button
                         type="button"
                         onClick={() => setSidebarMobileOpen(false)}
-                        className="absolute right-4 top-4 inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/20 text-lg text-white/70 transition hover:border-white/40 hover:text-white"
+                        className="absolute right-4 top-4 inline-flex h-9 w-9 items-center justify-center rounded-full border border-soft text-lg text-muted transition hover:border-primary hover:text-neutral"
                         aria-label="Zamknij menu"
                     >
                         ×
@@ -13814,7 +13814,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                 </div>
             </div>
             <aside
-                className={`hidden lg:flex ${sidebarCollapsed ? "lg:w-20" : "lg:w-[280px]"} flex-col border-r border-white/10 bg-primary-strong text-white lg:sticky lg:top-0 lg:h-screen lg:flex-shrink-0`}
+                className={`hidden lg:flex ${sidebarCollapsed ? "lg:w-20" : "lg:w-[280px]"} flex-col border-r border-soft bg-primary-strong text-neutral lg:sticky lg:top-0 lg:h-screen lg:flex-shrink-0`}
             >
                 <SidebarContent
                     collapsed={sidebarCollapsed}
