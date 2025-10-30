@@ -12967,17 +12967,59 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                 const historySeries =
                     benchmarkHistory[option.code] ?? customBenchmarkHistory[option.code];
                 const points = historySeries?.points ?? [];
-                const ordered = [...points].sort((a, b) => a.date.localeCompare(b.date));
+                const sanitizedPoints = points.reduce<GpwBenchmarkHistoryPoint[]>((acc, point) => {
+                    if (!point) {
+                        return acc;
+                    }
+                    const dateValue = typeof point.date === "string" ? point.date.trim() : "";
+                    if (!dateValue) {
+                        return acc;
+                    }
+                    const rawValue = point.value;
+                    let numericValue: number | null = null;
+                    if (typeof rawValue === "number" && Number.isFinite(rawValue)) {
+                        numericValue = rawValue;
+                    } else if (rawValue != null) {
+                        const stringValue = String(rawValue).trim();
+                        if (stringValue) {
+                            const parsed = Number(stringValue.replace(/,/g, "."));
+                            if (Number.isFinite(parsed)) {
+                                numericValue = parsed;
+                            }
+                        }
+                    }
+                    if (numericValue == null) {
+                        return acc;
+                    }
+                    let changePct: number | null = null;
+                    if (typeof point.change_pct === "number" && Number.isFinite(point.change_pct)) {
+                        changePct = point.change_pct;
+                    }
+                    acc.push({
+                        date: dateValue,
+                        value: numericValue,
+                        change_pct: changePct,
+                    });
+                    return acc;
+                }, []);
+                const ordered = [...sanitizedPoints].sort((a, b) => a.date.localeCompare(b.date));
                 const lastPoint = ordered[ordered.length - 1];
                 const baselineValue = computeBenchmarkBaselineValue(
                     ordered,
                     benchmarkChangePeriod
                 );
                 const lastValue = lastPoint?.value ?? null;
-                const changePct =
+                let changePct =
                     lastValue != null && baselineValue != null && baselineValue !== 0
                         ? (lastValue - baselineValue) / baselineValue
                         : null;
+                if (
+                    changePct == null &&
+                    benchmarkChangePeriod === "1D" &&
+                    lastPoint?.change_pct != null
+                ) {
+                    changePct = lastPoint.change_pct;
+                }
                 return {
                     code: option.code,
                     name: option.name,
