@@ -315,7 +315,10 @@ const normalizeBenchmarkConstituents = (
         return null;
     });
 
-    const totalWeight = weightValues.reduce((sum, value) => sum + (value ?? 0), 0);
+    const totalWeight = weightValues.reduce<number>(
+        (sum, value) => sum + (value ?? 0),
+        0,
+    );
     if (totalWeight > 0) {
         return entries.map((entry, idx) => {
             const weightValue = weightValues[idx];
@@ -346,7 +349,10 @@ const normalizeBenchmarkConstituents = (
         return null;
     });
 
-    const totalPct = pctValues.reduce((sum, value) => sum + (value ?? 0), 0);
+    const totalPct = pctValues.reduce<number>(
+        (sum, value) => sum + (value ?? 0),
+        0,
+    );
     if (totalPct > 0) {
         return entries.map((entry, idx) => {
             const pctValue = pctValues[idx];
