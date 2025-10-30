@@ -6,6 +6,7 @@ import { createPortal } from "react-dom";
 import Image from "next/image";
 import Link from "next/link";
 import Script from "next/script";
+import { useTheme, type ThemeMode } from "@/components/theme-provider";
 import { formatPct } from "@/lib/format";
 import {
     LineChart,
@@ -7623,6 +7624,7 @@ const SidebarContent = ({
         top: number;
         left: number;
     } | null>(null);
+    const { theme, setTheme, isReady: isThemeReady } = useTheme();
 
     const hideToggleFloatingLabel = useCallback(() => {
         setToggleFloatingLabel(null);
@@ -7748,6 +7750,10 @@ const SidebarContent = ({
     const accountMenuClassName = collapsed
         ? `${accountMenuBaseClass} ${accountMenuPositionClass} min-w-[260px]`
         : `${accountMenuBaseClass} ${accountMenuPositionClass} w-full`;
+    const themeOptions: { value: ThemeMode; label: string }[] = [
+        { value: "light", label: "Tryb jasny" },
+        { value: "dark", label: "Tryb ciemny" },
+    ];
     const renderBrandBadge = () => (
         <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-gradient text-sm font-semibold text-white">
             GA
@@ -7909,14 +7915,43 @@ const SidebarContent = ({
                                         <p className="mt-1 break-all text-sm font-semibold text-white">{authUser.email}</p>
                                     </div>
                                 ) : null}
-                                <div className="mt-2 space-y-1">
-                                    <button
-                                        type="button"
-                                        className="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-white transition hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-primary-soft"
-                                        onClick={() => setAccountMenuOpen(false)}
-                                    >
-                                        Rozszerz plan
-                                    </button>
+                                <div className="mt-2 space-y-3">
+                                    <div className="space-y-1">
+                                        <button
+                                            type="button"
+                                            className="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-white transition hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-primary-soft"
+                                            onClick={() => setAccountMenuOpen(false)}
+                                        >
+                                            Rozszerz plan
+                                        </button>
+                                    </div>
+                                    <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+                                        <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-white/40">
+                                            Wygląd
+                                        </p>
+                                        <div className="mt-2 grid grid-cols-2 gap-2">
+                                            {themeOptions.map(({ value, label }) => {
+                                                const isActive = theme === value;
+                                                const buttonClasses = `w-full rounded-xl border px-3 py-2 text-left text-sm font-semibold transition focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-primary-soft ${
+                                                    isActive
+                                                        ? "border-white/40 bg-white/10 text-white focus-visible:ring-white/40"
+                                                        : "border-white/10 text-white/70 hover:border-white/20 hover:bg-white/5 focus-visible:ring-white/30"
+                                                }`;
+                                                return (
+                                                    <button
+                                                        key={value}
+                                                        type="button"
+                                                        className={buttonClasses}
+                                                        onClick={() => setTheme(value)}
+                                                        aria-pressed={isActive}
+                                                        disabled={!isThemeReady}
+                                                    >
+                                                        {label}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
                                     <button
                                         type="button"
                                         className="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-white transition hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-200/80 focus-visible:ring-offset-2 focus-visible:ring-offset-primary-soft disabled:cursor-not-allowed disabled:opacity-60"

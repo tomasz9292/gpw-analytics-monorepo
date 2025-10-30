@@ -1,29 +1,82 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #0f172a;
+  color-scheme: light;
+  --background-light: #ffffff;
+  --foreground-light: #0f172a;
+  --background-dark: #060915;
+  --foreground-dark: #f0f4f8;
   --color-primary: #4663f0;
   --color-accent: #16a34a;
   --color-negative: #ef4444;
-  --color-neutral-bg: #ffffff;
-  --color-surface: #ffffff;
-  --color-soft-surface: #ffffff;
-  --color-border: #d4d8e3;
-  --color-neutral-text: #0f172a;
-  --color-muted: #475569;
-  --color-subtle: #94a3b8;
   --color-tech: #5471f7;
-  --color-primary-strong: #15224d;
-  --color-primary-soft: #2f46d6;
   --color-accent-strong: #15803d;
   --color-accent-deep: #166534;
+  --color-neutral-bg-light: #ffffff;
+  --color-neutral-bg-dark: #060915;
+  --color-surface-light: #ffffff;
+  --color-surface-dark: #0b1224;
+  --color-soft-surface-light: #ecf0f1;
+  --color-soft-surface-dark: #111a2f;
+  --color-border-light: #d4d8e3;
+  --color-border-dark: #1f2a44;
+  --color-neutral-text-light: #2c3e50;
+  --color-neutral-text-dark: #f0f4f8;
+  --color-muted-light: #475569;
+  --color-muted-dark: #94a3b8;
+  --color-subtle-light: #94a3b8;
+  --color-subtle-dark: #64748b;
+  --color-primary-strong-light: #2c3e50;
+  --color-primary-strong-dark: #0b1224;
+  --color-primary-soft-light: #ecf0f1;
+  --color-primary-soft-dark: #15224d;
   --shadow-brand-elevated: 0 30px 60px rgba(15, 23, 42, 0.18);
   --shadow-brand-floating: 0 12px 40px rgba(70, 99, 240, 0.18);
   --font-geist-sans: "Inter", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont,
     "Helvetica Neue", Arial, sans-serif;
   --font-geist-mono: "IBM Plex Mono", "SFMono-Regular", "Menlo", Monaco, Consolas,
     "Liberation Mono", "Courier New", monospace;
+  --background: var(--background-light);
+  --foreground: var(--foreground-light);
+  --color-neutral-bg: var(--color-neutral-bg-light);
+  --color-surface: var(--color-surface-light);
+  --color-soft-surface: var(--color-soft-surface-light);
+  --color-border: var(--color-border-light);
+  --color-neutral-text: var(--color-neutral-text-light);
+  --color-muted: var(--color-muted-light);
+  --color-subtle: var(--color-subtle-light);
+  --color-primary-strong: var(--color-primary-strong-light);
+  --color-primary-soft: var(--color-primary-soft-light);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --background: var(--background-light);
+  --foreground: var(--foreground-light);
+  --color-neutral-bg: var(--color-neutral-bg-light);
+  --color-surface: var(--color-surface-light);
+  --color-soft-surface: var(--color-soft-surface-light);
+  --color-border: var(--color-border-light);
+  --color-neutral-text: var(--color-neutral-text-light);
+  --color-muted: var(--color-muted-light);
+  --color-subtle: var(--color-subtle-light);
+  --color-primary-strong: var(--color-primary-strong-light);
+  --color-primary-soft: var(--color-primary-soft-light);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --background: var(--background-dark);
+  --foreground: var(--foreground-dark);
+  --color-neutral-bg: var(--color-neutral-bg-dark);
+  --color-surface: var(--color-surface-dark);
+  --color-soft-surface: var(--color-soft-surface-dark);
+  --color-border: var(--color-border-dark);
+  --color-neutral-text: var(--color-neutral-text-dark);
+  --color-muted: var(--color-muted-dark);
+  --color-subtle: var(--color-subtle-dark);
+  --color-primary-strong: var(--color-primary-strong-dark);
+  --color-primary-soft: var(--color-primary-soft-dark);
 }
 
 @theme inline {
@@ -34,9 +87,19 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
-    --background: #060915;
-    --foreground: #F0F4F8;
+  :root:not([data-theme]) {
+    color-scheme: dark;
+    --background: var(--background-dark);
+    --foreground: var(--foreground-dark);
+    --color-neutral-bg: var(--color-neutral-bg-dark);
+    --color-surface: var(--color-surface-dark);
+    --color-soft-surface: var(--color-soft-surface-dark);
+    --color-border: var(--color-border-dark);
+    --color-neutral-text: var(--color-neutral-text-dark);
+    --color-muted: var(--color-muted-dark);
+    --color-subtle: var(--color-subtle-dark);
+    --color-primary-strong: var(--color-primary-strong-dark);
+    --color-primary-soft: var(--color-primary-soft-dark);
   }
 }
 
