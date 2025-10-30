@@ -10771,7 +10771,7 @@ function MetricRulePreview({
                             </div>
                         </div>
                         {metricOption ? (
-                            <div className="rounded-xl border border-dashed border-soft bg-soft-surface px-3 py-2 text-xs text-subtle">
+                            <div className="rounded-xl bg-soft-surface px-3 py-2 text-xs text-subtle">
                                 <div className="font-semibold text-neutral">{metricOption.label}</div>
                                 <div>
                                     Zakres: {lookbackValue} dni • Kierunek: {" "}
@@ -10782,7 +10782,7 @@ function MetricRulePreview({
                                 ) : null}
                             </div>
                         ) : (
-                            <div className="rounded-xl border border-dashed border-soft px-3 py-2 text-xs text-subtle">
+                            <div className="rounded-xl bg-soft-surface px-3 py-2 text-xs text-subtle">
                                 Wybierz metrykę powyżej, aby zobaczyć podgląd wartości.
                             </div>
                         )}
@@ -10798,7 +10798,7 @@ function MetricRulePreview({
                         </div>
                     ) : null}
                     <div className="space-y-3">
-                        <div className="space-y-4 rounded-2xl border border-soft bg-soft-surface p-4">
+                        <div className="space-y-4 rounded-2xl bg-soft-surface p-4">
                             <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,260px)]">
                                 <div className="space-y-2">
                                     <div className="text-xs uppercase tracking-wide text-muted">
