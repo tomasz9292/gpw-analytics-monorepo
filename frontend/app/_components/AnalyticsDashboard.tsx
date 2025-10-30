@@ -283,6 +283,7 @@ type BenchmarkUniverseConstituent = {
     baseSymbol: string;
     rawSymbol: string | null;
     companyName: string | null;
+    weightPct?: number | null;
 };
 
 type BenchmarkUniverseOption = {
@@ -294,19 +295,35 @@ type BenchmarkUniverseOption = {
     isCustom?: boolean;
 };
 
+type CustomIndexConstituent = {
+    symbol: string;
+    weightPct: number;
+};
+
 type CustomIndexDefinition = {
     id: string;
     code: string;
     name?: string | null;
     symbols: string[];
+    constituents: CustomIndexConstituent[];
+    startDate: string;
+    baseValue: number;
     createdAt: string;
     updatedAt: string;
+};
+
+type CustomIndexDraftRow = {
+    id: string;
+    symbol: string;
+    weightPct: number | "";
 };
 
 type CustomIndexDraft = {
     code: string;
     name: string;
-    symbols: string;
+    constituents: CustomIndexDraftRow[];
+    startDate: string;
+    baseValue: string;
 };
 
 type GpwBenchmarkHistoryPoint = {
@@ -1423,6 +1440,15 @@ const createCustomIndexId = (): string => {
     return `custom-${Math.random().toString(36).slice(2, 10)}`;
 };
 
+const createCustomIndexRowId = (): string =>
+    `row-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`;
+
+const createEmptyCustomIndexRow = (): CustomIndexDraftRow => ({
+    id: createCustomIndexRowId(),
+    symbol: "",
+    weightPct: "",
+});
+
 const toTemplateRule = (rule: ScoreBuilderRule): ScoreTemplateRule => {
     const option = findScoreMetric(rule.metric);
     const lookbackDays = resolveLookbackDays(option, rule.lookbackDays);
@@ -1683,6 +1709,18 @@ const PERIOD_OPTIONS: { label: string; value: ChartPeriod }[] = [
     { label: "1R", value: 365 },
     { label: "5L", value: 1825 },
     { label: "MAX", value: "max" },
+];
+
+type BenchmarkChangePeriod = "1D" | "5D" | "1M" | "6M" | "YTD" | "1R" | "5L";
+
+const BENCHMARK_CHANGE_PERIOD_OPTIONS: { value: BenchmarkChangePeriod; label: string }[] = [
+    { value: "1D", label: "1 dzień (1D)" },
+    { value: "5D", label: "5 dni (5D)" },
+    { value: "1M", label: "1 miesiąc (1M)" },
+    { value: "6M", label: "6 miesięcy (6M)" },
+    { value: "YTD", label: "Od początku roku (YTD)" },
+    { value: "1R", label: "1 rok (1R)" },
+    { value: "5L", label: "5 lat (5L)" },
 ];
 
 const DAY_MS = 24 * 3600 * 1000;
@@ -2387,6 +2425,318 @@ async function fetchIndexQuotes(symbol: string, start = "2015-01-01"): Promise<R
                 volume: 0,
             } satisfies Row;
         });
+}
+
+const toUTCDate = (value: string | null | undefined): Date | null => {
+    if (!value || typeof value !== "string") {
+        return null;
+    }
+    const normalized = `${value}T00:00:00Z`;
+    const parsed = new Date(normalized);
+    if (Number.isNaN(parsed.getTime())) {
+        return null;
+    }
+    return parsed;
+};
+
+const shiftUTCDate = (
+    value: string,
+    shift: { days?: number; months?: number; years?: number }
+): string | null => {
+    const base = toUTCDate(value);
+    if (!base) {
+        return null;
+    }
+    const next = new Date(
+        Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate())
+    );
+    if (shift.years) {
+        next.setUTCFullYear(next.getUTCFullYear() - shift.years);
+    }
+    if (shift.months) {
+        next.setUTCMonth(next.getUTCMonth() - shift.months);
+    }
+    if (shift.days) {
+        next.setUTCDate(next.getUTCDate() - shift.days);
+    }
+    return next.toISOString().slice(0, 10);
+};
+
+const findValueOnOrAfter = (
+    points: GpwBenchmarkHistoryPoint[],
+    targetDate: string,
+    lastDate?: string
+): number | null => {
+    if (!points.length) {
+        return null;
+    }
+    let fallback: number | null = null;
+    for (const point of points) {
+        if (!point.date || point.value == null) {
+            continue;
+        }
+        if (lastDate && point.date > lastDate) {
+            break;
+        }
+        if (fallback == null) {
+            fallback = point.value;
+        }
+        if (point.date >= targetDate) {
+            return point.value;
+        }
+    }
+    return fallback;
+};
+
+const computeBenchmarkBaselineValue = (
+    points: GpwBenchmarkHistoryPoint[],
+    period: BenchmarkChangePeriod
+): number | null => {
+    if (!points.length) {
+        return null;
+    }
+    const ordered = [...points].sort((a, b) => a.date.localeCompare(b.date));
+    const lastPoint = ordered[ordered.length - 1];
+    if (!lastPoint || lastPoint.value == null) {
+        return null;
+    }
+    if (period === "1D") {
+        for (let i = ordered.length - 2; i >= 0; i -= 1) {
+            const candidate = ordered[i];
+            if (candidate && candidate.value != null) {
+                return candidate.value;
+            }
+        }
+        return null;
+    }
+    const lastDate = lastPoint.date;
+    if (!lastDate) {
+        return null;
+    }
+    let target: string | null = null;
+    switch (period) {
+        case "5D":
+            target = shiftUTCDate(lastDate, { days: 5 });
+            break;
+        case "1M":
+            target = shiftUTCDate(lastDate, { months: 1 });
+            break;
+        case "6M":
+            target = shiftUTCDate(lastDate, { months: 6 });
+            break;
+        case "YTD": {
+            const date = toUTCDate(lastDate);
+            if (date) {
+                target = `${date.getUTCFullYear()}-01-01`;
+            }
+            break;
+        }
+        case "1R":
+            target = shiftUTCDate(lastDate, { years: 1 });
+            break;
+        case "5L":
+            target = shiftUTCDate(lastDate, { years: 5 });
+            break;
+        default:
+            target = shiftUTCDate(lastDate, { days: 1 });
+            break;
+    }
+    if (!target) {
+        return null;
+    }
+    return findValueOnOrAfter(ordered, target, lastDate);
+};
+
+async function computeCustomIndexSeries(
+    index: CustomIndexDefinition
+): Promise<GpwBenchmarkHistorySeries | null> {
+    let entries = (index.constituents ?? [])
+        .map((entry) => {
+            const symbol = typeof entry.symbol === "string" ? entry.symbol.trim().toUpperCase() : "";
+            const weightValue = Number(entry.weightPct);
+            const weightPct = Number.isFinite(weightValue) && weightValue > 0 ? weightValue : 0;
+            return { symbol, weightPct };
+        })
+        .filter((entry) => entry.symbol);
+
+    if (!entries.length && Array.isArray(index.symbols)) {
+        entries = index.symbols
+            .map((symbol) => (typeof symbol === "string" ? symbol.trim().toUpperCase() : ""))
+            .filter(Boolean)
+            .map((symbol) => ({ symbol, weightPct: 0 }));
+    }
+
+    if (!entries.length) {
+        return null;
+    }
+
+    const dedup = new Map<string, number>();
+    for (const entry of entries) {
+        const current = dedup.get(entry.symbol) ?? 0;
+        dedup.set(entry.symbol, current + entry.weightPct);
+    }
+
+    const sanitizedEntries = Array.from(dedup.entries())
+        .slice(0, MAX_UNIVERSE_FALLBACK_SYMBOLS)
+        .map(([symbol, weightPct]) => ({ symbol, weightPct: weightPct > 0 ? weightPct : 0 }));
+
+    if (!sanitizedEntries.length) {
+        return null;
+    }
+
+    const startCandidate =
+        typeof index.startDate === "string" && index.startDate.trim().length
+            ? index.startDate.trim()
+            : new Date().toISOString().slice(0, 10);
+    const baseValueNumeric =
+        typeof index.baseValue === "number" && Number.isFinite(index.baseValue) && index.baseValue > 0
+            ? index.baseValue
+            : 100;
+
+    const fetchTasks = sanitizedEntries.map(async (entry) => {
+        try {
+            const rows = await fetchQuotes(entry.symbol, startCandidate);
+            return { ...entry, rows };
+        } catch {
+            return null;
+        }
+    });
+
+    const resolved = await Promise.all(fetchTasks);
+    const prepared = resolved
+        .map((item) => {
+            if (!item || !Array.isArray(item.rows)) {
+                return null;
+            }
+            const sorted = item.rows
+                .filter((row): row is Row => Boolean(row && row.date && Number.isFinite(row.close)))
+                .map((row) => ({ date: row.date, close: Number(row.close) }))
+                .sort((a, b) => a.date.localeCompare(b.date));
+            if (!sorted.length) {
+                return null;
+            }
+            return { symbol: item.symbol, weightPct: item.weightPct, rows: sorted };
+        })
+        .filter(
+            (item): item is { symbol: string; weightPct: number; rows: { date: string; close: number }[] } =>
+                Boolean(item)
+        );
+
+    if (!prepared.length) {
+        return null;
+    }
+
+    const startDates = prepared
+        .map((series) => series.rows.find((row) => row.date >= startCandidate)?.date ?? series.rows[0]?.date ?? null)
+        .filter((date): date is string => Boolean(date));
+    if (!startDates.length) {
+        return null;
+    }
+    const effectiveStart = startDates.reduce((max, value) => (value > max ? value : max), startDates[0]);
+
+    const normalizedSeries = prepared
+        .map((series) => {
+            const rowsAfterStart = series.rows.filter((row) => row.date >= effectiveStart);
+            if (!rowsAfterStart.length) {
+                return null;
+            }
+            const basePrice = rowsAfterStart[0]?.close ?? null;
+            if (basePrice == null || basePrice <= 0) {
+                return null;
+            }
+            return {
+                symbol: series.symbol,
+                weightPct: series.weightPct,
+                basePrice,
+                rows: rowsAfterStart,
+            };
+        })
+        .filter(
+            (
+                series
+            ): series is {
+                symbol: string;
+                weightPct: number;
+                basePrice: number;
+                rows: { date: string; close: number }[];
+            } => Boolean(series)
+        );
+
+    if (!normalizedSeries.length) {
+        return null;
+    }
+
+    const dateSet = new Set<string>();
+    normalizedSeries.forEach((series) => {
+        series.rows.forEach((row) => {
+            if (row.date >= effectiveStart) {
+                dateSet.add(row.date);
+            }
+        });
+    });
+    const timeline = Array.from(dateSet).sort();
+    if (!timeline.length) {
+        return null;
+    }
+
+    const positiveWeightSum = normalizedSeries.reduce((sum, series) => {
+        const value = Number(series.weightPct);
+        return sum + (Number.isFinite(value) && value > 0 ? value : 0);
+    }, 0);
+    const normalizedWeights = normalizedSeries.map((series) => {
+        if (positiveWeightSum > 0) {
+            return Math.max(series.weightPct, 0) / positiveWeightSum;
+        }
+        return normalizedSeries.length ? 1 / normalizedSeries.length : 0;
+    });
+
+    const priceMaps = normalizedSeries.map((series) => {
+        const map = new Map<string, number>();
+        series.rows.forEach((row) => {
+            if (row.close > 0) {
+                map.set(row.date, row.close);
+            }
+        });
+        return map;
+    });
+    const lastPrices = normalizedSeries.map((series) => series.basePrice);
+    const points: GpwBenchmarkHistoryPoint[] = [];
+    let prevValue: number | null = null;
+
+    for (const date of timeline) {
+        let missing = false;
+        normalizedSeries.forEach((series, idx) => {
+            const map = priceMaps[idx];
+            const value = map.get(date);
+            if (value != null && value > 0) {
+                lastPrices[idx] = value;
+            }
+            if (!(lastPrices[idx] > 0)) {
+                missing = true;
+            }
+        });
+        if (missing) {
+            continue;
+        }
+        let factor = 0;
+        normalizedSeries.forEach((series, idx) => {
+            factor += normalizedWeights[idx] * (lastPrices[idx] / series.basePrice);
+        });
+        const value = baseValueNumeric * factor;
+        const changePct = prevValue && prevValue !== 0 ? (value - prevValue) / prevValue : null;
+        points.push({ date, value, change_pct: changePct });
+        prevValue = value;
+    }
+
+    if (!points.length) {
+        return null;
+    }
+
+    return {
+        index_code: index.code.trim().toUpperCase(),
+        index_name: index.name?.trim() || index.code.trim().toUpperCase(),
+        points,
+    };
 }
 
 type InstrumentSeriesResult = { rows: Row[]; kind: SymbolKind };
@@ -11383,29 +11733,109 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                     return;
                 }
                 const codeRaw = (item as { code?: unknown }).code;
-                const symbolsRaw = (item as { symbols?: unknown }).symbols;
-                if (typeof codeRaw !== "string" || !Array.isArray(symbolsRaw)) {
+                if (typeof codeRaw !== "string") {
                     return;
                 }
                 const code = codeRaw.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "");
                 if (!code) {
                     return;
                 }
-                const uniqueSymbols = Array.from(
-                    new Set(
-                        symbolsRaw
-                            .map((sym) =>
-                                typeof sym === "string" ? sym.trim().toUpperCase() : ""
-                            )
-                            .filter(Boolean)
-                    )
-                ).slice(0, MAX_UNIVERSE_FALLBACK_SYMBOLS);
-                if (!uniqueSymbols.length) {
-                    return;
-                }
                 const nameRaw = (item as { name?: unknown }).name;
                 const nameValue =
                     typeof nameRaw === "string" ? nameRaw.trim() : undefined;
+
+                const constituentsRaw = (item as { constituents?: unknown }).constituents;
+                let parsedConstituents: CustomIndexConstituent[] = [];
+
+                if (Array.isArray(constituentsRaw)) {
+                    const dedup = new Map<string, number>();
+                    constituentsRaw.forEach((entry) => {
+                        if (!entry || typeof entry !== "object") {
+                            return;
+                        }
+                        const symbolRaw = (entry as { symbol?: unknown }).symbol;
+                        if (typeof symbolRaw !== "string") {
+                            return;
+                        }
+                        const symbol = symbolRaw.trim().toUpperCase();
+                        if (!symbol) {
+                            return;
+                        }
+                        const weightRaw = (entry as { weightPct?: unknown }).weightPct;
+                        const numericWeight =
+                            typeof weightRaw === "number"
+                                ? weightRaw
+                                : typeof weightRaw === "string"
+                                ? Number(weightRaw)
+                                : 0;
+                        if (Number.isFinite(numericWeight) && numericWeight > 0) {
+                            dedup.set(symbol, (dedup.get(symbol) ?? 0) + numericWeight);
+                        } else if (!dedup.has(symbol)) {
+                            dedup.set(symbol, 0);
+                        }
+                    });
+                    const entries = Array.from(dedup.entries()).slice(
+                        0,
+                        MAX_UNIVERSE_FALLBACK_SYMBOLS
+                    );
+                    if (entries.length) {
+                        const weightSum = entries.reduce(
+                            (sum, [, weight]) => sum + Math.max(weight, 0),
+                            0
+                        );
+                        const scale = weightSum > 0 ? 100 / weightSum : 0;
+                        parsedConstituents = entries.map(([symbol, weight]) => ({
+                            symbol,
+                            weightPct:
+                                weightSum > 0
+                                    ? Math.max(weight, 0) * scale
+                                    : entries.length
+                                    ? 100 / entries.length
+                                    : 0,
+                        }));
+                    }
+                }
+
+                const symbolsRaw = (item as { symbols?: unknown }).symbols;
+                if (!parsedConstituents.length && Array.isArray(symbolsRaw)) {
+                    const uniqueSymbols = Array.from(
+                        new Set(
+                            symbolsRaw
+                                .map((sym) =>
+                                    typeof sym === "string" ? sym.trim().toUpperCase() : ""
+                                )
+                                .filter(Boolean)
+                        )
+                    ).slice(0, MAX_UNIVERSE_FALLBACK_SYMBOLS);
+                    if (uniqueSymbols.length) {
+                        const equalWeight = 100 / uniqueSymbols.length;
+                        parsedConstituents = uniqueSymbols.map((symbol) => ({
+                            symbol,
+                            weightPct: equalWeight,
+                        }));
+                    }
+                }
+
+                if (!parsedConstituents.length) {
+                    return;
+                }
+
+                const startDateRaw = (item as { startDate?: unknown }).startDate;
+                let startDate = new Date().toISOString().slice(0, 10);
+                if (typeof startDateRaw === "string" && startDateRaw.trim().length) {
+                    const parsedStart = toUTCDate(startDateRaw.trim());
+                    if (parsedStart) {
+                        startDate = parsedStart.toISOString().slice(0, 10);
+                    }
+                }
+                const baseValueRaw = (item as { baseValue?: unknown }).baseValue;
+                const baseValue =
+                    typeof baseValueRaw === "number" &&
+                    Number.isFinite(baseValueRaw) &&
+                    baseValueRaw > 0
+                        ? baseValueRaw
+                        : 100;
+
                 const createdAtRaw = (item as { createdAt?: unknown }).createdAt;
                 const updatedAtRaw = (item as { updatedAt?: unknown }).updatedAt;
                 const createdAt =
@@ -11421,11 +11851,19 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                     typeof idRaw === "string" && idRaw.trim().length
                         ? idRaw
                         : createCustomIndexId();
+
+                const symbols = parsedConstituents
+                    .map((entry) => entry.symbol)
+                    .slice(0, MAX_UNIVERSE_FALLBACK_SYMBOLS);
+
                 normalized.push({
                     id,
                     code,
                     name: nameValue && nameValue.length ? nameValue : undefined,
-                    symbols: uniqueSymbols,
+                    symbols,
+                    constituents: parsedConstituents,
+                    startDate,
+                    baseValue,
                     createdAt,
                     updatedAt,
                 });
@@ -11436,15 +11874,24 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
         }
     });
     const [customIndexFormOpen, setCustomIndexFormOpen] = useState(false);
-    const [customIndexDraft, setCustomIndexDraft] = useState<CustomIndexDraft>({
+    const [customIndexDraft, setCustomIndexDraft] = useState<CustomIndexDraft>(() => ({
         code: "",
         name: "",
-        symbols: "",
-    });
+        constituents: [createEmptyCustomIndexRow()],
+        startDate: new Date().toISOString().slice(0, 10),
+        baseValue: "100",
+    }));
     const [customIndexError, setCustomIndexError] = useState<string | null>(null);
     const [benchmarkHistory, setBenchmarkHistory] = useState<
         Record<string, GpwBenchmarkHistorySeries>
     >({});
+    const [customBenchmarkHistory, setCustomBenchmarkHistory] = useState<
+        Record<string, GpwBenchmarkHistorySeries>
+    >({});
+    const [benchmarkChangePeriod, setBenchmarkChangePeriod] =
+        useState<BenchmarkChangePeriod>("1D");
+    const [benchmarkChangeMenuOpen, setBenchmarkChangeMenuOpen] = useState(false);
+    const benchmarkChangeMenuRef = useRef<HTMLDivElement | null>(null);
     const [selectedBenchmarkCode, setSelectedBenchmarkCode] = useState<string | null>(null);
     const [scoreAsOf, setScoreAsOf] = useState(defaultScoreDraft.asOf);
     const [scoreMinMcap, setScoreMinMcap] = useState(defaultScoreDraft.minMcap);
@@ -11495,6 +11942,14 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
         () =>
             new Intl.NumberFormat("pl-PL", {
                 style: "percent",
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+            }),
+        []
+    );
+    const benchmarkWeightFormatter = useMemo(
+        () =>
+            new Intl.NumberFormat("pl-PL", {
                 minimumFractionDigits: 2,
                 maximumFractionDigits: 2,
             }),
@@ -12129,6 +12584,43 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
         };
     }, [benchmarkPortfolios]);
 
+    useEffect(() => {
+        if (!customIndices.length) {
+            setCustomBenchmarkHistory({});
+            return;
+        }
+        let cancelled = false;
+        const loadCustomHistory = async () => {
+            const results = await Promise.all(
+                customIndices.map(async (index) => {
+                    try {
+                        return await computeCustomIndexSeries(index);
+                    } catch {
+                        return null;
+                    }
+                })
+            );
+            if (cancelled) {
+                return;
+            }
+            const map: Record<string, GpwBenchmarkHistorySeries> = {};
+            results.forEach((series) => {
+                if (series && Array.isArray(series.points) && series.points.length > 0) {
+                    map[series.index_code] = {
+                        index_code: series.index_code,
+                        index_name: series.index_name,
+                        points: [...series.points].sort((a, b) => a.date.localeCompare(b.date)),
+                    };
+                }
+            });
+            setCustomBenchmarkHistory(map);
+        };
+        void loadCustomHistory();
+        return () => {
+            cancelled = true;
+        };
+    }, [customIndices]);
+
     // Portfel
     const [pfMode, setPfMode] = useState<"manual" | "score">(defaultPortfolioDraft.mode);
     const [pfRows, setPfRows] = useState<{ symbol: string; weight: number }[]>(() =>
@@ -12211,6 +12703,20 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                 );
                 const key = baseSymbol || rawSymbol || displaySymbol;
 
+                let weightPct: number | null = null;
+                const weightCandidate = (entry as { weight?: unknown }).weight;
+                if (typeof weightCandidate === "number" && Number.isFinite(weightCandidate)) {
+                    weightPct = weightCandidate;
+                } else if (typeof weightCandidate === "string" && weightCandidate.trim()) {
+                    const normalizedWeight = Number(weightCandidate.replace(/,/g, "."));
+                    if (Number.isFinite(normalizedWeight)) {
+                        weightPct = normalizedWeight;
+                    }
+                }
+                if (weightPct != null && weightPct > 0 && weightPct <= 1.5) {
+                    weightPct *= 100;
+                }
+
                 if (displaySymbol) {
                     symbolSet.add(displaySymbol);
                 }
@@ -12238,6 +12744,9 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                     if (!existing.companyName && companyName) {
                         existing.companyName = companyName;
                     }
+                    if ((existing.weightPct == null || existing.weightPct === 0) && weightPct != null) {
+                        existing.weightPct = weightPct;
+                    }
                     return;
                 }
 
@@ -12246,6 +12755,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                     baseSymbol: key,
                     rawSymbol: rawSymbol || null,
                     companyName: companyName || null,
+                    weightPct,
                 });
             });
 
@@ -12268,28 +12778,38 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
         customIndices.forEach((index) => {
             const uniqueSymbols = Array.from(
                 new Set(
-                    index.symbols
-                        .map((symbol) => symbol.trim().toUpperCase())
+                    index.constituents
+                        .map((item) => item.symbol.trim().toUpperCase())
                         .filter(Boolean)
                 )
-            );
-            const constituents: BenchmarkUniverseConstituent[] = uniqueSymbols.map(
-                (symbol) => {
-                    const baseSymbol = symbol.includes(".")
-                        ? symbol.split(".", 1)[0]
-                        : symbol;
-                    return {
-                        symbol,
-                        baseSymbol,
-                        rawSymbol: symbol,
-                        companyName: null,
-                    };
-                }
-            );
+            ).slice(0, MAX_UNIVERSE_FALLBACK_SYMBOLS);
+            const constituents: BenchmarkUniverseConstituent[] = uniqueSymbols.map((symbol) => {
+                const baseSymbol = symbol.includes(".") ? symbol.split(".", 1)[0] : symbol;
+                const matching = index.constituents.find(
+                    (entry) => entry.symbol.trim().toUpperCase() === symbol
+                );
+                const weightPct =
+                    matching && Number.isFinite(matching.weightPct)
+                        ? Number(matching.weightPct)
+                        : null;
+                return {
+                    symbol,
+                    baseSymbol,
+                    rawSymbol: symbol,
+                    companyName: null,
+                    weightPct,
+                };
+            });
             const dateCandidates = [index.updatedAt, index.createdAt].filter(
                 (value): value is string => typeof value === "string" && value.trim().length > 0
             );
             let effectiveDate = "";
+            if (index.startDate && typeof index.startDate === "string") {
+                const parsedStart = toUTCDate(index.startDate);
+                if (parsedStart) {
+                    effectiveDate = parsedStart.toISOString().slice(0, 10);
+                }
+            }
             for (const candidate of dateCandidates) {
                 const parsed = new Date(candidate);
                 if (!Number.isNaN(parsed.getTime())) {
@@ -12333,9 +12853,13 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
             if (!code) {
                 return;
             }
+            const sourceSymbols =
+                index.constituents && index.constituents.length
+                    ? index.constituents.map((entry) => entry.symbol)
+                    : index.symbols;
             const symbols = Array.from(
                 new Set(
-                    index.symbols
+                    (sourceSymbols ?? [])
                         .map((symbol) => symbol.trim().toUpperCase())
                         .filter(Boolean)
                 )
@@ -12359,6 +12883,25 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
             return benchmarkUniverseOptions[0].code;
         });
     }, [benchmarkUniverseOptions]);
+
+    useEffect(() => {
+        if (!benchmarkChangeMenuOpen) {
+            return;
+        }
+        const handleClick = (event: MouseEvent) => {
+            if (!benchmarkChangeMenuRef.current) {
+                return;
+            }
+            if (benchmarkChangeMenuRef.current.contains(event.target as Node)) {
+                return;
+            }
+            setBenchmarkChangeMenuOpen(false);
+        };
+        document.addEventListener("mousedown", handleClick);
+        return () => {
+            document.removeEventListener("mousedown", handleClick);
+        };
+    }, [benchmarkChangeMenuOpen]);
 
     const selectedBenchmarkOption = useMemo(() => {
         if (!benchmarkUniverseOptions.length) {
@@ -12421,32 +12964,37 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
     const benchmarkOverview = useMemo(
         () =>
             benchmarkUniverseOptions.map((option) => {
-                const historySeries = benchmarkHistory[option.code];
+                const historySeries =
+                    benchmarkHistory[option.code] ?? customBenchmarkHistory[option.code];
                 const points = historySeries?.points ?? [];
                 const ordered = [...points].sort((a, b) => a.date.localeCompare(b.date));
                 const lastPoint = ordered[ordered.length - 1];
-                const prevPoint = ordered[ordered.length - 2];
-                let changePct = lastPoint?.change_pct ?? null;
-                if (
-                    changePct == null &&
-                    lastPoint?.value != null &&
-                    prevPoint?.value != null &&
-                    prevPoint.value !== 0
-                ) {
-                    changePct = (lastPoint.value - prevPoint.value) / prevPoint.value;
-                }
+                const baselineValue = computeBenchmarkBaselineValue(
+                    ordered,
+                    benchmarkChangePeriod
+                );
+                const lastValue = lastPoint?.value ?? null;
+                const changePct =
+                    lastValue != null && baselineValue != null && baselineValue !== 0
+                        ? (lastValue - baselineValue) / baselineValue
+                        : null;
                 return {
                     code: option.code,
                     name: option.name,
                     effectiveDate: option.effectiveDate,
                     symbolsCount: option.constituents.length,
-                    latestValue: lastPoint?.value ?? null,
+                    latestValue: lastValue,
                     changePct,
                     lastDate: lastPoint?.date ?? null,
                     isCustom: option.isCustom === true,
                 };
             }),
-        [benchmarkHistory, benchmarkUniverseOptions]
+        [
+            benchmarkChangePeriod,
+            benchmarkHistory,
+            benchmarkUniverseOptions,
+            customBenchmarkHistory,
+        ]
     );
 
     const stopPfProgressInterval = useCallback(() => {
@@ -13364,6 +13912,57 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
         setScoreTemplateFeedback(null);
     };
 
+    const addCustomIndexRow = useCallback(() => {
+        setCustomIndexDraft((prev) => {
+            if (prev.constituents.length >= MAX_UNIVERSE_FALLBACK_SYMBOLS) {
+                return prev;
+            }
+            return {
+                ...prev,
+                constituents: [...prev.constituents, createEmptyCustomIndexRow()],
+            };
+        });
+    }, []);
+
+    const removeCustomIndexRow = useCallback((rowId: string) => {
+        setCustomIndexDraft((prev) => {
+            const nextRows = prev.constituents.filter((row) => row.id !== rowId);
+            return {
+                ...prev,
+                constituents: nextRows.length ? nextRows : [createEmptyCustomIndexRow()],
+            };
+        });
+    }, []);
+
+    const updateCustomIndexRowSymbol = useCallback((rowId: string, symbol: string) => {
+        const normalized = symbol.trim().toUpperCase();
+        setCustomIndexDraft((prev) => ({
+            ...prev,
+            constituents: prev.constituents.map((row) =>
+                row.id === rowId ? { ...row, symbol: normalized } : row
+            ),
+        }));
+    }, []);
+
+    const updateCustomIndexRowWeight = useCallback((rowId: string, value: string) => {
+        setCustomIndexDraft((prev) => ({
+            ...prev,
+            constituents: prev.constituents.map((row) => {
+                if (row.id !== rowId) {
+                    return row;
+                }
+                if (value === "") {
+                    return { ...row, weightPct: "" };
+                }
+                const numericValue = Number(value);
+                if (!Number.isFinite(numericValue)) {
+                    return row;
+                }
+                return { ...row, weightPct: numericValue };
+            }),
+        }));
+    }, []);
+
     const handleSaveCustomIndex = useCallback(() => {
         const normalizedCode = customIndexDraft.code
             .trim()
@@ -13373,18 +13972,68 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
             setCustomIndexError("Podaj kod indeksu (litery, cyfry, myślnik lub podkreślenie).");
             return;
         }
-        const tokens = customIndexDraft.symbols
-            .split(/[\s,;]+/)
-            .map((token) => token.trim().toUpperCase())
-            .filter(Boolean);
-        const uniqueSymbols = Array.from(new Set(tokens)).slice(
-            0,
-            MAX_UNIVERSE_FALLBACK_SYMBOLS
-        );
-        if (!uniqueSymbols.length) {
-            setCustomIndexError("Dodaj co najmniej jeden symbol spółki.");
+
+        const entries: { symbol: string; weight: number | null }[] = [];
+        const seen = new Set<string>();
+        customIndexDraft.constituents.forEach((row) => {
+            const symbol = row.symbol.trim().toUpperCase();
+            if (!symbol || seen.has(symbol)) {
+                return;
+            }
+            seen.add(symbol);
+            const rawWeight =
+                typeof row.weightPct === "number"
+                    ? row.weightPct
+                    : row.weightPct === ""
+                    ? null
+                    : Number(row.weightPct);
+            const weight =
+                typeof rawWeight === "number" && Number.isFinite(rawWeight) && rawWeight > 0
+                    ? rawWeight
+                    : null;
+            entries.push({ symbol, weight });
+        });
+
+        if (!entries.length) {
+            setCustomIndexError("Dodaj co najmniej jedną spółkę.");
             return;
         }
+
+        const limitedEntries = entries.slice(0, MAX_UNIVERSE_FALLBACK_SYMBOLS);
+        const positiveSum = limitedEntries.reduce(
+            (sum, entry) => sum + (entry.weight ?? 0),
+            0
+        );
+        const missingCount = limitedEntries.filter((entry) => entry.weight == null).length;
+
+        let computedWeights: number[] = [];
+        if (positiveSum <= 0) {
+            const equalWeight = 100 / limitedEntries.length;
+            computedWeights = limitedEntries.map(() => Number(equalWeight.toFixed(4)));
+        } else {
+            const remainder = Math.max(0, 100 - positiveSum);
+            const fillValue = missingCount > 0 ? remainder / missingCount : 0;
+            const provisional = limitedEntries.map((entry) => {
+                if (entry.weight != null && entry.weight > 0) {
+                    return entry.weight;
+                }
+                return fillValue > 0 ? fillValue : 0;
+            });
+            const sumWeights = provisional.reduce((sum, value) => sum + value, 0);
+            if (sumWeights <= 0) {
+                const equalWeight = 100 / limitedEntries.length;
+                computedWeights = limitedEntries.map(() => Number(equalWeight.toFixed(4)));
+            } else {
+                const scale = 100 / sumWeights;
+                computedWeights = provisional.map((value) => Number((value * scale).toFixed(4)));
+            }
+        }
+
+        const normalizedConstituents = limitedEntries.map((entry, idx) => ({
+            symbol: entry.symbol,
+            weightPct: computedWeights[idx],
+        }));
+
         const codeExists =
             benchmarkPortfolios.some(
                 (portfolio) =>
@@ -13394,29 +14043,60 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
             setCustomIndexError("Indeks o takim kodzie już istnieje.");
             return;
         }
+
         const nameValue = customIndexDraft.name.trim();
+        const parsedStart = toUTCDate(customIndexDraft.startDate);
+        if (!parsedStart) {
+            setCustomIndexError("Podaj poprawną datę startu indeksu.");
+            return;
+        }
+        const startDate = parsedStart.toISOString().slice(0, 10);
+
+        const baseValueInput = customIndexDraft.baseValue.trim();
+        if (!baseValueInput) {
+            setCustomIndexError("Podaj wartość początkową indeksu.");
+            return;
+        }
+        const baseValueNumeric = Number(baseValueInput);
+        if (!Number.isFinite(baseValueNumeric) || baseValueNumeric <= 0) {
+            setCustomIndexError("Wartość początkowa musi być dodatnią liczbą.");
+            return;
+        }
+
         const timestamp = new Date().toISOString();
+        const symbols = normalizedConstituents.map((entry) => entry.symbol);
+
         setCustomIndices((prev) => [
             ...prev,
             {
                 id: createCustomIndexId(),
                 code: normalizedCode,
                 name: nameValue ? nameValue : undefined,
-                symbols: uniqueSymbols,
+                symbols,
+                constituents: normalizedConstituents,
+                startDate,
+                baseValue: baseValueNumeric,
                 createdAt: timestamp,
                 updatedAt: timestamp,
             },
         ]);
-        setCustomIndexDraft({ code: "", name: "", symbols: "" });
+        setCustomIndexDraft({
+            code: "",
+            name: "",
+            constituents: [createEmptyCustomIndexRow()],
+            startDate: new Date().toISOString().slice(0, 10),
+            baseValue: "100",
+        });
         setCustomIndexError(null);
         setCustomIndexFormOpen(false);
     }, [
         benchmarkPortfolios,
-        customIndexDraft.code,
-        customIndexDraft.name,
-        customIndexDraft.symbols,
+        customIndexDraft,
         customIndices,
     ]);
+
+    const canAddCustomIndexRow =
+        customIndexDraft.constituents.length < MAX_UNIVERSE_FALLBACK_SYMBOLS;
 
     const handleDeleteCustomIndex = useCallback(
         (id: string) => {
@@ -15217,10 +15897,50 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                     </Card>
                     {benchmarkUniverseOptions.length > 0 && (
                         <Card title="Indeksy GPW Benchmark">
-                            <p className="text-sm text-subtle mb-4">
-                                Aktualne portfele i wyniki indeksów dostępnych jako wszechświat
-                                dla rankingu.
-                            </p>
+                            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                                <p className="text-sm text-subtle">
+                                    Aktualne portfele i wyniki indeksów dostępnych jako wszechświat
+                                    dla rankingu.
+                                </p>
+                                <div className="relative" ref={benchmarkChangeMenuRef}>
+                                    <button
+                                        type="button"
+                                        onClick={() => setBenchmarkChangeMenuOpen((prev) => !prev)}
+                                        className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
+                                            benchmarkChangeMenuOpen
+                                                ? "border-[var(--color-primary)] text-primary"
+                                                : "border-soft text-muted hover:border-[var(--color-primary)] hover:text-primary"
+                                        }`}
+                                    >
+                                        Okres zmiany: {
+                                            BENCHMARK_CHANGE_PERIOD_OPTIONS.find(
+                                                (option) => option.value === benchmarkChangePeriod
+                                            )?.label ?? benchmarkChangePeriod
+                                        }
+                                    </button>
+                                    {benchmarkChangeMenuOpen && (
+                                        <div className="absolute right-0 z-20 mt-2 w-56 rounded-xl border border-soft bg-surface shadow-lg">
+                                            {BENCHMARK_CHANGE_PERIOD_OPTIONS.map((option) => (
+                                                <button
+                                                    key={option.value}
+                                                    type="button"
+                                                    onClick={() => {
+                                                        setBenchmarkChangePeriod(option.value);
+                                                        setBenchmarkChangeMenuOpen(false);
+                                                    }}
+                                                    className={`block w-full px-3 py-2 text-left text-xs transition ${
+                                                        option.value === benchmarkChangePeriod
+                                                            ? "bg-primary/10 text-primary"
+                                                            : "text-muted hover:bg-soft-surface hover:text-primary"
+                                                    }`}
+                                                >
+                                                    {option.label}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
                             <div className="mb-6 space-y-3 rounded-xl border border-soft bg-soft-surface px-4 py-4">
                                 <div className="flex flex-wrap items-center justify-between gap-2">
                                     <div>
@@ -15232,7 +15952,19 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                     <button
                                         type="button"
                                         onClick={() => {
-                                            setCustomIndexFormOpen((prev) => !prev);
+                                            setCustomIndexFormOpen((prev) => {
+                                                const next = !prev;
+                                                if (next) {
+                                                    setCustomIndexDraft({
+                                                        code: "",
+                                                        name: "",
+                                                        constituents: [createEmptyCustomIndexRow()],
+                                                        startDate: new Date().toISOString().slice(0, 10),
+                                                        baseValue: "100",
+                                                    });
+                                                }
+                                                return next;
+                                            });
                                             setCustomIndexError(null);
                                         }}
                                         className="rounded-lg border border-soft px-3 py-1.5 text-xs font-medium text-muted transition hover:border-[var(--color-primary)] hover:text-primary"
@@ -15278,25 +16010,112 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                 />
                                             </label>
                                         </div>
-                                        <label className="flex flex-col gap-2">
-                                            <span className="text-xs uppercase tracking-wide text-muted">
-                                                Spółki
-                                            </span>
-                                            <textarea
-                                                value={customIndexDraft.symbols}
-                                                onChange={(e) =>
-                                                    setCustomIndexDraft((prev) => ({
-                                                        ...prev,
-                                                        symbols: e.target.value,
-                                                    }))
-                                                }
-                                                className={`${inputBaseClasses} min-h-[6rem]`}
-                                                placeholder="np. 11B, ALLEGRO, PEKAO"
-                                            />
-                                            <span className="text-xs text-subtle">
-                                                Oddziel symbole przecinkiem, spacją lub nową linią. Limit {MAX_UNIVERSE_FALLBACK_SYMBOLS} spółek.
-                                            </span>
-                                        </label>
+                                        <div className="space-y-3">
+                                            <div className="flex flex-wrap items-center justify-between gap-2">
+                                                <span className="text-xs uppercase tracking-wide text-muted">
+                                                    Skład indeksu
+                                                </span>
+                                                <button
+                                                    type="button"
+                                                    onClick={addCustomIndexRow}
+                                                    disabled={!canAddCustomIndexRow}
+                                                    className="rounded-lg border border-dashed border-soft px-3 py-1.5 text-xs text-muted transition hover:border-[var(--color-primary)] hover:text-primary disabled:cursor-not-allowed disabled:opacity-50"
+                                                >
+                                                    Dodaj spółkę
+                                                </button>
+                                            </div>
+                                            <div className="space-y-2">
+                                                {customIndexDraft.constituents.map((row) => (
+                                                    <div
+                                                        key={row.id}
+                                                        className="flex flex-wrap items-center gap-3 rounded-xl border border-soft bg-soft-surface px-3 py-3"
+                                                    >
+                                                        <div className="flex flex-col gap-1">
+                                                            <span className="text-[11px] uppercase tracking-wide text-muted">
+                                                                Symbol
+                                                            </span>
+                                                            <TickerAutosuggest
+                                                                onPick={(symbol) => updateCustomIndexRowSymbol(row.id, symbol)}
+                                                                placeholder={row.symbol || "Symbol (np. CDR.WA)"}
+                                                                inputClassName="w-48 md:w-56"
+                                                                allowFreeEntry
+                                                            />
+                                                            {row.symbol && (
+                                                                <span className="text-[11px] text-subtle">
+                                                                    Wybrano: {row.symbol}
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                        <div className="flex flex-col gap-1">
+                                                            <span className="text-[11px] uppercase tracking-wide text-muted">
+                                                                Udział %
+                                                            </span>
+                                                            <div className="flex items-center gap-2">
+                                                                <input
+                                                                    type="number"
+                                                                    min={0}
+                                                                    step={0.01}
+                                                                    value={row.weightPct === "" ? "" : row.weightPct}
+                                                                    onChange={(e) => updateCustomIndexRowWeight(row.id, e.target.value)}
+                                                                    className={`${inputBaseClasses} w-24`}
+                                                                    placeholder="np. 10"
+                                                                />
+                                                                <span className="text-sm text-subtle">%</span>
+                                                            </div>
+                                                        </div>
+                                                        {customIndexDraft.constituents.length > 1 && (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => removeCustomIndexRow(row.id)}
+                                                                className="rounded-lg border border-soft px-2 py-1 text-xs text-muted transition hover:border-[var(--color-primary)] hover:text-primary"
+                                                            >
+                                                                Usuń
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                            <div className="text-xs text-subtle">
+                                                Niepodane udziały rozłożymy równomiernie. Limit {MAX_UNIVERSE_FALLBACK_SYMBOLS} spółek.
+                                            </div>
+                                        </div>
+                                        <div className="grid gap-3 md:grid-cols-2">
+                                            <label className="flex flex-col gap-2">
+                                                <span className="text-xs uppercase tracking-wide text-muted">
+                                                    Data startu
+                                                </span>
+                                                <input
+                                                    type="date"
+                                                    value={customIndexDraft.startDate}
+                                                    onChange={(e) =>
+                                                        setCustomIndexDraft((prev) => ({
+                                                            ...prev,
+                                                            startDate: e.target.value,
+                                                        }))
+                                                    }
+                                                    className={inputBaseClasses}
+                                                />
+                                            </label>
+                                            <label className="flex flex-col gap-2">
+                                                <span className="text-xs uppercase tracking-wide text-muted">
+                                                    Wartość początkowa
+                                                </span>
+                                                <input
+                                                    type="number"
+                                                    min={1}
+                                                    step={0.01}
+                                                    value={customIndexDraft.baseValue}
+                                                    onChange={(e) =>
+                                                        setCustomIndexDraft((prev) => ({
+                                                            ...prev,
+                                                            baseValue: e.target.value,
+                                                        }))
+                                                    }
+                                                    className={inputBaseClasses}
+                                                    placeholder="np. 100"
+                                                />
+                                            </label>
+                                        </div>
                                         {customIndexError && (
                                             <div className="text-xs text-negative">{customIndexError}</div>
                                         )}
@@ -15313,6 +16132,13 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                 onClick={() => {
                                                     setCustomIndexFormOpen(false);
                                                     setCustomIndexError(null);
+                                                    setCustomIndexDraft({
+                                                        code: "",
+                                                        name: "",
+                                                        constituents: [createEmptyCustomIndexRow()],
+                                                        startDate: new Date().toISOString().slice(0, 10),
+                                                        baseValue: "100",
+                                                    });
                                                 }}
                                                 className="rounded-lg border border-soft px-3 py-2 text-xs text-muted transition hover:border-[var(--color-primary)] hover:text-primary"
                                             >
@@ -15331,24 +16157,33 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                     code: normalizedCode,
                                                     name:
                                                         index.name?.trim() || `${normalizedCode} (własny)`,
-                                                    effectiveDate: new Date(
-                                                        index.updatedAt || index.createdAt || Date.now()
-                                                    )
-                                                        .toISOString()
-                                                        .slice(0, 10),
-                                                    symbols: index.symbols,
-                                                    constituents: index.symbols.map((symbol) => ({
-                                                        symbol,
-                                                        baseSymbol: symbol.includes(".")
+                                                    effectiveDate:
+                                                        index.startDate && index.startDate.trim().length
+                                                            ? index.startDate
+                                                            : new Date(
+                                                                  index.updatedAt || index.createdAt || Date.now()
+                                                              )
+                                                                  .toISOString()
+                                                                  .slice(0, 10),
+                                                    symbols: index.constituents.map((item) => item.symbol),
+                                                    constituents: index.constituents.map((item) => {
+                                                        const symbol = item.symbol;
+                                                        const baseSymbol = symbol.includes(".")
                                                             ? symbol.split(".", 1)[0]
-                                                            : symbol,
-                                                        rawSymbol: symbol,
-                                                        companyName: null,
-                                                    })),
+                                                            : symbol;
+                                                        return {
+                                                            symbol,
+                                                            baseSymbol,
+                                                            rawSymbol: symbol,
+                                                            companyName: null,
+                                                            weightPct: item.weightPct,
+                                                        };
+                                                    }),
                                                     isCustom: true,
                                                 };
-                                            const previewSymbols = index.symbols
+                                            const previewSymbols = index.constituents
                                                 .slice(0, 6)
+                                                .map((item) => item.symbol)
                                                 .join(", ");
                                             return (
                                                 <div
@@ -15368,8 +16203,13 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                             </div>
                                                         )}
                                                         <div className="text-xs text-muted">
-                                                            {index.symbols.length} spółek • {previewSymbols}
-                                                            {index.symbols.length > 6 ? "…" : ""}
+                                                            {index.constituents.length} spółek • {previewSymbols}
+                                                            {index.constituents.length > 6 ? "…" : ""}
+                                                        </div>
+                                                        <div className="text-xs text-subtle">
+                                                            Start: {index.startDate}
+                                                            {" • "}
+                                                            Wartość początkowa: {benchmarkValueFormatter.format(index.baseValue)}
                                                         </div>
                                                     </div>
                                                     <div className="flex flex-wrap gap-2">
@@ -15416,7 +16256,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                     <th className="px-3 py-2 text-right">Spółki</th>
                                                     <th className="px-3 py-2 text-left">Skład z dnia</th>
                                                     <th className="px-3 py-2 text-right">Ostatnia wartość</th>
-                                                    <th className="px-3 py-2 text-right">Zmiana</th>
+                                                    <th className="px-3 py-2 text-right">Zmiana ({benchmarkChangePeriod})</th>
                                                     <th className="px-3 py-2 text-left">Notowanie z dnia</th>
                                                 </tr>
                                             </thead>
@@ -15499,6 +16339,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                             <tr>
                                                                 <th className="px-3 py-2 text-left">Symbol</th>
                                                                 <th className="px-3 py-2 text-left">Spółka</th>
+                                                                <th className="px-3 py-2 text-right">Udział</th>
                                                             </tr>
                                                         </thead>
                                                         <tbody className="divide-y divide-soft">
@@ -15516,6 +16357,11 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                                     </td>
                                                                     <td className="px-3 py-2 text-subtle">
                                                                         {constituent.companyName ?? "—"}
+                                                                    </td>
+                                                                    <td className="px-3 py-2 text-right text-subtle">
+                                                                        {typeof constituent.weightPct === "number"
+                                                                            ? `${benchmarkWeightFormatter.format(constituent.weightPct)}%`
+                                                                            : "—"}
                                                                     </td>
                                                                 </tr>
                                                             ))}
