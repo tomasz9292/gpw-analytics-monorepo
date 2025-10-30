@@ -12979,10 +12979,13 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                     let numericValue: number | null = null;
                     if (typeof rawValue === "number" && Number.isFinite(rawValue)) {
                         numericValue = rawValue;
-                    } else if (typeof rawValue === "string" && rawValue.trim()) {
-                        const parsed = Number(rawValue.replace(/,/g, "."));
-                        if (Number.isFinite(parsed)) {
-                            numericValue = parsed;
+                    } else if (rawValue != null) {
+                        const stringValue = String(rawValue).trim();
+                        if (stringValue) {
+                            const parsed = Number(stringValue.replace(/,/g, "."));
+                            if (Number.isFinite(parsed)) {
+                                numericValue = parsed;
+                            }
                         }
                     }
                     if (numericValue == null) {
