@@ -283,6 +283,7 @@ type BenchmarkUniverseConstituent = {
     baseSymbol: string;
     rawSymbol: string | null;
     companyName: string | null;
+    weight?: number | null;
     weightPct?: number | null;
 };
 
@@ -293,6 +294,88 @@ type BenchmarkUniverseOption = {
     symbols: string[];
     constituents: BenchmarkUniverseConstituent[];
     isCustom?: boolean;
+};
+
+const normalizeBenchmarkConstituents = (
+    entries: BenchmarkUniverseConstituent[],
+): BenchmarkUniverseConstituent[] => {
+    if (!entries.length) {
+        return entries;
+    }
+
+    const weightValues = entries.map((entry) => {
+        if (typeof entry.weight === "number" && Number.isFinite(entry.weight)) {
+            if (entry.weight > 0) {
+                return entry.weight;
+            }
+            if (entry.weight === 0) {
+                return 0;
+            }
+        }
+        return null;
+    });
+
+    const totalWeight = weightValues.reduce<number>(
+        (sum, value) => sum + (value ?? 0),
+        0,
+    );
+    if (totalWeight > 0) {
+        return entries.map((entry, idx) => {
+            const weightValue = weightValues[idx];
+            if (weightValue == null) {
+                return {
+                    ...entry,
+                    weight: entry.weight ?? null,
+                    weightPct: null,
+                };
+            }
+            return {
+                ...entry,
+                weight: weightValue,
+                weightPct: (weightValue / totalWeight) * 100,
+            };
+        });
+    }
+
+    const pctValues = entries.map((entry) => {
+        if (typeof entry.weightPct === "number" && Number.isFinite(entry.weightPct)) {
+            if (entry.weightPct > 0) {
+                return entry.weightPct;
+            }
+            if (entry.weightPct === 0) {
+                return 0;
+            }
+        }
+        return null;
+    });
+
+    const totalPct = pctValues.reduce<number>(
+        (sum, value) => sum + (value ?? 0),
+        0,
+    );
+    if (totalPct > 0) {
+        return entries.map((entry, idx) => {
+            const pctValue = pctValues[idx];
+            if (pctValue == null) {
+                return {
+                    ...entry,
+                    weight: entry.weight ?? null,
+                    weightPct: null,
+                };
+            }
+            return {
+                ...entry,
+                weight: entry.weight ?? pctValue,
+                weightPct: (pctValue / totalPct) * 100,
+            };
+        });
+    }
+
+    return entries.map((entry) => ({
+        ...entry,
+        weight: entry.weight ?? null,
+        weightPct: entry.weightPct ?? null,
+    }));
 };
 
 type CustomIndexConstituent = {
@@ -12690,6 +12773,22 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
             typeof value === "string" ? value.trim().toUpperCase() : "";
         const normalizeName = (value: unknown): string =>
             typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+        const parseWeight = (value: unknown): number | null => {
+            if (typeof value === "number" && Number.isFinite(value)) {
+                return value;
+            }
+            if (typeof value === "string" && value.trim()) {
+                const cleaned = value.replace(/,/g, ".").replace(/\s+/g, "").trim();
+                if (!cleaned) {
+                    return null;
+                }
+                const normalized = Number(cleaned);
+                if (Number.isFinite(normalized)) {
+                    return normalized;
+                }
+            }
+            return null;
+        };
 
         benchmarkPortfolios.forEach((portfolio) => {
             const symbolSet = new Set<string>();
@@ -12702,20 +12801,15 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                     entry.symbol_base ?? entry.raw_symbol ?? entry.symbol
                 );
                 const key = baseSymbol || rawSymbol || displaySymbol;
-
-                let weightPct: number | null = null;
-                const weightCandidate = (entry as { weight?: unknown }).weight;
-                if (typeof weightCandidate === "number" && Number.isFinite(weightCandidate)) {
-                    weightPct = weightCandidate;
-                } else if (typeof weightCandidate === "string" && weightCandidate.trim()) {
-                    const normalizedWeight = Number(weightCandidate.replace(/,/g, "."));
-                    if (Number.isFinite(normalizedWeight)) {
-                        weightPct = normalizedWeight;
-                    }
-                }
-                if (weightPct != null && weightPct > 0 && weightPct <= 1.5) {
-                    weightPct *= 100;
-                }
+                const parsedWeight = parseWeight((entry as { weight?: unknown }).weight);
+                const weightValue =
+                    parsedWeight != null
+                        ? parsedWeight > 0
+                            ? parsedWeight
+                            : parsedWeight === 0
+                                ? 0
+                                : null
+                        : null;
 
                 if (displaySymbol) {
                     symbolSet.add(displaySymbol);
@@ -12744,8 +12838,12 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                     if (!existing.companyName && companyName) {
                         existing.companyName = companyName;
                     }
-                    if ((existing.weightPct == null || existing.weightPct === 0) && weightPct != null) {
-                        existing.weightPct = weightPct;
+                    if (weightValue != null) {
+                        const nextWeight = (existing.weight ?? 0) + weightValue;
+                        existing.weight = Number.isFinite(nextWeight) ? nextWeight : existing.weight ?? null;
+                        if (existing.weightPct == null || existing.weightPct === 0) {
+                            existing.weightPct = weightValue;
+                        }
                     }
                     return;
                 }
@@ -12755,14 +12853,15 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                     baseSymbol: key,
                     rawSymbol: rawSymbol || null,
                     companyName: companyName || null,
-                    weightPct,
+                    weight: weightValue,
+                    weightPct: weightValue,
                 });
             });
 
             const symbols = Array.from(symbolSet).filter(Boolean);
-            const constituents = Array.from(constituentMap.values()).sort((a, b) =>
-                a.baseSymbol.localeCompare(b.baseSymbol)
-            );
+            const constituents = normalizeBenchmarkConstituents(
+                Array.from(constituentMap.values())
+            ).sort((a, b) => a.baseSymbol.localeCompare(b.baseSymbol));
             const code = (portfolio.index_code ?? "").trim().toUpperCase();
             const effectiveDate = portfolio.effective_date ?? "";
 
@@ -12792,12 +12891,21 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                     matching && Number.isFinite(matching.weightPct)
                         ? Number(matching.weightPct)
                         : null;
+                const sanitizedWeight =
+                    weightPct != null
+                        ? weightPct > 0
+                            ? weightPct
+                            : weightPct === 0
+                                ? 0
+                                : null
+                        : null;
                 return {
                     symbol,
                     baseSymbol,
                     rawSymbol: symbol,
                     companyName: null,
-                    weightPct,
+                    weight: sanitizedWeight,
+                    weightPct: sanitizedWeight,
                 };
             });
             const dateCandidates = [index.updatedAt, index.createdAt].filter(
@@ -12830,7 +12938,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                 name,
                 effectiveDate,
                 symbols: uniqueSymbols,
-                constituents,
+                constituents: normalizeBenchmarkConstituents(constituents),
                 isCustom: true,
             });
         });
@@ -16380,7 +16488,6 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                         <thead className="bg-soft-surface text-xs uppercase tracking-wide text-muted">
                                                             <tr>
                                                                 <th className="px-3 py-2 text-left">Symbol</th>
-                                                                <th className="px-3 py-2 text-left">Spółka</th>
                                                                 <th className="px-3 py-2 text-right">Udział</th>
                                                             </tr>
                                                         </thead>
@@ -16396,9 +16503,6 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                                                 ({constituent.baseSymbol})
                                                                             </span>
                                                                         )}
-                                                                    </td>
-                                                                    <td className="px-3 py-2 text-subtle">
-                                                                        {constituent.companyName ?? "—"}
                                                                     </td>
                                                                     <td className="px-3 py-2 text-right text-subtle">
                                                                         {typeof constituent.weightPct === "number"
