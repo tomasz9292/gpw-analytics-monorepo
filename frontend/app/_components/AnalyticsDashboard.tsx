@@ -12244,38 +12244,6 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
         }
     }, [savedPortfolios]);
 
-    useEffect(() => {
-        if (!savedPortfoliosHydratedRef.current) {
-            return;
-        }
-        if (typeof window === "undefined") {
-            return;
-        }
-        let pendingId: string | null = null;
-        try {
-            pendingId = window.sessionStorage.getItem(PENDING_PORTFOLIO_STORAGE_KEY);
-        } catch {
-            pendingId = null;
-        }
-        if (!pendingId) {
-            return;
-        }
-        try {
-            window.sessionStorage.removeItem(PENDING_PORTFOLIO_STORAGE_KEY);
-        } catch {
-            // Ignoruj błąd usunięcia.
-        }
-        const portfolio = savedPortfolios.find((item) => item.id === pendingId);
-        if (!portfolio) {
-            return;
-        }
-        applyPortfolioDraft(portfolio.draft);
-        setPfSaveName(portfolio.name);
-        setPfSaveFeedback({
-            kind: "success",
-            message: `Załadowano portfel "${portfolio.name}" do symulatora.`,
-        });
-    }, [applyPortfolioDraft, savedPortfolios]);
     const [customIndexFormOpen, setCustomIndexFormOpen] = useState(false);
     const [customIndexDraft, setCustomIndexDraft] = useState<CustomIndexDraft>(() => ({
         code: "",
@@ -13164,6 +13132,39 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
             setPfTimelineOpen,
         ]
     );
+
+    useEffect(() => {
+        if (!savedPortfoliosHydratedRef.current) {
+            return;
+        }
+        if (typeof window === "undefined") {
+            return;
+        }
+        let pendingId: string | null = null;
+        try {
+            pendingId = window.sessionStorage.getItem(PENDING_PORTFOLIO_STORAGE_KEY);
+        } catch {
+            pendingId = null;
+        }
+        if (!pendingId) {
+            return;
+        }
+        try {
+            window.sessionStorage.removeItem(PENDING_PORTFOLIO_STORAGE_KEY);
+        } catch {
+            // Ignoruj błąd usunięcia.
+        }
+        const portfolio = savedPortfolios.find((item) => item.id === pendingId);
+        if (!portfolio) {
+            return;
+        }
+        applyPortfolioDraft(portfolio.draft);
+        setPfSaveName(portfolio.name);
+        setPfSaveFeedback({
+            kind: "success",
+            message: `Załadowano portfel "${portfolio.name}" do symulatora.`,
+        });
+    }, [applyPortfolioDraft, savedPortfolios]);
 
     const handleSavePortfolioDraft = useCallback(() => {
         setPfSaveFeedback(null);
