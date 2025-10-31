@@ -170,6 +170,10 @@ body {
     color: var(--color-accent);
   }
 
+  .text-primary-strong {
+    color: var(--color-primary-strong);
+  }
+
   .text-negative {
     color: var(--color-negative);
   }
@@ -200,6 +204,10 @@ body {
 
   .bg-primary-soft {
     background-color: var(--color-primary-soft);
+  }
+
+  .bg-foreground {
+    background-color: var(--foreground);
   }
 
   .bg-primary-glow {
