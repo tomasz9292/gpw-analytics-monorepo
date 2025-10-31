@@ -10557,14 +10557,14 @@ function InfoHint({ text }: { text: string }) {
                 tabIndex={0}
                 aria-describedby={tooltipId}
                 aria-label={text}
-                className="inline-flex h-4 w-4 cursor-help items-center justify-center rounded-full border border-soft text-[10px] font-semibold text-muted transition group-hover:border-primary group-hover:text-primary group-focus-visible:border-primary group-focus-visible:text-primary"
+                className="inline-flex h-5 w-5 cursor-help items-center justify-center rounded-full border border-soft bg-soft-surface text-[11px] font-semibold text-muted transition group-hover:border-primary group-hover:text-primary group-focus-visible:border-primary group-focus-visible:text-primary"
             >
                 i
             </span>
             <span
                 role="tooltip"
                 id={tooltipId}
-                className="pointer-events-none absolute left-1/2 top-full z-20 mt-2 hidden w-64 -translate-x-1/2 rounded-lg bg-neutral px-3 py-2 text-[11px] font-medium text-white opacity-0 shadow-lg transition group-hover:block group-hover:translate-y-1 group-hover:opacity-100 group-focus-visible:block group-focus-visible:translate-y-1 group-focus-visible:opacity-100"
+                className="pointer-events-none absolute left-1/2 top-full z-20 mt-2 hidden max-w-xs -translate-x-1/2 rounded-lg bg-foreground px-3 py-2 text-[11px] font-medium text-primary-strong opacity-0 shadow-primary-glow transition group-hover:block group-hover:translate-y-1 group-hover:opacity-100 group-focus-visible:block group-focus-visible:translate-y-1 group-focus-visible:opacity-100"
             >
                 {text}
             </span>
