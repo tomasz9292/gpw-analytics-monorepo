@@ -6,6 +6,7 @@ import { createPortal } from "react-dom";
 import Image from "next/image";
 import Link from "next/link";
 import Script from "next/script";
+import { useRouter } from "next/navigation";
 import { useTheme, type ThemeMode } from "@/components/theme-provider";
 import { formatPct } from "@/lib/format";
 import {
@@ -64,6 +65,8 @@ const ADMIN_API = "/api/admin";
 const LOCAL_ADMIN_API = "http://localhost:8000/api/admin";
 const LOCAL_CLICKHOUSE_STORAGE_KEY = "gpw-local-clickhouse-config";
 const CUSTOM_INDICES_STORAGE_KEY = "gpw-custom-indices";
+const SAVED_PORTFOLIOS_STORAGE_KEY = "gpw_saved_portfolios_v1";
+const PENDING_PORTFOLIO_STORAGE_KEY = "gpw_saved_portfolio_pending";
 const MAX_UNIVERSE_FALLBACK_SYMBOLS = 500;
 
 const NETWORK_ERROR_PATTERNS = [
@@ -1683,6 +1686,13 @@ type PersistedPreferences = {
     scoreTemplates: ScoreTemplate[];
     scoreDraft: ScoreDraftState;
     portfolioDraft: PortfolioDraftState;
+};
+
+type SavedPortfolio = {
+    id: string;
+    name: string;
+    createdAt: string;
+    draft: PortfolioDraftState;
 };
 
 type PublicUserProfile = {
@@ -7608,7 +7618,7 @@ const CompanySyncPanel = ({ symbol, setSymbol }: CompanySyncPanelProps) => {
     );
 };
 
-export type DashboardView = "analysis" | "score" | "portfolio" | "sync";
+export type DashboardView = "analysis" | "score" | "portfolio" | "wallet" | "sync";
 
 export type AnalyticsDashboardProps = {
     view: DashboardView;
@@ -7716,6 +7726,30 @@ const IconPie = ({ className }: { className?: string }) => (
             strokeWidth="1.8"
             strokeLinecap="round"
             strokeLinejoin="round"
+        />
+    </svg>
+);
+
+const IconWallet = ({ className }: { className?: string }) => (
+    <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        xmlns="http://www.w3.org/2000/svg"
+        className={className}
+    >
+        <path
+            d="M20 7H4C2.89543 7 2 7.89543 2 9V17C2 18.1046 2.89543 19 4 19H20C21.1046 19 22 18.1046 22 17V9C22 7.89543 21.1046 7 20 7Z"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+        />
+        <path d="M16 11H18C18.5523 11 19 11.4477 19 12C19 12.5523 18.5523 13 18 13H16C15.4477 13 15 12.5523 15 12C15 11.4477 15.4477 11 16 11Z" fill="currentColor" />
+        <path
+            d="M2 11H8C9.10457 11 10 10.1046 10 9C10 7.89543 9.10457 7 8 7H7"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
         />
     </svg>
 );
@@ -11509,6 +11543,178 @@ function MetricRulePreview({
 export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
     const defaultScoreDraft = useMemo(() => getDefaultScoreDraft(), []);
     const defaultPortfolioDraft = useMemo(() => getDefaultPortfolioDraft(), []);
+    const router = useRouter();
+
+    const sanitizePortfolioDraft = useCallback(
+        (incoming: unknown): PortfolioDraftState => {
+            const fallback = defaultPortfolioDraft;
+            if (!incoming || typeof incoming !== "object") {
+                return {
+                    ...fallback,
+                    rows: fallback.rows.map((row) => ({ ...row })),
+                    score: { ...fallback.score },
+                    comparisons: [...fallback.comparisons],
+                };
+            }
+            const raw = incoming as Partial<PortfolioDraftState> & Record<string, unknown>;
+            const mode: PortfolioDraftState["mode"] = raw.mode === "score" ? "score" : "manual";
+            const rowsSource = Array.isArray(raw.rows) ? raw.rows : [];
+            const sanitizedRows = rowsSource
+                .map((row) => {
+                    if (!row || typeof row !== "object") {
+                        return null;
+                    }
+                    const symbolRaw = (row as { symbol?: unknown }).symbol;
+                    const weightRaw = (row as { weight?: unknown }).weight;
+                    const symbol =
+                        typeof symbolRaw === "string"
+                            ? symbolRaw.trim().toUpperCase()
+                            : "";
+                    const numericWeight =
+                        typeof weightRaw === "number"
+                            ? weightRaw
+                            : typeof weightRaw === "string"
+                            ? Number(weightRaw)
+                            : 0;
+                    const weight = Number.isFinite(numericWeight) ? numericWeight : 0;
+                    if (!symbol) {
+                        return null;
+                    }
+                    return { symbol, weight };
+                })
+                .filter((row): row is { symbol: string; weight: number } => Boolean(row));
+            const rows = sanitizedRows.length
+                ? sanitizedRows
+                : fallback.rows.map((row) => ({ ...row }));
+            const start =
+                typeof raw.start === "string" && raw.start.trim().length
+                    ? raw.start
+                    : fallback.start;
+            const end =
+                typeof raw.end === "string" && raw.end.trim().length ? raw.end : fallback.end;
+            const initialRaw = (raw as { initial?: unknown }).initial;
+            const initial =
+                typeof initialRaw === "number"
+                    ? initialRaw
+                    : typeof initialRaw === "string"
+                    ? Number(initialRaw)
+                    : fallback.initial;
+            const feeRaw = (raw as { fee?: unknown }).fee;
+            const fee =
+                typeof feeRaw === "number"
+                    ? feeRaw
+                    : typeof feeRaw === "string"
+                    ? Number(feeRaw)
+                    : fallback.fee;
+            const thresholdRaw = (raw as { threshold?: unknown }).threshold;
+            const threshold =
+                typeof thresholdRaw === "number"
+                    ? thresholdRaw
+                    : typeof thresholdRaw === "string"
+                    ? Number(thresholdRaw)
+                    : fallback.threshold;
+            const benchmarkRaw = (raw as { benchmark?: unknown }).benchmark;
+            const benchmark =
+                typeof benchmarkRaw === "string" && benchmarkRaw.trim().length
+                    ? benchmarkRaw.trim().toUpperCase()
+                    : null;
+            const freqRaw = (raw as { frequency?: unknown }).frequency;
+            const frequency: PortfolioDraftState["frequency"] =
+                freqRaw === "none"
+                    ? "none"
+                    : freqRaw === "quarterly"
+                    ? "quarterly"
+                    : freqRaw === "yearly"
+                    ? "yearly"
+                    : "monthly";
+            const scoreRaw = (raw as { score?: unknown }).score;
+            const scoreFallback = fallback.score;
+            const scoreSource =
+                scoreRaw && typeof scoreRaw === "object" && scoreRaw !== null
+                    ? (scoreRaw as {
+                          name?: unknown;
+                          limit?: unknown;
+                          weighting?: unknown;
+                          direction?: unknown;
+                          universe?: unknown;
+                          min?: unknown;
+                          max?: unknown;
+                      })
+                    : undefined;
+            const score =
+                scoreSource
+                    ? {
+                          name: (() => {
+                              const value = scoreSource.name;
+                              return typeof value === "string" && value.trim().length
+                                  ? value.trim()
+                                  : scoreFallback.name;
+                          })(),
+                          limit: (() => {
+                              const value = scoreSource.limit;
+                              const numeric =
+                                  typeof value === "number"
+                                      ? value
+                                      : typeof value === "string"
+                                      ? Number(value)
+                                      : NaN;
+                              return Number.isFinite(numeric) && numeric > 0
+                                  ? numeric
+                                  : scoreFallback.limit;
+                          })(),
+                          weighting: (() => {
+                              const value = scoreSource.weighting;
+                              if (value === "score" || value === "volatility_inverse") {
+                                  return value;
+                              }
+                              return "equal";
+                          })(),
+                          direction: (() => {
+                              const direction: PortfolioDraftState["score"]["direction"] =
+                                  scoreSource.direction === "asc" ? "asc" : "desc";
+                              return direction;
+                          })(),
+                          universe:
+                              typeof scoreSource.universe === "string"
+                                  ? scoreSource.universe ?? ""
+                                  : scoreFallback.universe,
+                          min:
+                              typeof scoreSource.min === "string"
+                                  ? scoreSource.min ?? ""
+                                  : scoreFallback.min,
+                          max:
+                              typeof scoreSource.max === "string"
+                                  ? scoreSource.max ?? ""
+                                  : scoreFallback.max,
+                      }
+                    : { ...scoreFallback };
+            const comparisonsRaw = Array.isArray(raw.comparisons)
+                ? raw.comparisons
+                : [];
+            const comparisons = comparisonsRaw
+                .map((item) =>
+                    typeof item === "string" ? item.trim().toUpperCase() : undefined
+                )
+                .filter((item): item is string => Boolean(item));
+            return {
+                mode,
+                rows,
+                start,
+                end,
+                initial: Number.isFinite(initial) && initial > 0 ? initial : fallback.initial,
+                fee: Number.isFinite(fee) && fee >= 0 ? fee : fallback.fee,
+                threshold:
+                    Number.isFinite(threshold) && threshold >= 0 ? threshold : fallback.threshold,
+                benchmark,
+                frequency,
+                score,
+                comparisons: comparisons.length
+                    ? Array.from(new Set(comparisons))
+                    : [...fallback.comparisons],
+            };
+        },
+        [defaultPortfolioDraft]
+    );
 
     const [authUser, setAuthUserState] = useState<AuthUser | null>(() => {
         if (typeof window === "undefined") {
@@ -11956,6 +12162,88 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
             return [];
         }
     });
+    const [savedPortfolios, setSavedPortfolios] = useState<SavedPortfolio[]>([]);
+    const savedPortfoliosHydratedRef = useRef(false);
+
+    useEffect(() => {
+        if (savedPortfoliosHydratedRef.current) {
+            return;
+        }
+        if (typeof window === "undefined") {
+            return;
+        }
+        try {
+            const stored = window.localStorage.getItem(SAVED_PORTFOLIOS_STORAGE_KEY);
+            if (!stored) {
+                return;
+            }
+            const parsed: unknown = JSON.parse(stored);
+            if (!Array.isArray(parsed)) {
+                return;
+            }
+            const normalized: SavedPortfolio[] = [];
+            parsed.forEach((item) => {
+                if (!item || typeof item !== "object") {
+                    return;
+                }
+                const idRaw = (item as { id?: unknown }).id;
+                const id =
+                    typeof idRaw === "string" && idRaw.trim().length
+                        ? idRaw
+                        : typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+                        ? crypto.randomUUID()
+                        : `portfolio-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+                const nameRaw = (item as { name?: unknown }).name;
+                const name =
+                    typeof nameRaw === "string" && nameRaw.trim().length
+                        ? nameRaw.trim()
+                        : "Portfel";
+                const createdAtRaw = (item as { createdAt?: unknown }).createdAt;
+                const createdAt =
+                    typeof createdAtRaw === "string" && createdAtRaw.trim().length
+                        ? createdAtRaw
+                        : new Date().toISOString();
+                const draftRaw = (item as { draft?: unknown }).draft;
+                const draft = sanitizePortfolioDraft(draftRaw);
+                normalized.push({ id, name, createdAt, draft });
+            });
+            if (normalized.length) {
+                setSavedPortfolios(normalized);
+            }
+        } catch {
+            // Ignoruj błędy odczytu lokalnego magazynu.
+        } finally {
+            savedPortfoliosHydratedRef.current = true;
+        }
+    }, [sanitizePortfolioDraft]);
+
+    useEffect(() => {
+        if (!savedPortfoliosHydratedRef.current) {
+            return;
+        }
+        if (typeof window === "undefined") {
+            return;
+        }
+        try {
+            window.localStorage.setItem(
+                SAVED_PORTFOLIOS_STORAGE_KEY,
+                JSON.stringify(
+                    savedPortfolios.map((portfolio) => ({
+                        ...portfolio,
+                        draft: {
+                            ...portfolio.draft,
+                            rows: portfolio.draft.rows.map((row) => ({ ...row })),
+                            score: { ...portfolio.draft.score },
+                            comparisons: [...portfolio.draft.comparisons],
+                        },
+                    }))
+                )
+            );
+        } catch {
+            // Ignoruj błędy zapisu.
+        }
+    }, [savedPortfolios]);
+
     const [customIndexFormOpen, setCustomIndexFormOpen] = useState(false);
     const [customIndexDraft, setCustomIndexDraft] = useState<CustomIndexDraft>(() => ({
         code: "",
@@ -12736,6 +13024,10 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
     const [pfComparisonErrors, setPfComparisonErrors] = useState<Record<string, string>>({});
     const [pfComparisonMeta, setPfComparisonMeta] = useState<Record<string, ComparisonMeta>>({});
     const [pfPeriod, setPfPeriod] = useState<ChartPeriod>("max");
+    const [pfSaveName, setPfSaveName] = useState("");
+    const [pfSaveFeedback, setPfSaveFeedback] = useState<
+        { kind: "success" | "error"; message: string } | null
+    >(null);
     const pfTotal = pfRows.reduce((a, b) => a + (Number(b.weight) || 0), 0);
     const pfRangeInvalid = pfStart > pfEnd;
     const [pfLoading, setPfLoading] = useState(false);
@@ -12765,6 +13057,274 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
 
     const pfDisableSimulation =
         pfMode === "manual" ? pfDisableManualSimulation : pfDisableScoreSimulation;
+
+    const applyPortfolioDraft = useCallback(
+        (draft: PortfolioDraftState) => {
+            const safeDraft = sanitizePortfolioDraft(draft);
+            setPfMode(safeDraft.mode);
+            setPfRows(safeDraft.rows.map((row) => ({ ...row })));
+            setPfStart(safeDraft.start);
+            setPfEnd(safeDraft.end);
+            setPfInitial(safeDraft.initial);
+            setPfFee(safeDraft.fee);
+            setPfThreshold(safeDraft.threshold);
+            setPfBenchmark(safeDraft.benchmark);
+            setPfLastBenchmark(null);
+            setPfFreq(safeDraft.frequency);
+            setPfScoreName(safeDraft.score.name);
+            setPfScoreLimit(safeDraft.score.limit);
+            setPfScoreWeighting(safeDraft.score.weighting);
+            setPfScoreDirection(safeDraft.score.direction);
+            setPfScoreUniverse(safeDraft.score.universe ?? "");
+            setPfScoreMin(safeDraft.score.min ?? "");
+            setPfScoreMax(safeDraft.score.max ?? "");
+            setPfComparisonSymbols([...safeDraft.comparisons]);
+            setPfComparisonAllRows({});
+            setPfComparisonErrors({});
+            setPfComparisonMeta({});
+            setPfRes(null);
+            setPfPeriod("max");
+            setPfBrushRange(null);
+            setPfTimelineOpen(false);
+            setPfProgress(null);
+            if (pfProgressTimerRef.current) {
+                clearInterval(pfProgressTimerRef.current);
+                pfProgressTimerRef.current = null;
+            }
+            if (pfProgressCleanupRef.current) {
+                clearTimeout(pfProgressCleanupRef.current);
+                pfProgressCleanupRef.current = null;
+            }
+            pfProgressMessagesRef.current = [];
+            pfProgressMessageIndexRef.current = 0;
+            setPfSelectedTemplateId(null);
+            setPfSaveFeedback(null);
+        },
+        [
+            sanitizePortfolioDraft,
+            setPfBenchmark,
+            setPfBrushRange,
+            setPfComparisonAllRows,
+            setPfComparisonErrors,
+            setPfComparisonMeta,
+            setPfComparisonSymbols,
+            setPfEnd,
+            setPfFee,
+            setPfFreq,
+            setPfInitial,
+            setPfLastBenchmark,
+            setPfMode,
+            setPfPeriod,
+            setPfProgress,
+            setPfRes,
+            setPfRows,
+            setPfSaveFeedback,
+            setPfScoreDirection,
+            setPfScoreLimit,
+            setPfScoreMax,
+            setPfScoreMin,
+            setPfScoreName,
+            setPfScoreUniverse,
+            setPfScoreWeighting,
+            setPfSelectedTemplateId,
+            setPfStart,
+            setPfThreshold,
+            setPfTimelineOpen,
+        ]
+    );
+
+    useEffect(() => {
+        if (!savedPortfoliosHydratedRef.current) {
+            return;
+        }
+        if (typeof window === "undefined") {
+            return;
+        }
+        let pendingId: string | null = null;
+        try {
+            pendingId = window.sessionStorage.getItem(PENDING_PORTFOLIO_STORAGE_KEY);
+        } catch {
+            pendingId = null;
+        }
+        if (!pendingId) {
+            return;
+        }
+        try {
+            window.sessionStorage.removeItem(PENDING_PORTFOLIO_STORAGE_KEY);
+        } catch {
+            // Ignoruj błąd usunięcia.
+        }
+        const portfolio = savedPortfolios.find((item) => item.id === pendingId);
+        if (!portfolio) {
+            return;
+        }
+        applyPortfolioDraft(portfolio.draft);
+        setPfSaveName(portfolio.name);
+        setPfSaveFeedback({
+            kind: "success",
+            message: `Załadowano portfel "${portfolio.name}" do symulatora.`,
+        });
+    }, [applyPortfolioDraft, savedPortfolios]);
+
+    const handleSavePortfolioDraft = useCallback(() => {
+        setPfSaveFeedback(null);
+        const trimmedName = pfSaveName.trim();
+        if (!trimmedName) {
+            setPfSaveFeedback({
+                kind: "error",
+                message: "Podaj nazwę portfela przed zapisem.",
+            });
+            return;
+        }
+        if (pfRangeInvalid) {
+            setPfSaveFeedback({
+                kind: "error",
+                message: "Data końca musi być późniejsza niż data startu.",
+            });
+            return;
+        }
+        if (pfMode === "manual") {
+            if (pfHasInvalidWeights) {
+                setPfSaveFeedback({
+                    kind: "error",
+                    message: "Wagi muszą być liczbami nieujemnymi.",
+                });
+                return;
+            }
+            if (pfHasMissingSymbols) {
+                setPfSaveFeedback({
+                    kind: "error",
+                    message: "Uzupełnij symbole dla pozycji z dodatnią wagą.",
+                });
+                return;
+            }
+            if (!pfHasValidPositions) {
+                setPfSaveFeedback({
+                    kind: "error",
+                    message: "Dodaj co najmniej jedną pozycję z dodatnią wagą.",
+                });
+                return;
+            }
+        } else {
+            if (pfScoreNameInvalid) {
+                setPfSaveFeedback({
+                    kind: "error",
+                    message: "Podaj nazwę rankingu score.",
+                });
+                return;
+            }
+            if (pfScoreLimitInvalid) {
+                setPfSaveFeedback({
+                    kind: "error",
+                    message: "Wybierz dodatnią liczbę spółek w rankingu.",
+                });
+                return;
+            }
+        }
+        const draft: PortfolioDraftState = {
+            mode: pfMode,
+            rows: pfRows
+                .map((row) => ({
+                    symbol: (row.symbol ?? "").trim().toUpperCase(),
+                    weight: Number(row.weight) || 0,
+                }))
+                .filter((row) => row.symbol && row.weight >= 0),
+            start: pfStart,
+            end: pfEnd,
+            initial: pfInitial,
+            fee: pfFee,
+            threshold: pfThreshold,
+            benchmark: pfBenchmark,
+            frequency: pfFreq,
+            score: {
+                name: pfScoreName,
+                limit: pfScoreLimit,
+                weighting: pfScoreWeighting,
+                direction: pfScoreDirection,
+                universe: pfScoreUniverse,
+                min: pfScoreMin,
+                max: pfScoreMax,
+            },
+            comparisons: Array.from(
+                new Set(
+                    pfComparisonSymbols
+                        .map((item) => item.trim().toUpperCase())
+                        .filter((item) => item.length)
+                )
+            ),
+        };
+        const normalized = sanitizePortfolioDraft(draft);
+        const id =
+            typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+                ? crypto.randomUUID()
+                : `portfolio-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const createdAt = new Date().toISOString();
+        setSavedPortfolios((prev) => [
+            { id, name: trimmedName, createdAt, draft: normalized },
+            ...prev.filter((portfolio) => portfolio.name.toLowerCase() !== trimmedName.toLowerCase()),
+        ]);
+        setPfSaveName("");
+        setPfSaveFeedback({
+            kind: "success",
+            message: "Portfel zapisany w zakładce Portfel.",
+        });
+        if (typeof window !== "undefined") {
+            try {
+                window.sessionStorage.setItem(PENDING_PORTFOLIO_STORAGE_KEY, id);
+            } catch {
+                // Ignoruj błąd – nawigacja i tak nastąpi.
+            }
+        }
+        router.push("/portfel");
+    }, [
+        pfBenchmark,
+        pfComparisonSymbols,
+        pfEnd,
+        pfFee,
+        pfFreq,
+        pfHasInvalidWeights,
+        pfHasMissingSymbols,
+        pfHasValidPositions,
+        pfInitial,
+        pfMode,
+        pfRangeInvalid,
+        pfRows,
+        pfSaveName,
+        pfScoreDirection,
+        pfScoreLimit,
+        pfScoreLimitInvalid,
+        pfScoreMax,
+        pfScoreMin,
+        pfScoreName,
+        pfScoreNameInvalid,
+        pfScoreUniverse,
+        pfScoreWeighting,
+        pfStart,
+        pfThreshold,
+        router,
+        sanitizePortfolioDraft,
+    ]);
+
+    const handleDeleteSavedPortfolio = useCallback(
+        (id: string) => {
+            setSavedPortfolios((prev) => prev.filter((portfolio) => portfolio.id !== id));
+        },
+        [setSavedPortfolios]
+    );
+
+    const handleLoadSavedPortfolio = useCallback(
+        (portfolio: SavedPortfolio) => {
+            if (typeof window !== "undefined") {
+                try {
+                    window.sessionStorage.setItem(PENDING_PORTFOLIO_STORAGE_KEY, portfolio.id);
+                } catch {
+                    // Ignoruj błąd zapisu w sessionStorage.
+                }
+            }
+            router.push("/symulator-portfela");
+        },
+        [router]
+    );
 
     const benchmarkUniverseOptions = useMemo<BenchmarkUniverseOption[]>(() => {
         const options: BenchmarkUniverseOption[] = [];
@@ -13750,6 +14310,13 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
             key: "portfolio",
             icon: IconPie,
             description: "Testuj portfele z rebalancingiem, kosztami i porównaniem do benchmarków.",
+        },
+        {
+            href: view === "wallet" ? "#wallet" : "/portfel",
+            label: "Portfel",
+            key: "wallet",
+            icon: IconWallet,
+            description: "Zapisuj konfiguracje portfeli i przeglądaj rekomendacje transakcji.",
         },
         ...(isAdmin
             ? [
@@ -17039,6 +17606,44 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                             )}
                                         </div>
                                     )}
+                                    <div className="space-y-2">
+                                        <label className="flex flex-col gap-2">
+                                            <span className="text-xs uppercase tracking-wide text-muted">
+                                                Nazwa portfela
+                                            </span>
+                                            <input
+                                                type="text"
+                                                value={pfSaveName}
+                                                onChange={(event) => {
+                                                    setPfSaveName(event.target.value);
+                                                    if (pfSaveFeedback?.kind === "success") {
+                                                        setPfSaveFeedback(null);
+                                                    }
+                                                }}
+                                                className={inputBaseClasses}
+                                                placeholder="np. Portfel Momentum"
+                                            />
+                                        </label>
+                                        <button
+                                            type="button"
+                                            onClick={handleSavePortfolioDraft}
+                                            className="w-full md:w-auto px-4 py-2 rounded-xl border border-soft bg-white/80 text-sm font-semibold text-primary transition hover:border-[var(--color-primary)] hover:text-primary disabled:opacity-50"
+                                            disabled={pfLoading}
+                                        >
+                                            Zapisz portfel
+                                        </button>
+                                        {pfSaveFeedback && (
+                                            <div
+                                                className={`text-xs ${
+                                                    pfSaveFeedback.kind === "success"
+                                                        ? "text-primary"
+                                                        : "text-negative"
+                                                }`}
+                                            >
+                                                {pfSaveFeedback.message}
+                                            </div>
+                                        )}
+                                    </div>
                                     {pfMode === "manual" ? (
                                         <>
                                             {pfHasInvalidWeights && (
@@ -17262,8 +17867,180 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                 )}
                             </div>
                         </div>
-                    </Card>
-                </Section>
+                        </Card>
+                    </Section>
+                    )}
+                    {view === "wallet" && (
+                        <Section
+                            id="wallet"
+                            title="Portfel – zapisane konfiguracje"
+                            description="Przechowuj wyniki symulacji, wracaj do swoich ustawień i korzystaj z automatycznych rekomendacji transakcji."
+                        >
+                            <Card>
+                                {savedPortfolios.length ? (
+                                    <div className="space-y-6">
+                                        {savedPortfolios.map((portfolio) => {
+                                            const positions = portfolio.draft.rows
+                                                .filter((row) => row.symbol && Number(row.weight) > 0)
+                                                .map((row) => ({
+                                                    symbol: row.symbol,
+                                                    weight: Number(row.weight) || 0,
+                                                }));
+                                            const sortedPositions = [...positions].sort(
+                                                (a, b) => b.weight - a.weight
+                                            );
+                                            const equalWeight = positions.length
+                                                ? 100 / positions.length
+                                                : 0;
+                                            const suggestions = sortedPositions.slice(0, 5).map((row) => {
+                                                const diff = row.weight - equalWeight;
+                                                let action = "Utrzymaj";
+                                                if (diff > 5) {
+                                                    action = "Przeważ";
+                                                } else if (diff < -5) {
+                                                    action = "Zredukuj";
+                                                }
+                                                const diffLabel = `${diff >= 0 ? "+" : ""}${diff.toFixed(1)} pp`;
+                                                return {
+                                                    symbol: row.symbol,
+                                                    target: row.weight,
+                                                    action,
+                                                    diffLabel,
+                                                };
+                                            });
+                                            let createdAtLabel = portfolio.createdAt;
+                                            const createdAtDate = new Date(portfolio.createdAt);
+                                            if (!Number.isNaN(createdAtDate.getTime())) {
+                                                createdAtLabel = createdAtDate.toLocaleString("pl-PL", {
+                                                    dateStyle: "medium",
+                                                    timeStyle: "short",
+                                                });
+                                            }
+                                            return (
+                                                <div
+                                                    key={portfolio.id}
+                                                    className="space-y-6 rounded-3xl border border-soft bg-white/80 p-6 shadow-sm"
+                                                >
+                                                    <div className="flex flex-wrap items-start justify-between gap-4">
+                                                        <div className="space-y-1">
+                                                            <h3 className="text-lg font-semibold text-primary">
+                                                                {portfolio.name}
+                                                            </h3>
+                                                            <p className="text-xs text-subtle">
+                                                                Zapisano: {createdAtLabel}
+                                                            </p>
+                                                            <p className="text-xs text-subtle">
+                                                                Tryb: {portfolio.draft.mode === "score" ? "automatycznie wg score" : "własne wagi"}
+                                                                {" · "}
+                                                                Zakres: {portfolio.draft.start} – {portfolio.draft.end}
+                                                            </p>
+                                                            <p className="text-xs text-subtle">
+                                                                Benchmark: {portfolio.draft.benchmark ?? "brak"}
+                                                            </p>
+                                                        </div>
+                                                        <div className="flex flex-wrap gap-2">
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handleLoadSavedPortfolio(portfolio)}
+                                                                className="inline-flex items-center gap-2 rounded-xl border border-soft bg-white/80 px-4 py-2 text-sm font-semibold text-primary transition hover:border-[var(--color-primary)] hover:text-primary"
+                                                            >
+                                                                Otwórz w symulatorze
+                                                            </button>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handleDeleteSavedPortfolio(portfolio.id)}
+                                                                className="inline-flex items-center gap-2 rounded-xl border border-soft px-4 py-2 text-sm text-negative transition hover:border-negative hover:bg-negative/10"
+                                                            >
+                                                                Usuń
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                    <div className="grid gap-6 md:grid-cols-2">
+                                                        <div className="space-y-3">
+                                                            <h4 className="text-sm font-semibold text-neutral">
+                                                                Skład portfela
+                                                            </h4>
+                                                            {positions.length ? (
+                                                                <div className="overflow-x-auto">
+                                                                    <table className="min-w-full divide-y divide-soft text-sm">
+                                                                        <thead className="bg-soft-surface text-xs uppercase tracking-wide text-muted">
+                                                                            <tr>
+                                                                                <th className="px-3 py-2 text-left">Symbol</th>
+                                                                                <th className="px-3 py-2 text-right">Waga</th>
+                                                                            </tr>
+                                                                        </thead>
+                                                                        <tbody className="divide-y divide-soft">
+                                                                            {sortedPositions.map((row) => (
+                                                                                <tr key={`${portfolio.id}-${row.symbol}`}>
+                                                                                    <td className="px-3 py-2 font-medium text-primary">
+                                                                                        {row.symbol}
+                                                                                    </td>
+                                                                                    <td className="px-3 py-2 text-right text-subtle">
+                                                                                        {row.weight.toFixed(1)}%
+                                                                                    </td>
+                                                                                </tr>
+                                                                            ))}
+                                                                        </tbody>
+                                                                    </table>
+                                                                </div>
+                                                            ) : (
+                                                                <p className="text-xs text-subtle">
+                                                                    Brak zapisanych pozycji w tym portfelu.
+                                                                </p>
+                                                            )}
+                                                        </div>
+                                                        <div className="space-y-3">
+                                                            <h4 className="text-sm font-semibold text-neutral">
+                                                                Proponowane transakcje
+                                                            </h4>
+                                                            {suggestions.length ? (
+                                                                <ul className="space-y-2 text-sm">
+                                                                    {suggestions.map((suggestion) => (
+                                                                        <li
+                                                                            key={`${portfolio.id}-suggestion-${suggestion.symbol}`}
+                                                                            className="rounded-2xl border border-soft bg-soft-surface px-4 py-3 shadow-sm"
+                                                                        >
+                                                                            <div className="flex items-center justify-between">
+                                                                                <span className="font-semibold text-primary">
+                                                                                    {suggestion.symbol}
+                                                                                </span>
+                                                                                <span className="text-xs uppercase tracking-wide text-muted">
+                                                                                    {suggestion.action}
+                                                                                </span>
+                                                                            </div>
+                                                                            <div className="text-xs text-subtle">
+                                                                                Cel: {suggestion.target.toFixed(1)}% ({suggestion.diffLabel})
+                                                                            </div>
+                                                                        </li>
+                                                                    ))}
+                                                                </ul>
+                                                            ) : (
+                                                                <p className="text-xs text-subtle">
+                                                                    Dodaj pozycje, aby wygenerować rekomendacje.
+                                                                </p>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                    {portfolio.draft.comparisons.length ? (
+                                                        <div className="text-xs text-subtle">
+                                                            Porównania: {portfolio.draft.comparisons.join(", ")}
+                                                        </div>
+                                                    ) : null}
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                ) : (
+                                    <div className="space-y-3 text-sm text-subtle">
+                                        <p>Brak zapisanych portfeli.</p>
+                                        <p>
+                                            Skonfiguruj strategię w zakładce „Symulacja portfela” i wybierz opcję
+                                            „Zapisz portfel”, aby dodać ją do tej listy.
+                                        </p>
+                                    </div>
+                                )}
+                            </Card>
+                        </Section>
                     )}
 
                 <footer className="pt-6 text-center text-sm text-subtle">
