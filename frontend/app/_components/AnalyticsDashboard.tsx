@@ -1862,8 +1862,13 @@ const MAX_COMPARISONS = COMPARISON_COLORS.length;
 
 type Rebalance = "none" | "monthly" | "quarterly" | "yearly";
 
+type CompositionDataPoint = {
+    label: string;
+    values: Record<string, number>;
+};
+
 type CompositionSeries = {
-    data: Array<{ label: string } & Record<string, number>>;
+    data: CompositionDataPoint[];
     keys: Array<{ key: string; name: string; color: string }>;
 };
 
@@ -2072,7 +2077,7 @@ const buildCompositionSeries = (
             data: [
                 {
                     label: formatDateLabel(new Date()),
-                    ...getTargetWeights(),
+                    values: getTargetWeights(),
                 },
             ],
             keys,
@@ -2082,18 +2087,18 @@ const buildCompositionSeries = (
     const data: CompositionSeries["data"] = [];
     schedule.forEach((date, index) => {
         if (index === 0) {
-            data.push({ label: formatDateLabel(date), ...getTargetWeights() });
+            data.push({ label: formatDateLabel(date), values: getTargetWeights() });
             return;
         }
         const prevDate = schedule[index - 1];
         const midpoint = new Date((prevDate.getTime() + date.getTime()) / 2);
-        data.push({ label: formatDateLabel(midpoint), ...getDriftWeights(index) });
-        data.push({ label: formatDateLabel(date), ...getTargetWeights() });
+        data.push({ label: formatDateLabel(midpoint), values: getDriftWeights(index) });
+        data.push({ label: formatDateLabel(date), values: getTargetWeights() });
     });
 
     if (data.length === 1) {
         const fallbackDate = addMonthsSafe(schedule[0], 1);
-        data.push({ label: formatDateLabel(fallbackDate), ...getTargetWeights() });
+        data.push({ label: formatDateLabel(fallbackDate), values: getTargetWeights() });
     }
 
     return { data, keys };
@@ -18180,6 +18185,12 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                             const hasChartData =
                                                 compositionSeries.data.length > 0 &&
                                                 compositionSeries.keys.length > 0;
+                                            const chartData = compositionSeries.data.map(
+                                                ({ label, values }) => ({
+                                                    label,
+                                                    ...values,
+                                                })
+                                            );
                                             let createdAtLabel = portfolio.createdAt;
                                             const createdAtDate = new Date(portfolio.createdAt);
                                             if (!Number.isNaN(createdAtDate.getTime())) {
@@ -18353,7 +18364,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                         {hasChartData ? (
                                                             <div className="h-64 w-full">
                                                                 <ResponsiveContainer>
-                                                                    <AreaChart data={compositionSeries.data}>
+                                                                    <AreaChart data={chartData}>
                                                                         <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
                                                                         <XAxis
                                                                             dataKey="label"
