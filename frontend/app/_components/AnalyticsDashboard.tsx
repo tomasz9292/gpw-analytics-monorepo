@@ -15233,8 +15233,24 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                             </div>
                             <div className="grid gap-4 md:grid-cols-2">
                                 <label className="flex flex-col gap-2">
-                                    <span className="text-muted text-xs uppercase tracking-wide">
+                                    <span className="flex items-center gap-2 text-muted text-xs uppercase tracking-wide">
                                         Universe / filtr
+                                        <button
+                                            type="button"
+                                            tabIndex={0}
+                                            aria-label="Informacja o polu Universe"
+                                            className="group relative inline-flex h-4 w-4 items-center justify-center rounded-full border border-soft bg-soft-surface text-[0.65rem] font-semibold text-muted outline-none transition hover:text-primary focus-visible:text-primary"
+                                        >
+                                            i
+                                            <span className="pointer-events-none absolute bottom-full left-1/2 z-10 hidden w-64 -translate-x-1/2 -translate-y-2 rounded bg-soft-surface p-2 text-[0.65rem] text-left font-normal normal-case leading-relaxed text-subtle shadow-lg group-hover:block group-focus-visible:block">
+                                                Pozostaw puste, aby uwzględnić wszystkie spółki GPW dostępne w bazie danych.
+                                                Możesz też łączyć kilka indeksów, np.{" "}
+                                                <code className="mx-1 rounded bg-soft-surface px-1">index:MWIG40</code>{" "}
+                                                <span className="text-muted">+</span>{" "}
+                                                <code className="mx-1 rounded bg-soft-surface px-1">index:SWIG80</code>,{" "}
+                                                oraz własne konfiguracje.
+                                            </span>
+                                        </button>
                                     </span>
                                     <input
                                         type="text"
@@ -15243,14 +15259,6 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                         className={inputBaseClasses}
                                         placeholder="np. index:MWIG40, index:SWIG80"
                                     />
-                                    <span className="text-xs text-subtle">
-                                        Pozostaw puste, aby uwzględnić wszystkie spółki
-                                        GPW dostępne w bazie danych. Możesz też łączyć kilka
-                                        indeksów, np. <code className="rounded bg-soft-surface px-1">index:MWIG40</code>{" "}
-                                        <span className="text-muted">+</span>{" "}
-                                        <code className="rounded bg-soft-surface px-1">index:SWIG80</code>,
-                                        oraz własne konfiguracje.
-                                    </span>
                                     {benchmarkUniverseOptions.length > 0 && (
                                         <div className="flex flex-wrap items-center gap-2 text-xs text-subtle">
                                             <span>Wybierz indeks:</span>
