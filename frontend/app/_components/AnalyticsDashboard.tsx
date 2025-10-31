@@ -15906,7 +15906,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                     type="button"
                                     onClick={handleScorePreview}
                                     disabled={scoreDisabled}
-                                    className="px-4 py-2 rounded-xl bg-accent text-primary transition hover:bg-[#27AE60] disabled:opacity-50"
+                                    className="px-4 py-2 rounded-xl bg-accent text-white font-semibold transition hover:bg-[#27AE60] disabled:opacity-50"
                                 >
                                     {scoreLoading ? "Łączenie…" : "Przelicz ranking"}
                                 </button>
@@ -16953,7 +16953,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                     <button
                                         disabled={pfDisableSimulation}
                                         onClick={runPortfolioSimulation}
-                                        className="w-full md:w-auto px-4 py-2 rounded-xl bg-accent text-primary transition hover:bg-[#27AE60] disabled:opacity-50"
+                                        className="w-full md:w-auto px-4 py-2 rounded-xl bg-accent text-white font-semibold transition hover:bg-[#27AE60] disabled:opacity-50"
                                     >
                                         {pfLoading
                                             ? "Liczenie…"
