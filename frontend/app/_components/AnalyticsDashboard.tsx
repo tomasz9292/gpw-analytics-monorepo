@@ -9,6 +9,7 @@ import Script from "next/script";
 import { useRouter } from "next/navigation";
 import { useTheme, type ThemeMode } from "@/components/theme-provider";
 import { formatPct } from "@/lib/format";
+import { normalize } from "@/lib/normalize";
 import {
     LineChart,
     Line,
@@ -11021,7 +11022,60 @@ function MetricRulePreview({
                         rule,
                         metricOption
                     );
-                    const scoreValue = typeof row.score === "number" ? row.score : null;
+                    let scoreValue =
+                        typeof row.score === "number" && Number.isFinite(row.score)
+                            ? row.score
+                            : null;
+
+                    const fallbackScore = (() => {
+                        if (
+                            component.normalize !== "percentile" ||
+                            typeof metricValue !== "number" ||
+                            !Number.isFinite(metricValue)
+                        ) {
+                            return null;
+                        }
+
+                        const direction = component.direction === "asc" ? "down" : "up";
+
+                        if (
+                            component.scoring?.type === "linear_clamped" &&
+                            Number.isFinite(component.scoring.worst) &&
+                            Number.isFinite(component.scoring.best) &&
+                            component.scoring.worst !== component.scoring.best
+                        ) {
+                            return normalize(metricValue, {
+                                metricKey: payload.metric,
+                                direction,
+                                worst: component.scoring.worst,
+                                best: component.scoring.best,
+                            });
+                        }
+
+                        if (
+                            typeof component.min_value === "number" &&
+                            typeof component.max_value === "number" &&
+                            Number.isFinite(component.min_value) &&
+                            Number.isFinite(component.max_value) &&
+                            component.min_value !== component.max_value
+                        ) {
+                            return normalize(metricValue, {
+                                metricKey: payload.metric,
+                                direction,
+                                worst: component.min_value,
+                                best: component.max_value,
+                            });
+                        }
+
+                        return null;
+                    })();
+
+                    if (
+                        fallbackScore != null &&
+                        (!Number.isFinite(scoreValue ?? NaN) || result.rows.length <= 1)
+                    ) {
+                        scoreValue = fallbackScore;
+                    }
                     setPreview({
                         rawValue: typeof metricValue === "number" ? metricValue : null,
                         score: scoreValue,
