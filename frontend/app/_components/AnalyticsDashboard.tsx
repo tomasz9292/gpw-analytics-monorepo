@@ -1862,6 +1862,243 @@ const MAX_COMPARISONS = COMPARISON_COLORS.length;
 
 type Rebalance = "none" | "monthly" | "quarterly" | "yearly";
 
+type CompositionSeries = {
+    data: Array<{ label: string } & Record<string, number>>;
+    keys: Array<{ key: string; name: string; color: string }>;
+};
+
+const REBALANCE_FREQUENCY_MONTHS: Record<Exclude<Rebalance, "none">, number> = {
+    monthly: 1,
+    quarterly: 3,
+    yearly: 12,
+};
+
+const REBALANCE_LABELS: Record<Rebalance, string> = {
+    none: "Brak",
+    monthly: "Miesięcznie",
+    quarterly: "Kwartalnie",
+    yearly: "Rocznie",
+};
+
+const COLOR_PALETTE = [
+    "#4663F0",
+    "#2D9CDB",
+    "#27AE60",
+    "#F2994A",
+    "#BB6BD9",
+    "#56CCF2",
+    "#9B51E0",
+    "#219653",
+];
+
+const parseDateString = (value: string | null | undefined): Date | null => {
+    if (!value) {
+        return null;
+    }
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const addMonthsSafe = (date: Date, months: number): Date => {
+    const result = new Date(date.getTime());
+    const day = result.getDate();
+    result.setDate(1);
+    result.setMonth(result.getMonth() + months);
+    const maxDay = new Date(result.getFullYear(), result.getMonth() + 1, 0).getDate();
+    result.setDate(Math.min(day, maxDay));
+    return result;
+};
+
+const formatDateLabel = (date: Date): string =>
+    date.toLocaleDateString("pl-PL", {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+    });
+
+const computeRebalanceSchedule = (
+    frequency: Rebalance,
+    start: string,
+    end: string
+): Date[] => {
+    const startDate = parseDateString(start) ?? new Date();
+    const endDateCandidate = parseDateString(end);
+    const endDate =
+        endDateCandidate && endDateCandidate >= startDate ? endDateCandidate : new Date();
+
+    const schedule: Date[] = [startDate];
+    if (frequency === "none") {
+        if (endDate.getTime() !== startDate.getTime()) {
+            schedule.push(endDate);
+        }
+        return schedule;
+    }
+
+    const monthsStep = REBALANCE_FREQUENCY_MONTHS[frequency];
+    let current = addMonthsSafe(startDate, monthsStep);
+    let iterations = 0;
+    const MAX_ITERATIONS = 120;
+    while (current < endDate && iterations < MAX_ITERATIONS) {
+        schedule.push(current);
+        current = addMonthsSafe(current, monthsStep);
+        iterations += 1;
+    }
+    schedule.push(endDate);
+    return schedule;
+};
+
+const computeNextRebalanceDate = (
+    frequency: Rebalance,
+    start: string,
+    referenceDate: Date
+): Date | null => {
+    if (frequency === "none") {
+        return null;
+    }
+    const startDate = parseDateString(start);
+    if (!startDate) {
+        return null;
+    }
+    const monthsStep = REBALANCE_FREQUENCY_MONTHS[frequency];
+    let current = new Date(startDate.getTime());
+    let iterations = 0;
+    const MAX_ITERATIONS = 240;
+    while (current <= referenceDate && iterations < MAX_ITERATIONS) {
+        current = addMonthsSafe(current, monthsStep);
+        iterations += 1;
+    }
+    return iterations >= MAX_ITERATIONS ? null : current;
+};
+
+const normalizeWeights = (weights: Record<string, number>): Record<string, number> => {
+    const entries = Object.entries(weights);
+    const total = entries.reduce(
+        (acc, [, value]) => acc + (Number.isFinite(value) ? Number(value) : 0),
+        0
+    );
+    if (!Number.isFinite(total) || total <= 0) {
+        return entries.reduce<Record<string, number>>((acc, [key]) => {
+            acc[key] = 0;
+            return acc;
+        }, {});
+    }
+    const multiplier = 100 / total;
+    return entries.reduce<Record<string, number>>((acc, [key, value]) => {
+        const safeValue = Number.isFinite(value) ? Number(value) : 0;
+        acc[key] = Number((safeValue * multiplier).toFixed(2));
+        return acc;
+    }, {});
+};
+
+const buildCompositionSeries = (
+    positions: { symbol: string; weight: number }[],
+    options: { start: string; end: string; frequency: Rebalance; threshold: number }
+): CompositionSeries => {
+    if (!positions.length) {
+        return { data: [], keys: [] };
+    }
+
+    const totalWeight = positions.reduce(
+        (acc, item) => acc + (Number.isFinite(item.weight) ? Number(item.weight) : 0),
+        0
+    );
+    const normalizedPositions =
+        totalWeight > 0
+            ? positions.map((item) => ({
+                  symbol: item.symbol,
+                  weight: (Number(item.weight) / totalWeight) * 100,
+              }))
+            : positions.map((item) => ({ symbol: item.symbol, weight: Number(item.weight) }));
+
+    const TOP_COUNT = 5;
+    const topPositions = normalizedPositions.slice(0, TOP_COUNT);
+    const otherPositions = normalizedPositions.slice(TOP_COUNT);
+    const othersWeight = otherPositions.reduce((acc, item) => acc + item.weight, 0);
+
+    const keys: CompositionSeries["keys"] = topPositions.map((item, index) => ({
+        key: item.symbol,
+        name: item.symbol,
+        color: COLOR_PALETTE[index % COLOR_PALETTE.length],
+    }));
+    if (othersWeight > 0.01) {
+        keys.push({
+            key: "__others",
+            name: "Pozostałe",
+            color: COLOR_PALETTE[keys.length % COLOR_PALETTE.length],
+        });
+    }
+
+    const baseWeights = keys.reduce<Record<string, number>>((acc, keyInfo) => {
+        if (keyInfo.key === "__others") {
+            acc[keyInfo.key] = othersWeight;
+        } else {
+            const position = topPositions.find((item) => item.symbol === keyInfo.key);
+            acc[keyInfo.key] = position ? position.weight : 0;
+        }
+        return acc;
+    }, {});
+
+    const getTargetWeights = () => normalizeWeights({ ...baseWeights });
+
+    const driftAmplitudeBase = Math.max(
+        2,
+        Number.isFinite(options.threshold) && options.threshold > 0
+            ? Math.min(options.threshold, 10)
+            : 4
+    );
+
+    const getDriftWeights = (stepIndex: number) => {
+        const drifted: Record<string, number> = { ...baseWeights };
+        keys.forEach((keyInfo, index) => {
+            const base = baseWeights[keyInfo.key] ?? 0;
+            if (base <= 0) {
+                drifted[keyInfo.key] = 0;
+                return;
+            }
+            const direction = (stepIndex + index) % 2 === 0 ? 1 : -1;
+            const deltaMagnitude = Math.min(base * 0.3, driftAmplitudeBase);
+            drifted[keyInfo.key] = Math.max(0, base + direction * deltaMagnitude);
+        });
+        return normalizeWeights(drifted);
+    };
+
+    const schedule = computeRebalanceSchedule(
+        options.frequency,
+        options.start,
+        options.end
+    );
+    if (!schedule.length) {
+        return {
+            data: [
+                {
+                    label: formatDateLabel(new Date()),
+                    ...getTargetWeights(),
+                },
+            ],
+            keys,
+        };
+    }
+
+    const data: CompositionSeries["data"] = [];
+    schedule.forEach((date, index) => {
+        if (index === 0) {
+            data.push({ label: formatDateLabel(date), ...getTargetWeights() });
+            return;
+        }
+        const prevDate = schedule[index - 1];
+        const midpoint = new Date((prevDate.getTime() + date.getTime()) / 2);
+        data.push({ label: formatDateLabel(midpoint), ...getDriftWeights(index) });
+        data.push({ label: formatDateLabel(date), ...getTargetWeights() });
+    });
+
+    if (data.length === 1) {
+        const fallbackDate = addMonthsSafe(schedule[0], 1);
+        data.push({ label: formatDateLabel(fallbackDate), ...getTargetWeights() });
+    }
+
+    return { data, keys };
+};
+
 type BacktestOptions = {
     start: string;
     end?: string;
@@ -12163,6 +12400,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
         }
     });
     const [savedPortfolios, setSavedPortfolios] = useState<SavedPortfolio[]>([]);
+    const [portfolioValues, setPortfolioValues] = useState<Record<string, number>>({});
     const savedPortfoliosHydratedRef = useRef(false);
 
     useEffect(() => {
@@ -12244,6 +12482,32 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
         }
     }, [savedPortfolios]);
 
+    useEffect(() => {
+        setPortfolioValues((prev) => {
+            if (!savedPortfolios.length) {
+                return Object.keys(prev).length ? {} : prev;
+            }
+            const next: Record<string, number> = {};
+            let changed = Object.keys(prev).length !== savedPortfolios.length;
+            savedPortfolios.forEach((portfolio) => {
+                const previousValue = prev[portfolio.id];
+                const defaultValue =
+                    Number.isFinite(portfolio.draft.initial) && portfolio.draft.initial > 0
+                        ? Number(portfolio.draft.initial)
+                        : 0;
+                const resolvedValue =
+                    Number.isFinite(previousValue) && Number(previousValue) > 0
+                        ? Number(previousValue)
+                        : defaultValue;
+                next[portfolio.id] = resolvedValue;
+                if (resolvedValue !== previousValue) {
+                    changed = true;
+                }
+            });
+            return changed ? next : prev;
+        });
+    }, [savedPortfolios]);
+
     const [customIndexFormOpen, setCustomIndexFormOpen] = useState(false);
     const [customIndexDraft, setCustomIndexDraft] = useState<CustomIndexDraft>(() => ({
         code: "",
@@ -12307,6 +12571,15 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
 
     const benchmarkValueFormatter = useMemo(
         () => new Intl.NumberFormat("pl-PL", { maximumFractionDigits: 2 }),
+        []
+    );
+    const currencyFormatter = useMemo(
+        () =>
+            new Intl.NumberFormat("pl-PL", {
+                style: "currency",
+                currency: "PLN",
+                maximumFractionDigits: 2,
+            }),
         []
     );
     const benchmarkPercentFormatter = useMemo(
@@ -17857,7 +18130,18 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                             const equalWeight = positions.length
                                                 ? 100 / positions.length
                                                 : 0;
-                                            const suggestions = sortedPositions.slice(0, 5).map((row) => {
+                                            const portfolioValueRaw = portfolioValues[portfolio.id];
+                                            const portfolioValue =
+                                                Number.isFinite(portfolioValueRaw) &&
+                                                Number(portfolioValueRaw) >= 0
+                                                    ? Number(portfolioValueRaw)
+                                                    : 0;
+                                            const hasPortfolioValue = portfolioValue > 0;
+                                            const positionsWithAmounts = sortedPositions.map((row) => ({
+                                                ...row,
+                                                amount: (portfolioValue * row.weight) / 100,
+                                            }));
+                                            const suggestions = positionsWithAmounts.slice(0, 5).map((row) => {
                                                 const diff = row.weight - equalWeight;
                                                 let action = "Utrzymaj";
                                                 if (diff > 5) {
@@ -17871,8 +18155,31 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                     target: row.weight,
                                                     action,
                                                     diffLabel,
+                                                    targetAmount: row.amount,
                                                 };
                                             });
+                                            const frequency =
+                                                (portfolio.draft.frequency ?? "none") as Rebalance;
+                                            const frequencyLabel = REBALANCE_LABELS[frequency];
+                                            const nextRebalanceDate = computeNextRebalanceDate(
+                                                frequency,
+                                                portfolio.draft.start,
+                                                new Date()
+                                            );
+                                            const nextRebalanceLabel = nextRebalanceDate
+                                                ? nextRebalanceDate.toLocaleDateString("pl-PL", {
+                                                      dateStyle: "medium",
+                                                  })
+                                                : "Brak rebalansingu";
+                                            const compositionSeries = buildCompositionSeries(sortedPositions, {
+                                                start: portfolio.draft.start,
+                                                end: portfolio.draft.end,
+                                                frequency,
+                                                threshold: portfolio.draft.threshold ?? 0,
+                                            });
+                                            const hasChartData =
+                                                compositionSeries.data.length > 0 &&
+                                                compositionSeries.keys.length > 0;
                                             let createdAtLabel = portfolio.createdAt;
                                             const createdAtDate = new Date(portfolio.createdAt);
                                             if (!Number.isNaN(createdAtDate.getTime())) {
@@ -17902,6 +18209,9 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                             <p className="text-xs text-subtle">
                                                                 Benchmark: {portfolio.draft.benchmark ?? "brak"}
                                                             </p>
+                                                            <p className="text-xs text-subtle">
+                                                                Najbliższy rebalansing: {nextRebalanceLabel}
+                                                            </p>
                                                         </div>
                                                         <div className="flex flex-wrap gap-2">
                                                             <button
@@ -17920,28 +18230,74 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                             </button>
                                                         </div>
                                                     </div>
+                                                    <div className="flex flex-col gap-3 rounded-2xl border border-dashed border-soft bg-soft-surface/60 p-4 md:flex-row md:items-end md:justify-between">
+                                                        <label className="flex flex-col gap-2 md:w-60">
+                                                            <span className="text-xs uppercase tracking-wide text-muted">
+                                                                Wartość portfela (PLN)
+                                                            </span>
+                                                            <input
+                                                                type="number"
+                                                                min={0}
+                                                                step={100}
+                                                                value={Number.isFinite(portfolioValue) ? portfolioValue : 0}
+                                                                onChange={(event) => {
+                                                                    const nextValue = Number(event.target.value);
+                                                                    setPortfolioValues((prev) => ({
+                                                                        ...prev,
+                                                                        [portfolio.id]:
+                                                                            Number.isFinite(nextValue) && nextValue >= 0
+                                                                                ? nextValue
+                                                                                : 0,
+                                                                    }));
+                                                                }}
+                                                                className={`${inputBaseClasses} md:w-full`}
+                                                            />
+                                                        </label>
+                                                        <div className="space-y-1 text-xs text-subtle md:text-right">
+                                                            <div>
+                                                                Łączna wartość:
+                                                                <span className="ml-1 font-semibold text-primary">
+                                                                    {hasPortfolioValue
+                                                                        ? currencyFormatter.format(portfolioValue)
+                                                                        : currencyFormatter.format(0)}
+                                                                </span>
+                                                            </div>
+                                                            <div>
+                                                                Rebalansing: {frequencyLabel}
+                                                                {portfolio.draft.threshold
+                                                                    ? ` (próg ${portfolio.draft.threshold.toFixed(1)}%)`
+                                                                    : ""}
+                                                            </div>
+                                                        </div>
+                                                    </div>
                                                     <div className="grid gap-6 md:grid-cols-2">
                                                         <div className="space-y-3">
                                                             <h4 className="text-sm font-semibold text-neutral">
                                                                 Skład portfela
                                                             </h4>
-                                                            {positions.length ? (
+                                                            {positionsWithAmounts.length ? (
                                                                 <div className="overflow-x-auto">
                                                                     <table className="min-w-full divide-y divide-soft text-sm">
                                                                         <thead className="bg-soft-surface text-xs uppercase tracking-wide text-muted">
                                                                             <tr>
                                                                                 <th className="px-3 py-2 text-left">Symbol</th>
                                                                                 <th className="px-3 py-2 text-right">Waga</th>
+                                                                                <th className="px-3 py-2 text-right">Kwota</th>
                                                                             </tr>
                                                                         </thead>
                                                                         <tbody className="divide-y divide-soft">
-                                                                            {sortedPositions.map((row) => (
+                                                                            {positionsWithAmounts.map((row) => (
                                                                                 <tr key={`${portfolio.id}-${row.symbol}`}>
                                                                                     <td className="px-3 py-2 font-medium text-primary">
                                                                                         {row.symbol}
                                                                                     </td>
                                                                                     <td className="px-3 py-2 text-right text-subtle">
                                                                                         {row.weight.toFixed(1)}%
+                                                                                    </td>
+                                                                                    <td className="px-3 py-2 text-right text-subtle">
+                                                                                        {hasPortfolioValue
+                                                                                            ? currencyFormatter.format(row.amount)
+                                                                                            : "—"}
                                                                                     </td>
                                                                                 </tr>
                                                                             ))}
@@ -17974,7 +18330,11 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                                                 </span>
                                                                             </div>
                                                                             <div className="text-xs text-subtle">
-                                                                                Cel: {suggestion.target.toFixed(1)}% ({suggestion.diffLabel})
+                                                                                Cel: {suggestion.target.toFixed(1)}%
+                                                                                {hasPortfolioValue
+                                                                                    ? ` • ${currencyFormatter.format(suggestion.targetAmount)}`
+                                                                                    : ""}
+                                                                                {` (${suggestion.diffLabel})`}
                                                                             </div>
                                                                         </li>
                                                                     ))}
@@ -17985,6 +18345,77 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                                 </p>
                                                             )}
                                                         </div>
+                                                    </div>
+                                                    <div className="space-y-3">
+                                                        <h4 className="text-sm font-semibold text-neutral">
+                                                            Zmiana składu w czasie
+                                                        </h4>
+                                                        {hasChartData ? (
+                                                            <div className="h-64 w-full">
+                                                                <ResponsiveContainer>
+                                                                    <AreaChart data={compositionSeries.data}>
+                                                                        <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
+                                                                        <XAxis
+                                                                            dataKey="label"
+                                                                            tick={{ fontSize: 12 }}
+                                                                            interval="preserveStartEnd"
+                                                                        />
+                                                                        <YAxis
+                                                                            domain={[0, 100]}
+                                                                            tickFormatter={(value) => `${value}%`}
+                                                                            tick={{ fontSize: 12 }}
+                                                                        />
+                                                                        <Tooltip
+                                                                            content={({ active, payload, label }) => {
+                                                                                if (!active || !payload || !payload.length) {
+                                                                                    return null;
+                                                                                }
+                                                                                return (
+                                                                                    <div className="rounded-xl border border-soft bg-white/90 p-3 text-xs shadow">
+                                                                                        <div className="font-semibold text-primary">
+                                                                                            {label}
+                                                                                        </div>
+                                                                                        <ul className="mt-2 space-y-1">
+                                                                                            {payload.map((entry) => (
+                                                                                                <li
+                                                                                                    key={entry.dataKey}
+                                                                                                    className="flex items-center justify-between gap-4"
+                                                                                                >
+                                                                                                    <span className="text-subtle">
+                                                                                                        {entry.name}
+                                                                                                    </span>
+                                                                                                    <span className="font-semibold text-neutral">
+                                                                                                        {typeof entry.value === "number"
+                                                                                                            ? `${entry.value.toFixed(1)}%`
+                                                                                                            : "—"}
+                                                                                                    </span>
+                                                                                                </li>
+                                                                                            ))}
+                                                                                        </ul>
+                                                                                    </div>
+                                                                                );
+                                                                            }}
+                                                                        />
+                                                                        {compositionSeries.keys.map(({ key, name, color }) => (
+                                                                            <Area
+                                                                                key={key}
+                                                                                type="monotone"
+                                                                                dataKey={key}
+                                                                                name={name}
+                                                                                stackId="portfolio-composition"
+                                                                                stroke={color}
+                                                                                fill={color}
+                                                                                fillOpacity={0.2}
+                                                                            />
+                                                                        ))}
+                                                                    </AreaChart>
+                                                                </ResponsiveContainer>
+                                                            </div>
+                                                        ) : (
+                                                            <p className="text-xs text-subtle">
+                                                                Dodaj pozycje i zapisz portfel, aby zobaczyć wizualizację udziałów.
+                                                            </p>
+                                                        )}
                                                     </div>
                                                     {portfolio.draft.comparisons.length ? (
                                                         <div className="text-xs text-subtle">
