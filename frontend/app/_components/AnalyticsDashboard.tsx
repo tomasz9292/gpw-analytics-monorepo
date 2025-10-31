@@ -11881,6 +11881,8 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                 .filter((row): row is { symbol: string; weight: number } => Boolean(row));
             const rows = sanitizedRows.length
                 ? sanitizedRows
+                : mode === "score"
+                ? []
                 : fallback.rows.map((row) => ({ ...row }));
             const start =
                 typeof raw.start === "string" && raw.start.trim().length
@@ -13553,14 +13555,15 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                 return;
             }
         }
+        const normalizedRows = pfRows
+            .map((row) => ({
+                symbol: (row.symbol ?? "").trim().toUpperCase(),
+                weight: Number(row.weight) || 0,
+            }))
+            .filter((row) => row.symbol && row.weight >= 0);
         const draft: PortfolioDraftState = {
             mode: pfMode,
-            rows: pfRows
-                .map((row) => ({
-                    symbol: (row.symbol ?? "").trim().toUpperCase(),
-                    weight: Number(row.weight) || 0,
-                }))
-                .filter((row) => row.symbol && row.weight >= 0),
+            rows: pfMode === "manual" ? normalizedRows : [],
             start: pfStart,
             end: pfEnd,
             initial: pfInitial,
