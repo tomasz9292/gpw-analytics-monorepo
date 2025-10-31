@@ -11669,10 +11669,11 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                               }
                               return "equal";
                           })(),
-                          direction:
-                              scoreSource.direction === "asc"
-                                  ? "asc"
-                                  : "desc",
+                          direction: (() => {
+                              const direction: PortfolioDraftState["score"]["direction"] =
+                                  scoreSource.direction === "asc" ? "asc" : "desc";
+                              return direction;
+                          })(),
                           universe:
                               typeof scoreSource.universe === "string"
                                   ? scoreSource.universe ?? ""
