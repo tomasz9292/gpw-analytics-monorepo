@@ -13011,18 +13011,12 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
         };
     }, [benchmarkChangeMenuOpen]);
 
-    const selectedBenchmarkOption = useMemo(() => {
-        if (!benchmarkUniverseOptions.length) {
-            return null;
-        }
-        if (!selectedBenchmarkCode) {
-            return benchmarkUniverseOptions[0];
-        }
-        return (
-            benchmarkUniverseOptions.find((option) => option.code === selectedBenchmarkCode) ??
-            benchmarkUniverseOptions[0]
-        );
-    }, [benchmarkUniverseOptions, selectedBenchmarkCode]);
+    const toggleBenchmarkDetails = useCallback(
+        (code: string) => {
+            setSelectedBenchmarkCode((prev) => (prev === code ? null : code));
+        },
+        [setSelectedBenchmarkCode]
+    );
 
     const handleBenchmarkUniverseSelect = useCallback(
         (option: BenchmarkUniverseOption, target: "score" | "pf" | "both" = "score") => {
@@ -16411,119 +16405,173 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                 </tr>
                                             </thead>
                                             <tbody className="divide-y divide-soft">
-                                                {benchmarkOverview.map((item) => (
-                                                    <tr key={item.code}>
-                                                        <td className="px-3 py-2 font-medium text-primary">
-                                                            <div className="flex items-center gap-2">
-                                                                <span>{item.code}</span>
-                                                                {item.isCustom && (
-                                                                    <span className="rounded-full bg-primary/10 px-2 py-[2px] text-[10px] uppercase tracking-wide text-primary">
-                                                                        Własny
-                                                                    </span>
-                                                                )}
-                                                            </div>
-                                                        </td>
-                                                        <td className="px-3 py-2 text-subtle">
-                                                            {item.name || "—"}
-                                                        </td>
-                                                        <td className="px-3 py-2 text-right">
-                                                            {item.symbolsCount}
-                                                        </td>
-                                                        <td className="px-3 py-2 text-subtle">
-                                                            {item.effectiveDate}
-                                                        </td>
-                                                        <td className="px-3 py-2 text-right">
-                                                            {item.latestValue != null
-                                                                ? benchmarkValueFormatter.format(item.latestValue)
-                                                                : "—"}
-                                                        </td>
-                                                        <td
-                                                            className={`px-3 py-2 text-right ${
-                                                                item.changePct != null
-                                                                    ? item.changePct >= 0
-                                                                        ? "text-positive"
-                                                                        : "text-negative"
-                                                                    : "text-subtle"
-                                                            }`}
-                                                        >
-                                                            {item.changePct != null
-                                                                ? benchmarkPercentFormatter.format(item.changePct)
-                                                                : "—"}
-                                                        </td>
-                                                        <td className="px-3 py-2 text-subtle">
-                                                            {item.lastDate ?? "—"}
-                                                        </td>
-                                                    </tr>
-                                                ))}
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                    <div className="mt-6 space-y-3 rounded-xl border border-soft bg-soft-surface p-4">
-                                        <div className="flex flex-wrap items-center gap-3">
-                                            <span className="text-sm font-medium text-neutral">
-                                                Skład indeksu
-                                            </span>
-                                            <select
-                                                value={selectedBenchmarkOption?.code ?? ""}
-                                                onChange={(event) => {
-                                                    const value = event.target.value;
-                                                    setSelectedBenchmarkCode(value || null);
-                                                }}
-                                                className="min-w-[10rem] rounded-lg border border-soft bg-base px-3 py-1.5 text-sm text-neutral shadow-sm focus:border-[var(--color-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/20"
-                                            >
-                                                {benchmarkUniverseOptions.map((option) => (
-                                                    <option key={option.code} value={option.code}>
-                                                        {option.code}
-                                                        {option.name && option.name !== option.code
-                                                            ? ` – ${option.name}`
-                                                            : ""}
-                                                    </option>
-                                                ))}
-                                            </select>
-                                        </div>
-                                        {selectedBenchmarkOption ? (
-                                            selectedBenchmarkOption.constituents.length > 0 ? (
-                                                <div className="overflow-x-auto">
-                                                    <table className="min-w-full divide-y divide-soft text-sm">
-                                                        <thead className="bg-soft-surface text-xs uppercase tracking-wide text-muted">
-                                                            <tr>
-                                                                <th className="px-3 py-2 text-left">Symbol</th>
-                                                                <th className="px-3 py-2 text-right">Udział</th>
-                                                            </tr>
-                                                        </thead>
-                                                        <tbody className="divide-y divide-soft">
-                                                            {selectedBenchmarkOption.constituents.map((constituent) => (
-                                                                <tr
-                                                                    key={`${selectedBenchmarkOption.code}-${constituent.baseSymbol}`}
-                                                                >
-                                                                    <td className="px-3 py-2 font-medium text-primary">
-                                                                        {constituent.symbol}
-                                                                        {constituent.symbol !== constituent.baseSymbol && (
-                                                                            <span className="ml-2 text-xs text-subtle">
-                                                                                ({constituent.baseSymbol})
+                                                {benchmarkOverview.map((item) => {
+                                                    const optionDetails =
+                                                        benchmarkUniverseOptionMap[
+                                                            item.code.toUpperCase()
+                                                        ];
+                                                    const isExpanded =
+                                                        selectedBenchmarkCode === item.code;
+
+                                                    return (
+                                                        <React.Fragment key={item.code}>
+                                                            <tr
+                                                                role="button"
+                                                                tabIndex={0}
+                                                                onClick={() =>
+                                                                    toggleBenchmarkDetails(
+                                                                        item.code
+                                                                    )
+                                                                }
+                                                                onKeyDown={(event) => {
+                                                                    if (
+                                                                        event.key ===
+                                                                            "Enter" ||
+                                                                        event.key === " " ||
+                                                                        event.key === "Space"
+                                                                    ) {
+                                                                        event.preventDefault();
+                                                                        toggleBenchmarkDetails(
+                                                                            item.code
+                                                                        );
+                                                                    }
+                                                                }}
+                                                                className={`cursor-pointer transition ${
+                                                                    isExpanded
+                                                                        ? "bg-primary/5"
+                                                                        : "hover:bg-soft-surface"
+                                                                }`}
+                                                                title={`Skład indeksu na ${item.effectiveDate}`}
+                                                            >
+                                                                <td className="px-3 py-2 font-medium text-primary">
+                                                                    <div className="flex items-center gap-2">
+                                                                        <span
+                                                                            aria-hidden
+                                                                            className="text-sm text-muted"
+                                                                        >
+                                                                            {isExpanded
+                                                                                ? "▾"
+                                                                                : "▸"}
+                                                                        </span>
+                                                                        <span>{item.code}</span>
+                                                                        {item.isCustom && (
+                                                                            <span className="rounded-full bg-primary/10 px-2 py-[2px] text-[10px] uppercase tracking-wide text-primary">
+                                                                                Własny
                                                                             </span>
                                                                         )}
-                                                                    </td>
-                                                                    <td className="px-3 py-2 text-right text-subtle">
-                                                                        {typeof constituent.weightPct === "number"
-                                                                            ? `${benchmarkWeightFormatter.format(constituent.weightPct)}%`
-                                                                            : "—"}
+                                                                    </div>
+                                                                </td>
+                                                                <td className="px-3 py-2 text-subtle">
+                                                                    {item.name || "—"}
+                                                                </td>
+                                                                <td className="px-3 py-2 text-right">
+                                                                    {item.symbolsCount}
+                                                                </td>
+                                                                <td className="px-3 py-2 text-subtle">
+                                                                    {item.effectiveDate}
+                                                                </td>
+                                                                <td className="px-3 py-2 text-right">
+                                                                    {item.latestValue != null
+                                                                        ? benchmarkValueFormatter.format(
+                                                                              item.latestValue
+                                                                          )
+                                                                        : "—"}
+                                                                </td>
+                                                                <td
+                                                                    className={`px-3 py-2 text-right ${
+                                                                        item.changePct != null
+                                                                            ? item.changePct >= 0
+                                                                                ? "text-positive"
+                                                                                : "text-negative"
+                                                                            : "text-subtle"
+                                                                    }`}
+                                                                >
+                                                                    {item.changePct != null
+                                                                        ? benchmarkPercentFormatter.format(
+                                                                              item.changePct
+                                                                          )
+                                                                        : "—"}
+                                                                </td>
+                                                                <td className="px-3 py-2 text-subtle">
+                                                                    {item.lastDate ?? "—"}
+                                                                </td>
+                                                            </tr>
+                                                            {isExpanded && (
+                                                                <tr className="bg-soft-surface">
+                                                                    <td
+                                                                        className="px-3 py-3"
+                                                                        colSpan={7}
+                                                                    >
+                                                                        <div className="space-y-3">
+                                                                            <div className="flex flex-wrap items-center gap-3">
+                                                                                <span className="text-sm font-medium text-neutral">
+                                                                                    Skład indeksu
+                                                                                    {optionDetails?.effectiveDate
+                                                                                        ? ` (${optionDetails.effectiveDate})`
+                                                                                        : ""}
+                                                                                </span>
+                                                                            </div>
+                                                                            {optionDetails ? (
+                                                                                optionDetails.constituents.length > 0 ? (
+                                                                                    <div className="overflow-x-auto">
+                                                                                        <table className="min-w-full divide-y divide-soft text-sm">
+                                                                                            <thead className="bg-soft-surface text-xs uppercase tracking-wide text-muted">
+                                                                                                <tr>
+                                                                                                    <th className="px-3 py-2 text-left">
+                                                                                                        Symbol
+                                                                                                    </th>
+                                                                                                    <th className="px-3 py-2 text-right">
+                                                                                                        Udział
+                                                                                                    </th>
+                                                                                                </tr>
+                                                                                            </thead>
+                                                                                            <tbody className="divide-y divide-soft">
+                                                                                                {optionDetails.constituents.map(
+                                                                                                    (constituent) => (
+                                                                                                        <tr
+                                                                                                            key={`${item.code}-${constituent.baseSymbol ?? constituent.symbol}`}
+                                                                                                        >
+                                                                                                            <td className="px-3 py-2 font-medium text-primary">
+                                                                                                                {constituent.symbol}
+                                                                                                                {constituent.symbol !==
+                                                                                                                    constituent.baseSymbol && (
+                                                                                                                    <span className="ml-2 text-xs text-subtle">
+                                                                                                                        ({constituent.baseSymbol})
+                                                                                                                    </span>
+                                                                                                                )}
+                                                                                                            </td>
+                                                                                                            <td className="px-3 py-2 text-right text-subtle">
+                                                                                                                {typeof constituent.weightPct === "number"
+                                                                                                                    ? `${benchmarkWeightFormatter.format(
+                                                                                                                          constituent.weightPct
+                                                                                                                      )}%`
+                                                                                                                    : "—"}
+                                                                                                            </td>
+                                                                                                        </tr>
+                                                                                                    )
+                                                                                                )}
+                                                                                            </tbody>
+                                                                                        </table>
+                                                                                    </div>
+                                                                                ) : (
+                                                                                    <div className="text-xs text-subtle">
+                                                                                        Brak danych o składzie tego indeksu.
+                                                                                    </div>
+                                                                                )
+                                                                            ) : (
+                                                                                <div className="text-xs text-subtle">
+                                                                                    Nie udało się odnaleźć szczegółów tego indeksu.
+                                                                                </div>
+                                                                            )}
+                                                                        </div>
                                                                     </td>
                                                                 </tr>
-                                                            ))}
-                                                        </tbody>
-                                                    </table>
-                                                </div>
-                                            ) : (
-                                                <div className="text-xs text-subtle">
-                                                    Brak danych o składzie tego indeksu.
-                                                </div>
-                                            )
-                                        ) : (
-                                            <div className="text-xs text-subtle">
-                                                Wybierz indeks, aby zobaczyć listę spółek.
-                                            </div>
-                                        )}
+                                                            )}
+                                                        </React.Fragment>
+                                                    );
+                                                })}
+                                            </tbody>
+                                        </table>
                                     </div>
                                 </>
                             ) : (
