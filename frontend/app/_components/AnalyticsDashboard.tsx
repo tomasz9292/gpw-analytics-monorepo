@@ -17168,19 +17168,18 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                         <Card>
                             <div className="space-y-8">
                                 <div className="space-y-4">
-                                <div className="flex flex-wrap gap-2">
-                                    <Chip active={pfMode === "manual"} onClick={() => setPfMode("manual")}>
-                                        Własne wagi
-                                    </Chip>
-                                    <Chip active={pfMode === "score"} onClick={() => setPfMode("score")}>
-                                        Automatycznie wg score
-                                    </Chip>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <div className="flex flex-wrap gap-2">
+                                            <Chip active={pfMode === "manual"} onClick={() => setPfMode("manual")}>
+                                                Własne wagi
+                                            </Chip>
+                                            <Chip active={pfMode === "score"} onClick={() => setPfMode("score")}>
+                                                Automatycznie wg score
+                                            </Chip>
+                                        </div>
+                                        <InfoHint text="Wybierz tryb konfiguracji portfela. Wariant score wykorzysta parametry zdefiniowane powyżej, zapisany szablon lub dowolną istniejącą nazwę rankingu z backendu." />
+                                    </div>
                                 </div>
-                                <p className="text-sm text-muted">
-                                    Wybierz tryb konfiguracji portfela. Wariant score wykorzysta parametry zdefiniowane
-                                    powyżej, zapisany szablon lub dowolną istniejącą nazwę rankingu z backendu.
-                                </p>
-                            </div>
                             <div className="grid gap-6 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
                                 <div className="space-y-3">
                                     {pfMode === "manual" ? (
@@ -17376,8 +17375,9 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                     </div>
                                                 </div>
                                                 <label className="flex flex-col gap-2">
-                                                    <span className="text-xs uppercase tracking-wide text-muted">
+                                                    <span className="flex items-center gap-2 text-xs uppercase tracking-wide text-muted">
                                                         Universe / filtr
+                                                        <InfoHint text="Możesz łączyć kilka indeksów oraz własne konfiguracje, np. index:MWIG40 + index:SWIG80." />
                                                     </span>
                                                     <input
                                                         type="text"
@@ -17387,8 +17387,8 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                         placeholder="np. index:MWIG40, index:SWIG80"
                                                     />
                                                     {benchmarkUniverseOptions.length > 0 && (
-                                                        <div className="flex flex-wrap items-center gap-2 text-xs text-subtle">
-                                                            <span>Wybierz indeks:</span>
+                                                        <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
+                                                            <InfoHint text="Wybierz indeks, aby dodać jego skład do filtra Universe." />
                                                             {benchmarkUniverseOptions.map((option) => {
                                                                 const token = `index:${option.code}`.toLowerCase();
                                                                 const isActive = universeIncludesToken(
@@ -17439,12 +17439,6 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                             })}
                                                         </div>
                                                     )}
-                                                    <span className="text-xs text-subtle">
-                                                        Możesz łączyć kilka indeksów oraz własne konfiguracje,
-                                                        np. <code className="rounded bg-soft-surface px-1">index:MWIG40</code>{" "}
-                                                        <span className="text-muted">+</span>{" "}
-                                                        <code className="rounded bg-soft-surface px-1">index:SWIG80</code>.
-                                                    </span>
                                                 </label>
                                             </div>
                                             <div className="grid gap-3 md:grid-cols-2">
@@ -17540,33 +17534,6 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                 className={inputBaseClasses}
                                             />
                                         </label>
-                                    </div>
-                                    <div className="space-y-2">
-                                        <span className="text-sm text-muted">Benchmark (opcjonalnie)</span>
-                                        <div className="flex flex-wrap items-center gap-2">
-                                            <TickerAutosuggest
-                                                onPick={(sym) => setPfBenchmark(sym)}
-                                                placeholder="Dodaj benchmark (np. WIG20.WA)"
-                                                inputClassName="w-60"
-                                                allowedKinds={["stock", "index"]}
-                                            />
-                                            {pfBenchmark && (
-                                                <div className="flex items-center gap-2 text-sm text-muted">
-                                                    <span className="font-medium text-primary">{pfBenchmark}</span>
-                                                    <button
-                                                        onClick={() => setPfBenchmark(null)}
-                                                        className="px-2 py-1 text-xs rounded-lg border border-soft text-muted transition hover:border-[var(--color-primary)] hover:text-primary"
-                                                    >
-                                                        Wyczyść
-                                                    </button>
-                                                </div>
-                                            )}
-                                            {!pfBenchmark && (
-                                                <span className="text-xs text-subtle">
-                                                    Wykres porówna portfel z wybranym benchmarkiem.
-                                                </span>
-                                            )}
-                                        </div>
                                     </div>
                                     {pfRangeInvalid && (
                                         <div className="text-xs text-negative">
@@ -17686,11 +17653,13 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
 
                             <div className="space-y-4">
                                 {!pfRes ? (
-                                    <div className="text-sm text-muted">
-                                        {pfMode === "manual"
-                                            ? "Skonfiguruj portfel (symbole + wagi), wybierz datę startu i rebalansing, potem uruchom symulację."
-                                            : "Podaj score i parametry rankingu, ustaw zakres dat i uruchom symulację."}
-                                    </div>
+                                    <InfoHint
+                                        text={
+                                            pfMode === "manual"
+                                                ? "Skonfiguruj portfel (symbole + wagi), wybierz datę startu i rebalansing, potem uruchom symulację."
+                                                : "Podaj score i parametry rankingu, ustaw zakres dat i uruchom symulację."
+                                        }
+                                    />
                                 ) : (
                                     <>
                                         <PortfolioStatsGrid stats={pfRes.stats} />
@@ -17734,9 +17703,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                             allowedKinds={["stock", "index"]}
                                                         />
                                                         {pfComparisonLimitReached && (
-                                                            <span className="text-[11px] text-subtle">
-                                                                Maksymalnie {MAX_COMPARISONS} instrumentów.
-                                                            </span>
+                                                            <InfoHint text={`Maksymalnie ${MAX_COMPARISONS} instrumentów.`} />
                                                         )}
                                                     </div>
                                                     <div className="mt-3 space-y-2">
@@ -17787,9 +17754,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                                 })}
                                                             </div>
                                                         ) : !pfBenchmarkSeries ? (
-                                                            <p className="text-xs text-subtle">
-                                                                Dodaj indeks lub ETF, aby zestawić portfel z rynkowymi benchmarkami.
-                                                            </p>
+                                                            <InfoHint text="Dodaj indeks lub ETF, aby zestawić portfel z rynkowymi benchmarkami." />
                                                         ) : null}
                                                         {pfComparisonErrorEntries.map(([sym, message]) => (
                                                             <div key={sym} className="text-xs text-negative">
