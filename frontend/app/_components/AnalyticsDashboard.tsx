@@ -11629,16 +11629,29 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                     : "monthly";
             const scoreRaw = (raw as { score?: unknown }).score;
             const scoreFallback = fallback.score;
+            const scoreSource =
+                scoreRaw && typeof scoreRaw === "object" && scoreRaw !== null
+                    ? (scoreRaw as {
+                          name?: unknown;
+                          limit?: unknown;
+                          weighting?: unknown;
+                          direction?: unknown;
+                          universe?: unknown;
+                          min?: unknown;
+                          max?: unknown;
+                      })
+                    : undefined;
             const score =
-                scoreRaw && typeof scoreRaw === "object"
+                scoreSource
                     ? {
-                          name:
-                              typeof (scoreRaw as { name?: unknown }).name === "string" &&
-                              (scoreRaw as { name?: unknown }).name?.toString().trim().length
-                                  ? (scoreRaw as { name?: string }).name.trim()
-                                  : scoreFallback.name,
+                          name: (() => {
+                              const value = scoreSource.name;
+                              return typeof value === "string" && value.trim().length
+                                  ? value.trim()
+                                  : scoreFallback.name;
+                          })(),
                           limit: (() => {
-                              const value = (scoreRaw as { limit?: unknown }).limit;
+                              const value = scoreSource.limit;
                               const numeric =
                                   typeof value === "number"
                                       ? value
@@ -11650,27 +11663,27 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                   : scoreFallback.limit;
                           })(),
                           weighting: (() => {
-                              const value = (scoreRaw as { weighting?: unknown }).weighting;
+                              const value = scoreSource.weighting;
                               if (value === "score" || value === "volatility_inverse") {
                                   return value;
                               }
                               return "equal";
                           })(),
                           direction:
-                              (scoreRaw as { direction?: unknown }).direction === "asc"
+                              scoreSource.direction === "asc"
                                   ? "asc"
                                   : "desc",
                           universe:
-                              typeof (scoreRaw as { universe?: unknown }).universe === "string"
-                                  ? ((scoreRaw as { universe?: string }).universe ?? "")
+                              typeof scoreSource.universe === "string"
+                                  ? scoreSource.universe ?? ""
                                   : scoreFallback.universe,
                           min:
-                              typeof (scoreRaw as { min?: unknown }).min === "string"
-                                  ? ((scoreRaw as { min?: string }).min ?? "")
+                              typeof scoreSource.min === "string"
+                                  ? scoreSource.min ?? ""
                                   : scoreFallback.min,
                           max:
-                              typeof (scoreRaw as { max?: unknown }).max === "string"
-                                  ? ((scoreRaw as { max?: string }).max ?? "")
+                              typeof scoreSource.max === "string"
+                                  ? scoreSource.max ?? ""
                                   : scoreFallback.max,
                       }
                     : { ...scoreFallback };
