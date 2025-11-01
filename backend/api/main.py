@@ -11,6 +11,8 @@ import textwrap
 import unicodedata
 import zipfile
 from dataclasses import dataclass
+
+import pandas as pd
 from datetime import date, datetime, timedelta, timezone
 from math import isfinite, sqrt
 from typing import (
@@ -58,6 +60,14 @@ from .symbols import (
     pretty_symbol,
 )
 from .windows_agent import router as windows_agent_router
+from .portfolio import (
+    AVAILABLE_FEATURES,
+    LocalLLMOptimizer,
+    OptimizationRequest,
+    PortfolioSimulationResult,
+    compute_ranking_scores,
+    simulate_equal_weight_portfolio,
+)
 
 # =========================
 # Konfiguracja / połączenie
@@ -7110,6 +7120,207 @@ def list_index_history(
     for entry in items:
         entry.points.sort(key=lambda point: point.date)
     return IndexHistoryResponse(items=items)
+
+
+
+# =========================
+# Ranking scoring & portfolio optimisation
+# =========================
+
+class RankingFeatureSpec(BaseModel):
+    name: str
+    weight: Optional[float] = Field(default=None, description="Optional weight for the ranking feature")
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        available = set(AVAILABLE_FEATURES.names())
+        if value not in available:
+            raise ValueError(f"Unknown feature '{value}'. Available features: {sorted(available)}")
+        return value
+
+
+class PortfolioOptimizationPayload(BaseModel):
+    symbols: List[str] = Field(..., min_length=1, description="Symbols to be considered in ranking")
+    start_date: date = Field(..., description="Start date for OHLC window")
+    end_date: date = Field(..., description="End date for OHLC window")
+    top_n: int = Field(default=5, ge=1, le=50, description="Number of instruments to hold in the simulated portfolio")
+    initial_cash: float = Field(default=100_000.0, ge=1.0)
+    features: List[RankingFeatureSpec] = Field(default_factory=list)
+    enable_llm: bool = Field(default=False, description="Toggle LLM-driven optimisation")
+    llm_model_path: Optional[str] = Field(default=None, description="Path to the local GGUF/GGML model for llama.cpp")
+    llm_iterations: int = Field(default=3, ge=1, le=20)
+    llm_temperature: float = Field(default=0.1, ge=0.0, le=1.0)
+    llm_max_tokens: int = Field(default=256, ge=16, le=1024)
+    llm_gpu_layers: Optional[int] = Field(default=None)
+
+    @model_validator(mode="after")
+    def _validate_dates(self) -> "PortfolioOptimizationPayload":
+        if self.end_date < self.start_date:
+            raise ValueError("end_date must be greater than or equal to start_date")
+        if self.enable_llm and not self.llm_model_path:
+            raise ValueError("llm_model_path must be provided when enable_llm is True")
+        return self
+
+
+class SimulationPoint(BaseModel):
+    date: date
+    value: float
+
+
+class SimulationResponse(BaseModel):
+    initial_value: float
+    final_value: float
+    return_pct: float
+    annualized_return_pct: Optional[float]
+    max_drawdown_pct: Optional[float]
+    daily_values: List[SimulationPoint]
+
+
+class RankingEntry(BaseModel):
+    symbol: str
+    score: float
+    features: Dict[str, float]
+    features_normalized: Dict[str, float]
+
+
+class OptimizationStepResponse(BaseModel):
+    iteration: int
+    weights: Dict[str, float]
+    score: float
+    top_symbols: List[str]
+    llm_response: Optional[str]
+
+
+class PortfolioOptimizationResponse(BaseModel):
+    top_symbols: List[str]
+    ranking: List[RankingEntry]
+    simulation: SimulationResponse
+    optimisation: Optional[List[OptimizationStepResponse]]
+
+
+def _fetch_ohlc_frame(symbols: Sequence[str], start: date, end: date) -> pd.DataFrame:
+    ch_client = get_ch()
+    query = f"""
+        SELECT symbol, date, close, volume
+        FROM {TABLE_OHLC}
+        WHERE symbol IN %(symbols)s
+          AND date BETWEEN %(start)s AND %(end)s
+          AND close IS NOT NULL
+        ORDER BY symbol, date
+    """
+    rows = ch_client.query(
+        query,
+        parameters={"symbols": tuple(symbols), "start": start, "end": end},
+    ).named_results()
+    if not rows:
+        raise HTTPException(status_code=404, detail="Brak danych OHLC dla wybranego zakresu")
+    frame = pd.DataFrame(rows)
+    frame["date"] = pd.to_datetime(frame["date"])
+    return frame
+
+
+def _build_simulation_response(result: PortfolioSimulationResult) -> SimulationResponse:
+    return SimulationResponse(
+        initial_value=result.initial_value,
+        final_value=result.final_value,
+        return_pct=result.return_pct,
+        annualized_return_pct=result.annualized_return_pct,
+        max_drawdown_pct=result.max_drawdown_pct,
+        daily_values=[
+            SimulationPoint(date=date.fromisoformat(point["date"]), value=point["value"])
+            for point in result.daily_values
+        ],
+    )
+
+
+def _evaluate_portfolio(
+    ohlc: pd.DataFrame,
+    weights: Dict[str, float],
+    top_n: int,
+    initial_cash: float,
+) -> tuple[float, PortfolioSimulationResult, RankingComputationResult, List[str]]:
+    ranking = compute_ranking_scores(ohlc, weights)
+    top = ranking.top(top_n)
+    top_symbols = list(top.index)
+    simulation = simulate_equal_weight_portfolio(ohlc, top_symbols, initial_cash)
+    return simulation.return_pct, simulation, ranking, top_symbols
+
+
+@api_router.post("/portfolio/optimise", response_model=PortfolioOptimizationResponse)
+def optimise_portfolio(payload: PortfolioOptimizationPayload) -> PortfolioOptimizationResponse:
+    ohlc = _fetch_ohlc_frame(payload.symbols, payload.start_date, payload.end_date)
+
+    feature_weights = {feature.name: feature.weight or 0.0 for feature in payload.features}
+    selected_features = [feature.name for feature in payload.features] if payload.features else AVAILABLE_FEATURES.names()
+    if not feature_weights and selected_features:
+        equal = 1.0 / len(selected_features)
+        feature_weights = {name: equal for name in selected_features}
+
+    _, base_simulation, ranking, top_symbols = _evaluate_portfolio(
+        ohlc,
+        feature_weights,
+        payload.top_n,
+        payload.initial_cash,
+    )
+
+    steps: Optional[List[OptimizationStepResponse]] = None
+
+    if payload.enable_llm:
+        optimiser = LocalLLMOptimizer(
+            model_path=payload.llm_model_path or "",
+            temperature=payload.llm_temperature,
+            max_tokens=payload.llm_max_tokens,
+            gpu_layers=payload.llm_gpu_layers,
+        )
+
+        def _evaluate(weights: Dict[str, float]) -> float:
+            score, _, _, _ = _evaluate_portfolio(ohlc, weights, payload.top_n, payload.initial_cash)
+            return score
+
+        def _summarise(weights: Dict[str, float]) -> List[str]:
+            _, _, _, symbols = _evaluate_portfolio(ohlc, weights, payload.top_n, payload.initial_cash)
+            return symbols
+
+        request = OptimizationRequest(
+            feature_names=selected_features,
+            initial_weights=feature_weights,
+            iterations=payload.llm_iterations,
+        )
+        optimisation = optimiser.optimize(request, _evaluate, _summarise)
+        feature_weights = optimisation.best_weights
+        _, base_simulation, ranking, top_symbols = _evaluate_portfolio(
+            ohlc,
+            feature_weights,
+            payload.top_n,
+            payload.initial_cash,
+        )
+        steps = [
+            OptimizationStepResponse(
+                iteration=step.iteration,
+                weights=step.weights,
+                score=step.score,
+                top_symbols=step.top_symbols,
+                llm_response=step.llm_response,
+            )
+            for step in optimisation.steps
+        ]
+
+    response = PortfolioOptimizationResponse(
+        top_symbols=top_symbols,
+        ranking=[
+            RankingEntry(
+                symbol=entry["symbol"],
+                score=entry["score"],
+                features=entry["features"],
+                features_normalized=entry["features_normalized"],
+            )
+            for entry in ranking.as_serializable()
+        ],
+        simulation=_build_simulation_response(base_simulation),
+        optimisation=steps,
+    )
+    return response
 
 
 api_router.include_router(windows_agent_router)
