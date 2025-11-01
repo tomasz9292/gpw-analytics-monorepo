@@ -12932,7 +12932,9 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                 if (response.status === 401) {
                     setAuthUser(null);
                     setAdminFlag(false);
-                    resetToDefaults();
+                    if (lastSavedPreferencesRef.current !== null) {
+                        resetToDefaults();
+                    }
                     lastSavedPreferencesRef.current = null;
                     return null;
                 }
