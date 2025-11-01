@@ -32,6 +32,13 @@ pip install -r backend/requirements.txt
 
 Use `./scripts/local-sync.sh` to start ClickHouse, build backend images, and expose the FastAPI server locally. The script waits until `http://localhost:8000/api/admin/ping` responds before streaming backend logs. Stop the services with `Ctrl+C`.
 
+> **Windows tip:** PowerShell nie uruchamia plików z bieżącego katalogu bez prefiksu.
+> Wpisz `cd scripts` i uruchom skrypt w powłoce bash (`Git Bash`, `WSL`).
+> Jeśli po wpisaniu `bash` otrzymujesz komunikat *«execvpe(/bin/bash) failed»*,
+> doinstaluj powłokę: zainstaluj [Git for Windows](https://gitforwindows.org/) i otwórz
+> menu Start → **Git Bash**, albo włącz WSL poleceniem `wsl --install` (wymagany restart).
+> W obu przypadkach przejdź do katalogu repozytorium i wykonaj `./scripts/local-sync.sh`.
+
 For details on how the backend orchestrates historical OHLC imports or how frontend synchronization statuses are surfaced, look at the backend `api/offline_export.py` module and the frontend `AnalyticsDashboard` component.
 
 ### Windows desktop agent

@@ -12,6 +12,13 @@
    ./scripts/local-sync.sh
    ```
 
+   > **Windows (PowerShell):** najpierw przejdź do katalogu `scripts` i uruchom
+   > skrypt w powłoce bash (`Git Bash`, `WSL`). Jeśli po wpisaniu `bash`
+   > zobaczysz błąd *«execvpe(/bin/bash) failed»*, zainstaluj
+   > [Git for Windows](https://gitforwindows.org/) i otwórz terminal **Git Bash**
+   > w katalogu repozytorium, albo włącz WSL komendą `wsl --install`
+   > (konieczny restart). W nowym oknie wykonaj `./scripts/local-sync.sh`.
+
    Skrypt zbuduje obrazy, wystartuje ClickHouse i backend oraz poczeka aż
    `http://localhost:8000/api/admin/ping` zacznie odpowiadać. W trakcie działania
    pokaże logi backendu. Zakończ pracę kombinacją <kbd>Ctrl</kbd> + <kbd>C</kbd> —
