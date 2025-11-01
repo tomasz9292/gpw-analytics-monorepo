@@ -136,3 +136,8 @@ Skrypt korzysta z historycznych składów indeksów (`index:`) tak jak backend.
 Jeżeli chcesz ograniczyć się wyłącznie do najnowszego składu, dodaj
 `--no-include-index-history` (analogiczny przełącznik działa również w bashu).
 
+
+
+## Ranking portfela i optymalizacja
+
+Szczegółowy opis API portfelowego znajduje się w [docs/portfolio-optimisation.md](docs/portfolio-optimisation.md).
