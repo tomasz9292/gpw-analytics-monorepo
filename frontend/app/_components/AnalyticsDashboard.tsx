@@ -15699,35 +15699,44 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                 throw new Error("Wybierz co najmniej jedną cechę rankingu.");
             }
 
-            const optimisationComponents = activeFeatureOptions
-                .map((option) => {
-                    const idx = llmFeatureOptions.findIndex((item) => item.name === option.name);
-                    const component = scoreComponents[idx];
-                    if (!component) {
-                        return null;
-                    }
-                    const state = llmFeatureState[option.name];
-                    const rawWeight = state?.weight?.trim() ?? "";
-                    const parsedWeight = rawWeight.length ? Number(rawWeight) : component.weight;
-                    const safeWeight =
-                        Number.isFinite(parsedWeight) && parsedWeight > 0
-                            ? parsedWeight
-                            : component.weight > 0
-                            ? component.weight
-                            : 1;
-                    return {
-                        feature: option.name,
-                        metric: component.metric,
-                        lookback_days: component.lookback_days,
-                        weight: safeWeight,
-                        direction: component.direction,
-                        min_value: component.min_value,
-                        max_value: component.max_value,
-                        normalize: component.normalize ?? "none",
-                        ...(component.scoring ? { scoring: component.scoring } : {}),
-                    };
-                })
-                .filter((item): item is PortfolioOptimisationScoreComponent => Boolean(item));
+            const optimisationComponents = activeFeatureOptions.reduce<
+                PortfolioOptimisationScoreComponent[]
+            >((acc, option) => {
+                const idx = llmFeatureOptions.findIndex((item) => item.name === option.name);
+                const component = scoreComponents[idx];
+                if (!component) {
+                    return acc;
+                }
+                const state = llmFeatureState[option.name];
+                const rawWeight = state?.weight?.trim() ?? "";
+                const parsedWeight = rawWeight.length ? Number(rawWeight) : component.weight;
+                const safeWeight =
+                    Number.isFinite(parsedWeight) && parsedWeight > 0
+                        ? parsedWeight
+                        : component.weight > 0
+                        ? component.weight
+                        : 1;
+
+                const payload: PortfolioOptimisationScoreComponent = {
+                    feature: option.name,
+                    metric: component.metric,
+                    lookback_days: component.lookback_days,
+                    weight: safeWeight,
+                    direction: component.direction,
+                    normalize: component.normalize ?? "none",
+                    ...(component.scoring ? { scoring: component.scoring } : {}),
+                };
+
+                if (typeof component.min_value === "number") {
+                    payload.min_value = component.min_value;
+                }
+                if (typeof component.max_value === "number") {
+                    payload.max_value = component.max_value;
+                }
+
+                acc.push(payload);
+                return acc;
+            }, []);
 
             if (!optimisationComponents.length) {
                 throw new Error("Skonfiguruj ranking score, aby uruchomić optymalizację.");
