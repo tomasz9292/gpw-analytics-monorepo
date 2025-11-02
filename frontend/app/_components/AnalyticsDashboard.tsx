@@ -19220,77 +19220,11 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                     title="Konfiguracja optymalizacji"
                                     right={<Chip active>Eksperymentalne</Chip>}
                                 >
-                                    <div className="space-y-5 text-sm">
-                                        <p className="text-xs text-subtle">
-                                            Wybierz listę spółek, zakres dat i cechy rankingu. Opcjonalnie uruchom lokalny
-                                            model LLM, aby dobrał najlepsze wagi dla portfela.
-                                        </p>
-                                        <div className="grid gap-4 md:grid-cols-2">
-                                            <label className="flex flex-col gap-2">
-                                                <span className="text-xs uppercase tracking-wide text-muted">
-                                                    Symbole (oddzielone przecinkami)
-                                                </span>
-                                                <textarea
-                                                    value={llmSymbolsInput}
-                                                    onChange={(e) => setLlmSymbolsInput(e.target.value)}
-                                                    className={`${inputBaseClasses} min-h-[96px]`}
-                                                    placeholder="np. CDR.WA, PKN.WA, PKO.WA"
-                                                />
-                                            </label>
-                                            <div className="grid gap-3 sm:grid-cols-2">
-                                                <label className="flex flex-col gap-2">
-                                                    <span className="text-xs uppercase tracking-wide text-muted">
-                                                        Data startu
-                                                    </span>
-                                                    <input
-                                                        type="date"
-                                                        value={llmStartDate}
-                                                        onChange={(e) => setLlmStartDate(e.target.value)}
-                                                        className={inputBaseClasses}
-                                                    />
-                                                </label>
-                                                <label className="flex flex-col gap-2">
-                                                    <span className="text-xs uppercase tracking-wide text-muted">
-                                                        Data końca
-                                                    </span>
-                                                    <input
-                                                        type="date"
-                                                        value={llmEndDate}
-                                                        onChange={(e) => setLlmEndDate(e.target.value)}
-                                                        className={inputBaseClasses}
-                                                    />
-                                                </label>
-                                                <label className="flex flex-col gap-2">
-                                                    <span className="text-xs uppercase tracking-wide text-muted">
-                                                        Liczba spółek w portfelu
-                                                    </span>
-                                                    <input
-                                                        type="number"
-                                                        min={1}
-                                                        value={llmTopN}
-                                                        onChange={(e) => setLlmTopN(Number(e.target.value))}
-                                                        className={inputBaseClasses}
-                                                    />
-                                                </label>
-                                                <label className="flex flex-col gap-2">
-                                                    <span className="text-xs uppercase tracking-wide text-muted">
-                                                        Kapitał początkowy
-                                                    </span>
-                                                    <input
-                                                        type="number"
-                                                        min={1}
-                                                        step={1000}
-                                                        value={llmInitialCash}
-                                                        onChange={(e) => setLlmInitialCash(Number(e.target.value))}
-                                                        className={inputBaseClasses}
-                                                    />
-                                                </label>
-                                            </div>
-                                        </div>
+                                    <div className="space-y-6 text-sm">
                                         <div className="space-y-3">
-                                            <div>
+                                            <div className="space-y-1">
                                                 <div className="text-sm font-medium text-primary">Ranking score</div>
-                                                <div className="text-xs text-subtle">
+                                                <p className="text-xs text-subtle">
                                                     {llmSelectedFeatureCount
                                                         ? `Wybrano ${llmSelectedFeatureCount} ${
                                                               llmSelectedFeatureCount === 1
@@ -19300,7 +19234,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                                     : "składników"
                                                           } ranking score`
                                                         : "Ranking score tworzy ranking, który następnie testujemy, aby dobrać najbardziej optymalne parametry."}
-                                                </div>
+                                                </p>
                                             </div>
                                             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                                                 {llmFeatureOptions.map((feature, idx) => {
@@ -19533,8 +19467,13 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                 )}
                                             </div>
                                         </div>
-                                        <div className="space-y-3 text-xs">
-                                            <div className="text-sm font-medium text-primary">Parametry rankingu</div>
+                                        <div className="space-y-3">
+                                            <div className="space-y-1">
+                                                <div className="text-sm font-medium text-primary">Parametry rankingu</div>
+                                                <p className="text-xs text-subtle">
+                                                    Ustal liczbę spółek, kierunek sortowania oraz sposób ważenia wyników.
+                                                </p>
+                                            </div>
                                             <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
                                                 <label className="flex flex-col gap-2">
                                                     <span className="text-[11px] uppercase tracking-wide text-muted">Limit spółek</span>
@@ -19546,17 +19485,23 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                         className={inputBaseClasses}
                                                     />
                                                 </label>
-                                                <label className="flex flex-col gap-2">
+                                                <div className="flex flex-col gap-2">
                                                     <span className="text-[11px] uppercase tracking-wide text-muted">Ważenie</span>
-                                                    <select
-                                                        value={pfScoreWeighting}
-                                                        onChange={(e) => setPfScoreWeighting(e.target.value)}
-                                                        className={inputBaseClasses}
-                                                    >
-                                                        <option value="equal">Równe</option>
-                                                        <option value="score">Proporcjonalne do score</option>
-                                                    </select>
-                                                </label>
+                                                    <div className="flex flex-wrap gap-2">
+                                                        <Chip
+                                                            active={pfScoreWeighting === "equal"}
+                                                            onClick={() => setPfScoreWeighting("equal")}
+                                                        >
+                                                            Własne wagi
+                                                        </Chip>
+                                                        <Chip
+                                                            active={pfScoreWeighting === "score"}
+                                                            onClick={() => setPfScoreWeighting("score")}
+                                                        >
+                                                            Automatycznie wg score
+                                                        </Chip>
+                                                    </div>
+                                                </div>
                                                 <div className="flex flex-col gap-2">
                                                     <span className="text-[11px] uppercase tracking-wide text-muted">Kierunek</span>
                                                     <div className="flex gap-2">
@@ -19633,8 +19578,83 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                 </label>
                                             </div>
                                         </div>
-                                        <div className="space-y-3 text-xs">
-                                            <div className="text-sm font-medium text-primary">Parametry symulacji</div>
+                                        <div className="space-y-3">
+                                            <div className="space-y-1">
+                                                <div className="text-sm font-medium text-primary">Parametry symulacji</div>
+                                                <p className="text-xs text-subtle">
+                                                    Wybierz listę spółek, zakres dat i budżet, które zostaną użyte podczas optymalizacji.
+                                                </p>
+                                            </div>
+                                            <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+                                                <label className="flex min-h-full flex-col gap-2">
+                                                    <span className="text-xs uppercase tracking-wide text-muted">
+                                                        Symbole (oddzielone przecinkami)
+                                                    </span>
+                                                    <textarea
+                                                        value={llmSymbolsInput}
+                                                        onChange={(e) => setLlmSymbolsInput(e.target.value)}
+                                                        className={`${inputBaseClasses} min-h-[120px]`}
+                                                        placeholder="np. CDR.WA, PKN.WA, PKO.WA"
+                                                    />
+                                                </label>
+                                                <div className="grid gap-3 sm:grid-cols-2">
+                                                    <label className="flex flex-col gap-2">
+                                                        <span className="text-xs uppercase tracking-wide text-muted">
+                                                            Data startu
+                                                        </span>
+                                                        <input
+                                                            type="date"
+                                                            value={llmStartDate}
+                                                            onChange={(e) => setLlmStartDate(e.target.value)}
+                                                            className={inputBaseClasses}
+                                                        />
+                                                    </label>
+                                                    <label className="flex flex-col gap-2">
+                                                        <span className="text-xs uppercase tracking-wide text-muted">
+                                                            Data końca
+                                                        </span>
+                                                        <input
+                                                            type="date"
+                                                            value={llmEndDate}
+                                                            onChange={(e) => setLlmEndDate(e.target.value)}
+                                                            className={inputBaseClasses}
+                                                        />
+                                                    </label>
+                                                    <label className="flex flex-col gap-2">
+                                                        <span className="text-xs uppercase tracking-wide text-muted">
+                                                            Liczba spółek w portfelu
+                                                        </span>
+                                                        <input
+                                                            type="number"
+                                                            min={1}
+                                                            value={llmTopN}
+                                                            onChange={(e) => setLlmTopN(Number(e.target.value))}
+                                                            className={inputBaseClasses}
+                                                        />
+                                                    </label>
+                                                    <label className="flex flex-col gap-2">
+                                                        <span className="text-xs uppercase tracking-wide text-muted">
+                                                            Kapitał początkowy
+                                                        </span>
+                                                        <input
+                                                            type="number"
+                                                            min={1}
+                                                            step={1000}
+                                                            value={llmInitialCash}
+                                                            onChange={(e) => setLlmInitialCash(Number(e.target.value))}
+                                                            className={inputBaseClasses}
+                                                        />
+                                                    </label>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div className="space-y-3">
+                                            <div className="space-y-1">
+                                                <div className="text-sm font-medium text-primary">Parametry portfela</div>
+                                                <p className="text-xs text-subtle">
+                                                    Skonfiguruj częstotliwość rebalansingu, koszty i dodatkowe ograniczenia dla portfela.
+                                                </p>
+                                            </div>
                                             <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
                                                 <label className="flex flex-col gap-2">
                                                     <span className="text-[11px] uppercase tracking-wide text-muted">Częstotliwość rebalansingu</span>
