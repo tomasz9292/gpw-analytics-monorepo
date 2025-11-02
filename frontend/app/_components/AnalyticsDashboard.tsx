@@ -71,44 +71,14 @@ const PENDING_PORTFOLIO_STORAGE_KEY = "gpw_saved_portfolio_pending";
 const MAX_UNIVERSE_FALLBACK_SYMBOLS = 500;
 const DEFAULT_LLM_SYMBOLS = "CDR.WA, PKN.WA, PKO.WA, PZU.WA, KGH.WA";
 
-const LLM_FEATURES = [
-    {
-        name: "momentum",
-        label: "Momentum",
-        description: "Zwrot całkowity pomiędzy początkiem i końcem wybranego okresu.",
-    },
-    {
-        name: "volatility",
-        label: "Zmienność",
-        description: "Odwrotność odchylenia standardowego dziennych stóp zwrotu (mniejsze = lepsze).",
-    },
-    {
-        name: "average_volume",
-        label: "Średni wolumen",
-        description: "Średni dzienny wolumen obrotu – premiuje płynniejsze spółki.",
-    },
-] as const;
+type LlmFeatureOption = {
+    name: string;
+    label: string;
+    description?: string;
+    defaultWeight: number;
+};
 
-type LlmFeatureName = (typeof LLM_FEATURES)[number]["name"];
-
-type LlmFeatureState = Record<LlmFeatureName, { enabled: boolean; weight: string }>;
-
-const createDefaultLlmFeatureState = (): LlmFeatureState =>
-    LLM_FEATURES.reduce(
-        (acc, feature) => ({
-            ...acc,
-            [feature.name]: { enabled: true, weight: "1" },
-        }),
-        {} as LlmFeatureState
-    );
-
-const LLM_FEATURE_LABEL_MAP: Record<LlmFeatureName, string> = LLM_FEATURES.reduce(
-    (acc, feature) => ({
-        ...acc,
-        [feature.name]: feature.label,
-    }),
-    {} as Record<LlmFeatureName, string>
-);
+type LlmFeatureState = Record<string, { enabled: boolean; weight: string }>;
 
 const NETWORK_ERROR_PATTERNS = [
     "failed to fetch",
@@ -2170,6 +2140,10 @@ type PortfolioOptimisationFeatureInput = {
     weight?: number;
 };
 
+type PortfolioOptimisationScoreComponent = ScoreComponentRequest & {
+    feature: string;
+};
+
 type PortfolioOptimisationRequest = {
     symbols: string[];
     start_date: string;
@@ -2177,6 +2151,17 @@ type PortfolioOptimisationRequest = {
     top_n: number;
     initial_cash: number;
     features: PortfolioOptimisationFeatureInput[];
+    score_components: PortfolioOptimisationScoreComponent[];
+    score_filters?: { include?: string | string[]; indices?: string[] };
+    score_weighting?: string;
+    score_direction?: "asc" | "desc";
+    score_min_score?: number;
+    score_max_score?: number;
+    score_universe_fallback?: string[];
+    rebalance: Rebalance;
+    fee_pct?: number;
+    threshold_pct?: number;
+    benchmark?: string | null;
     enable_llm: boolean;
     llm_model_path?: string;
     llm_iterations?: number;
@@ -3361,6 +3346,19 @@ async function optimisePortfolio(
     const featuresPayload = request.features.map((feature) =>
         removeUndefined({ name: feature.name, weight: feature.weight })
     );
+    const scoreComponentsPayload = request.score_components.map((component) =>
+        removeUndefined({
+            feature: component.feature,
+            metric: component.metric,
+            lookback_days: component.lookback_days,
+            weight: component.weight,
+            direction: component.direction,
+            min_value: component.min_value,
+            max_value: component.max_value,
+            scoring: component.scoring,
+            normalize: component.normalize,
+        })
+    );
 
     const payload = removeUndefined({
         symbols: request.symbols,
@@ -3369,6 +3367,17 @@ async function optimisePortfolio(
         top_n: request.top_n,
         initial_cash: request.initial_cash,
         features: featuresPayload,
+        score_components: scoreComponentsPayload,
+        score_filters: request.score_filters,
+        score_weighting: request.score_weighting,
+        score_direction: request.score_direction,
+        score_min_score: request.score_min_score,
+        score_max_score: request.score_max_score,
+        score_universe_fallback: request.score_universe_fallback,
+        rebalance: request.rebalance,
+        fee_pct: request.fee_pct,
+        threshold_pct: request.threshold_pct,
+        benchmark: request.benchmark,
         enable_llm: request.enable_llm,
         llm_model_path: request.llm_model_path,
         llm_iterations: request.llm_iterations,
@@ -9637,17 +9646,27 @@ function ScoreRankingTable({ rows }: { rows: ScorePreviewRow[] }) {
     );
 }
 
-function LlmRankingTable({ entries }: { entries: PortfolioOptimisationRankingEntry[] }) {
+function LlmRankingTable({
+    entries,
+    featureLabels,
+}: {
+    entries: PortfolioOptimisationRankingEntry[];
+    featureLabels: Record<string, string>;
+}) {
     if (!entries.length) return null;
 
+    const featureOrder = Object.keys(featureLabels);
     const featureNames = Array.from(
         new Set(entries.flatMap((entry) => Object.keys(entry.features ?? {})))
     ).sort((a, b) => {
-        const orderA = LLM_FEATURES.findIndex((feature) => feature.name === a);
-        const orderB = LLM_FEATURES.findIndex((feature) => feature.name === b);
+        const orderA = featureOrder.indexOf(a);
+        const orderB = featureOrder.indexOf(b);
         const safeA = orderA === -1 ? Number.MAX_SAFE_INTEGER : orderA;
         const safeB = orderB === -1 ? Number.MAX_SAFE_INTEGER : orderB;
-        return safeA - safeB;
+        if (safeA !== safeB) {
+            return safeA - safeB;
+        }
+        return a.localeCompare(b);
     });
 
     return (
@@ -9660,7 +9679,7 @@ function LlmRankingTable({ entries }: { entries: PortfolioOptimisationRankingEnt
                         <th className="px-3 py-2">Score</th>
                         {featureNames.map((name) => (
                             <th key={name} className="px-3 py-2">
-                                {LLM_FEATURE_LABEL_MAP[name as LlmFeatureName] ?? name}
+                                {featureLabels[name] ?? name}
                             </th>
                         ))}
                     </tr>
@@ -12850,9 +12869,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
     const [llmEndDate, setLlmEndDate] = useState(() => new Date().toISOString().slice(0, 10));
     const [llmTopN, setLlmTopN] = useState(5);
     const [llmInitialCash, setLlmInitialCash] = useState(100_000);
-    const [llmFeatureState, setLlmFeatureState] = useState<LlmFeatureState>(() =>
-        createDefaultLlmFeatureState()
-    );
+    const [llmFeatureState, setLlmFeatureState] = useState<LlmFeatureState>({});
     const [llmEnable, setLlmEnable] = useState(false);
     const [llmModelPath, setLlmModelPath] = useState("");
     const [llmIterations, setLlmIterations] = useState(3);
@@ -12866,7 +12883,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
         () => Object.values(llmFeatureState).filter((item) => item.enabled).length,
         [llmFeatureState]
     );
-    const handleToggleLlmFeature = useCallback((name: LlmFeatureName, enabled: boolean) => {
+    const handleToggleLlmFeature = useCallback((name: string, enabled: boolean) => {
         setLlmFeatureState((prev) => ({
             ...prev,
             [name]: {
@@ -12876,7 +12893,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
         }));
     }, []);
     const handleChangeLlmFeatureWeight = useCallback(
-        (name: LlmFeatureName, value: string) => {
+        (name: string, value: string) => {
             setLlmFeatureState((prev) => ({
                 ...prev,
                 [name]: {
@@ -12904,6 +12921,45 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
     }, [customIndices]);
 
     const scoreComponents = useMemo(() => buildScoreComponents(scoreRules), [scoreRules]);
+
+    const llmFeatureOptions = useMemo<LlmFeatureOption[]>(() => {
+        return scoreComponents.map((component, idx) => {
+            const baseLabel = component.label?.trim() || component.metric;
+            const normalizedMetric = component.metric.replace(/[^a-z0-9]+/gi, "_").toLowerCase();
+            const lookback = component.lookback_days ?? 0;
+            const name = `${normalizedMetric}_${lookback}_${idx}`;
+            return {
+                name,
+                label: baseLabel,
+                description: component.metric,
+                defaultWeight: component.weight,
+            };
+        });
+    }, [scoreComponents]);
+
+    useEffect(() => {
+        setLlmFeatureState((prev) => {
+            const next: LlmFeatureState = {};
+            llmFeatureOptions.forEach((option) => {
+                const existing = prev[option.name];
+                next[option.name] = existing ?? {
+                    enabled: true,
+                    weight: Number.isFinite(option.defaultWeight)
+                        ? `${option.defaultWeight}`
+                        : "1",
+                };
+            });
+            return next;
+        });
+    }, [llmFeatureOptions]);
+
+    const llmFeatureLabelMap = useMemo(() => {
+        const map: Record<string, string> = {};
+        llmFeatureOptions.forEach((option) => {
+            map[option.name] = option.label;
+        });
+        return map;
+    }, [llmFeatureOptions]);
     const scoreTotalWeight = scoreComponents.reduce((acc, component) => acc + component.weight, 0);
     const scoreLimitInvalid = !Number.isFinite(scoreLimit) || scoreLimit <= 0;
     const scoreDisabled = scoreLoading || scoreLimitInvalid || !scoreComponents.length;
@@ -15634,22 +15690,73 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                 throw new Error("Data końca musi być późniejsza niż data startu.");
             }
 
-            const selectedFeatures = Object.entries(llmFeatureState).filter(
-                ([, state]) => state.enabled
-            );
-            if (!selectedFeatures.length) {
+            const activeFeatureOptions = llmFeatureOptions.filter((option) => {
+                const state = llmFeatureState[option.name];
+                return state ? state.enabled : true;
+            });
+
+            if (!activeFeatureOptions.length) {
                 throw new Error("Wybierz co najmniej jedną cechę rankingu.");
             }
 
-            const featurePayload: PortfolioOptimisationFeatureInput[] = selectedFeatures.map(
-                ([name, state]) => {
-                    const normalized = state.weight.trim();
-                    const numeric = normalized.length ? Number(normalized) : NaN;
-                    return Number.isFinite(numeric) && numeric > 0
-                        ? { name, weight: numeric }
-                        : { name };
+            const optimisationComponents = activeFeatureOptions.reduce<
+                PortfolioOptimisationScoreComponent[]
+            >((acc, option) => {
+                const idx = llmFeatureOptions.findIndex((item) => item.name === option.name);
+                const component = scoreComponents[idx];
+                if (!component) {
+                    return acc;
                 }
+                const state = llmFeatureState[option.name];
+                const rawWeight = state?.weight?.trim() ?? "";
+                const parsedWeight = rawWeight.length ? Number(rawWeight) : component.weight;
+                const safeWeight =
+                    Number.isFinite(parsedWeight) && parsedWeight > 0
+                        ? parsedWeight
+                        : component.weight > 0
+                        ? component.weight
+                        : 1;
+
+                const payload: PortfolioOptimisationScoreComponent = {
+                    feature: option.name,
+                    metric: component.metric,
+                    lookback_days: component.lookback_days,
+                    weight: safeWeight,
+                    direction: component.direction,
+                    normalize: component.normalize ?? "none",
+                    ...(component.scoring ? { scoring: component.scoring } : {}),
+                };
+
+                if (typeof component.min_value === "number") {
+                    payload.min_value = component.min_value;
+                }
+                if (typeof component.max_value === "number") {
+                    payload.max_value = component.max_value;
+                }
+
+                acc.push(payload);
+                return acc;
+            }, []);
+
+            if (!optimisationComponents.length) {
+                throw new Error("Skonfiguruj ranking score, aby uruchomić optymalizację.");
+            }
+
+            const featurePayload: PortfolioOptimisationFeatureInput[] = optimisationComponents.map(
+                (component) => ({ name: component.feature, weight: component.weight })
             );
+
+            const llmUniverseParsed = parseUniverseValue(pfScoreUniverse);
+            const llmUniverseExpanded = expandUniverseValueWithCustomIndices(llmUniverseParsed);
+            const llmFallbackUniverse = computeUniverseFallback(llmUniverseExpanded);
+            const llmResolvedUniverse = resolveUniverseWithFallback(
+                llmUniverseExpanded ?? undefined,
+                llmFallbackUniverse
+            );
+            const llmFiltersPayload = buildUniverseFiltersPayload(llmResolvedUniverse, customIndexMap);
+            const minScoreValue = parseOptionalNumber(pfScoreMin);
+            const maxScoreValue = parseOptionalNumber(pfScoreMax);
+            const benchmarkValue = pfBenchmark?.trim() ? pfBenchmark.trim() : undefined;
 
             if (!Number.isFinite(llmInitialCash) || llmInitialCash <= 0) {
                 throw new Error("Kapitał początkowy musi być dodatni.");
@@ -15699,6 +15806,17 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                 top_n: topN,
                 initial_cash: llmInitialCash,
                 features: featurePayload,
+                score_components: optimisationComponents,
+                score_filters: llmFiltersPayload,
+                score_weighting: pfScoreWeighting,
+                score_direction: pfScoreDirection,
+                score_min_score: typeof minScoreValue === 'number' ? minScoreValue : undefined,
+                score_max_score: typeof maxScoreValue === 'number' ? maxScoreValue : undefined,
+                score_universe_fallback: llmFallbackUniverse ?? undefined,
+                rebalance: pfFreq,
+                fee_pct: pfFee,
+                threshold_pct: pfThreshold,
+                benchmark: benchmarkValue,
                 enable_llm: llmEnable,
                 llm_model_path: llmEnable ? llmModelPath.trim() : undefined,
                 llm_iterations: safeIterations,
@@ -19004,8 +19122,11 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                 </div>
                                             </div>
                                             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                                                {LLM_FEATURES.map((feature) => {
-                                                    const state = llmFeatureState[feature.name];
+                                                {llmFeatureOptions.map((feature) => {
+                                                    const state = llmFeatureState[feature.name] ?? {
+                                                        enabled: true,
+                                                        weight: `${feature.defaultWeight ?? 1}`,
+                                                    };
                                                     return (
                                                         <label
                                                             key={feature.name}
@@ -19020,9 +19141,11 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                                     <div className="text-sm font-semibold text-primary">
                                                                         {feature.label}
                                                                     </div>
-                                                                    <p className="mt-1 text-xs text-subtle">
-                                                                        {feature.description}
-                                                                    </p>
+                                                                    {feature.description && (
+                                                                        <p className="mt-1 text-xs text-subtle">
+                                                                            {feature.description}
+                                                                        </p>
+                                                                    )}
                                                                 </div>
                                                                 <input
                                                                     type="checkbox"
@@ -19060,6 +19183,124 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                         </label>
                                                     );
                                                 })}
+                                                {!llmFeatureOptions.length && (
+                                                    <div className="rounded-2xl border border-dashed border-soft bg-white/70 p-4 text-xs text-subtle">
+                                                        Dodaj metryki w konfiguratorze score powyżej, aby móc je optymalizować.
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                        <div className="space-y-3 text-xs">
+                                            <div className="text-sm font-medium text-primary">Parametry rankingu</div>
+                                            <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+                                                <label className="flex flex-col gap-2">
+                                                    <span className="text-[11px] uppercase tracking-wide text-muted">Limit spółek</span>
+                                                    <input
+                                                        type="number"
+                                                        min={1}
+                                                        value={pfScoreLimit}
+                                                        onChange={(e) => setPfScoreLimit(Number(e.target.value))}
+                                                        className={inputBaseClasses}
+                                                    />
+                                                </label>
+                                                <label className="flex flex-col gap-2">
+                                                    <span className="text-[11px] uppercase tracking-wide text-muted">Ważenie</span>
+                                                    <select
+                                                        value={pfScoreWeighting}
+                                                        onChange={(e) => setPfScoreWeighting(e.target.value)}
+                                                        className={inputBaseClasses}
+                                                    >
+                                                        <option value="equal">Równe</option>
+                                                        <option value="score">Proporcjonalne do score</option>
+                                                    </select>
+                                                </label>
+                                                <div className="flex flex-col gap-2">
+                                                    <span className="text-[11px] uppercase tracking-wide text-muted">Kierunek</span>
+                                                    <div className="flex gap-2">
+                                                        <Chip active={pfScoreDirection === "desc"} onClick={() => setPfScoreDirection("desc")}>
+                                                            Najwyższy score
+                                                        </Chip>
+                                                        <Chip active={pfScoreDirection === "asc"} onClick={() => setPfScoreDirection("asc")}>
+                                                            Najniższy score
+                                                        </Chip>
+                                                    </div>
+                                                </div>
+                                                <label className="flex flex-col gap-2 md:col-span-2">
+                                                    <span className="text-[11px] uppercase tracking-wide text-muted">Wszechświat (symbole, indeksy)</span>
+                                                    <input
+                                                        type="text"
+                                                        value={pfScoreUniverse}
+                                                        onChange={(e) => setPfScoreUniverse(e.target.value)}
+                                                        className={inputBaseClasses}
+                                                        placeholder="np. WIG20, index:MWIG40"
+                                                    />
+                                                </label>
+                                                <label className="flex flex-col gap-2">
+                                                    <span className="text-[11px] uppercase tracking-wide text-muted">Minimalny score</span>
+                                                    <input
+                                                        type="number"
+                                                        value={pfScoreMin}
+                                                        onChange={(e) => setPfScoreMin(e.target.value)}
+                                                        className={inputBaseClasses}
+                                                    />
+                                                </label>
+                                                <label className="flex flex-col gap-2">
+                                                    <span className="text-[11px] uppercase tracking-wide text-muted">Maksymalny score</span>
+                                                    <input
+                                                        type="number"
+                                                        value={pfScoreMax}
+                                                        onChange={(e) => setPfScoreMax(e.target.value)}
+                                                        className={inputBaseClasses}
+                                                    />
+                                                </label>
+                                            </div>
+                                        </div>
+                                        <div className="space-y-3 text-xs">
+                                            <div className="text-sm font-medium text-primary">Parametry symulacji</div>
+                                            <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+                                                <label className="flex flex-col gap-2">
+                                                    <span className="text-[11px] uppercase tracking-wide text-muted">Częstotliwość rebalansingu</span>
+                                                    <select
+                                                        value={pfFreq}
+                                                        onChange={(e) => setPfFreq(e.target.value as Rebalance)}
+                                                        className={inputBaseClasses}
+                                                    >
+                                                        <option value="none">Brak</option>
+                                                        <option value="monthly">Miesięcznie</option>
+                                                        <option value="quarterly">Kwartalnie</option>
+                                                        <option value="yearly">Rocznie</option>
+                                                    </select>
+                                                </label>
+                                                <label className="flex flex-col gap-2">
+                                                    <span className="text-[11px] uppercase tracking-wide text-muted">Koszt transakcyjny (%)</span>
+                                                    <input
+                                                        type="number"
+                                                        step={0.01}
+                                                        value={pfFee}
+                                                        onChange={(e) => setPfFee(Number(e.target.value))}
+                                                        className={inputBaseClasses}
+                                                    />
+                                                </label>
+                                                <label className="flex flex-col gap-2">
+                                                    <span className="text-[11px] uppercase tracking-wide text-muted">Próg rebalansingu (%)</span>
+                                                    <input
+                                                        type="number"
+                                                        step={0.1}
+                                                        value={pfThreshold}
+                                                        onChange={(e) => setPfThreshold(Number(e.target.value))}
+                                                        className={inputBaseClasses}
+                                                    />
+                                                </label>
+                                                <label className="flex flex-col gap-2 md:col-span-2">
+                                                    <span className="text-[11px] uppercase tracking-wide text-muted">Benchmark</span>
+                                                    <input
+                                                        type="text"
+                                                        value={pfBenchmark ?? ""}
+                                                        onChange={(e) => setPfBenchmark(e.target.value || null)}
+                                                        className={inputBaseClasses}
+                                                        placeholder="np. WIG, MSCI World"
+                                                    />
+                                                </label>
                                             </div>
                                         </div>
                                         <div className="rounded-2xl border border-dashed border-soft bg-white/70 p-4 text-xs text-subtle">
@@ -19217,7 +19458,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                         </div>
                                                     </div>
                                                 </div>
-                                                <LlmRankingTable entries={llmResult.ranking} />
+                                                <LlmRankingTable entries={llmResult.ranking} featureLabels={llmFeatureLabelMap} />
                                                 {llmResult.optimisation && llmResult.optimisation.length ? (
                                                     <div className="space-y-2">
                                                         <div className="text-sm font-medium text-primary">Przebieg optymalizacji</div>
@@ -19226,7 +19467,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                                 const weightEntries = Object.entries(step.weights);
                                                                 const weightLabel = weightEntries
                                                                     .map(([name, value]) => {
-                                                                        const label = LLM_FEATURE_LABEL_MAP[name as LlmFeatureName] ?? name;
+                                                                        const label = llmFeatureLabelMap[name] ?? name;
                                                                         return `${label}: ${formatPercent(value, 0)}`;
                                                                     })
                                                                     .join(", ");

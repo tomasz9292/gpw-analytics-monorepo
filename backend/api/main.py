@@ -21,6 +21,7 @@ from typing import (
     Dict,
     Iterable,
     List,
+    Mapping,
     Optional,
     Sequence,
     Set,
@@ -7140,13 +7141,28 @@ class RankingFeatureSpec(BaseModel):
         return value
 
 
+class OptimizationScoreComponent(ScoreComponent):
+    feature: str = Field(..., min_length=1)
+
+
 class PortfolioOptimizationPayload(BaseModel):
     symbols: List[str] = Field(..., min_length=1, description="Symbols to be considered in ranking")
     start_date: date = Field(..., description="Start date for OHLC window")
     end_date: date = Field(..., description="End date for OHLC window")
-    top_n: int = Field(default=5, ge=1, le=50, description="Number of instruments to hold in the simulated portfolio")
+    top_n: int = Field(default=5, ge=1, le=5000, description="Number of instruments to hold in the simulated portfolio")
     initial_cash: float = Field(default=100_000.0, ge=1.0)
     features: List[RankingFeatureSpec] = Field(default_factory=list)
+    score_components: List[OptimizationScoreComponent] = Field(default_factory=list)
+    score_filters: Optional[UniverseFilters] = None
+    score_weighting: str = Field("equal", pattern="^(equal|score)$")
+    score_direction: str = Field("desc", pattern="^(asc|desc)$")
+    score_min_score: Optional[float] = Field(default=None)
+    score_max_score: Optional[float] = Field(default=None)
+    score_universe_fallback: Optional[List[str]] = None
+    rebalance: str = Field("monthly", pattern="^(none|monthly|quarterly|yearly)$")
+    fee_pct: float = Field(default=0.0, ge=0.0)
+    threshold_pct: float = Field(default=0.0, ge=0.0)
+    benchmark: Optional[str] = Field(default=None)
     enable_llm: bool = Field(default=False, description="Toggle LLM-driven optimisation")
     llm_model_path: Optional[str] = Field(default=None, description="Path to the local GGUF/GGML model for llama.cpp")
     llm_iterations: int = Field(default=3, ge=1, le=20)
@@ -7160,6 +7176,8 @@ class PortfolioOptimizationPayload(BaseModel):
             raise ValueError("end_date must be greater than or equal to start_date")
         if self.enable_llm and not self.llm_model_path:
             raise ValueError("llm_model_path must be provided when enable_llm is True")
+        if self.score_components and any(not component.feature for component in self.score_components):
+            raise ValueError("Each score component must define a feature identifier")
         return self
 
 
@@ -7234,6 +7252,39 @@ def _build_simulation_response(result: PortfolioSimulationResult) -> SimulationR
     )
 
 
+def _build_simulation_response_from_portfolio(resp: PortfolioResp) -> SimulationResponse:
+    if not resp.equity:
+        raise HTTPException(status_code=404, detail="Brak danych symulacji portfela")
+
+    initial_value = resp.stats.initial_value
+    if initial_value is None and resp.equity:
+        initial_value = resp.equity[0].value
+
+    final_value = resp.stats.final_value
+    if final_value is None and resp.equity:
+        final_value = resp.equity[-1].value
+
+    total_return = resp.stats.total_return
+    if total_return is None and initial_value and final_value:
+        total_return = (final_value / initial_value) - 1.0 if initial_value else 0.0
+
+    daily_values = [
+        SimulationPoint(date=date.fromisoformat(point.date), value=point.value)
+        for point in resp.equity
+    ]
+
+    return SimulationResponse(
+        initial_value=float(initial_value or 0.0),
+        final_value=float(final_value or 0.0),
+        return_pct=float(total_return or 0.0),
+        annualized_return_pct=float(resp.stats.cagr) if resp.stats.cagr is not None else None,
+        max_drawdown_pct=float(resp.stats.max_drawdown)
+        if resp.stats.max_drawdown is not None
+        else None,
+        daily_values=daily_values,
+    )
+
+
 def _evaluate_portfolio(
     ohlc: pd.DataFrame,
     weights: Dict[str, float],
@@ -7247,8 +7298,241 @@ def _evaluate_portfolio(
     return simulation.return_pct, simulation, ranking, top_symbols
 
 
+def _prepare_filters_with_fallback(
+    payload: PortfolioOptimizationPayload,
+) -> Optional[UniverseFilters]:
+    base_data = payload.score_filters.model_dump() if payload.score_filters else {}
+    includes: List[str] = []
+    if base_data.get("include"):
+        includes.extend(base_data["include"])
+    includes.extend(payload.symbols)
+    if payload.score_universe_fallback:
+        includes.extend(payload.score_universe_fallback)
+    cleaned_includes = []
+    seen: Set[str] = set()
+    for item in includes:
+        token = item.strip()
+        if not token:
+            continue
+        normalized = token.upper()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        cleaned_includes.append(token)
+    if cleaned_includes:
+        base_data["include"] = cleaned_includes
+    return UniverseFilters(**base_data) if base_data else None
+
+
+def _build_components_for_weights(
+    components: Sequence[OptimizationScoreComponent],
+    weights: Mapping[str, float],
+) -> List[ScoreComponent]:
+    adjusted: List[ScoreComponent] = []
+    for component in components:
+        requested = weights.get(component.feature, component.weight)
+        safe_weight = float(requested) if requested is not None else float(component.weight)
+        if not isfinite(safe_weight) or safe_weight < 0:
+            safe_weight = 0.0
+        data = component.model_dump()
+        data.pop("feature", None)
+        data["weight"] = safe_weight
+        adjusted.append(ScoreComponent(**data))
+
+    if not adjusted:
+        return []
+
+    total_weight = sum(comp.weight for comp in adjusted)
+    if total_weight <= 0:
+        equal = 1.0 / len(adjusted)
+        adjusted = [comp.model_copy(update={"weight": equal}) for comp in adjusted]
+    return adjusted
+
+
+def _build_ranking_from_components(
+    ch_client,
+    payload: PortfolioOptimizationPayload,
+    components: Sequence[ScoreComponent],
+) -> List[RankingEntry]:
+    filters = _prepare_filters_with_fallback(payload)
+    candidates = _list_candidate_symbols(ch_client, filters, include_index_history=True)
+    if not candidates:
+        candidates = []
+    fallback_candidates: List[str] = []
+    fallback_candidates.extend(sym.strip() for sym in payload.symbols if sym.strip())
+    if payload.score_universe_fallback:
+        fallback_candidates.extend(
+            sym.strip() for sym in payload.score_universe_fallback if sym.strip()
+        )
+    for sym in fallback_candidates:
+        normalized = sym.upper()
+        if normalized not in {candidate.upper() for candidate in candidates}:
+            candidates.append(sym)
+
+    ranked_raw = _rank_symbols_by_score(
+        ch_client,
+        candidates,
+        list(components),
+        include_metrics=True,
+    )
+    if isinstance(ranked_raw, tuple):
+        ranked_list = ranked_raw[0]
+    else:
+        ranked_list = ranked_raw
+
+    if payload.score_direction == "asc":
+        ranked_list = list(reversed(ranked_list))
+
+    prepared: List[Tuple[str, float, Dict[str, float]]] = []
+    for entry in ranked_list:
+        if len(entry) == 3:
+            sym, score, metrics = entry  # type: ignore[misc]
+            prepared.append((sym, score, metrics))
+        else:
+            sym, score = entry  # type: ignore[misc]
+            prepared.append((sym, score, {}))
+
+    if payload.score_min_score is not None:
+        prepared = [item for item in prepared if item[1] >= payload.score_min_score]
+    if payload.score_max_score is not None:
+        prepared = [item for item in prepared if item[1] <= payload.score_max_score]
+
+    top = prepared[: payload.top_n]
+
+    metric_values: Dict[str, List[float]] = {}
+    for _, _, metrics in top:
+        for key, value in metrics.items():
+            if value is None:
+                continue
+            metric_values.setdefault(key, []).append(float(value))
+
+    normalized_map: Dict[str, Dict[str, float]] = {}
+    for key, values in metric_values.items():
+        if not values:
+            continue
+        min_value = min(values)
+        max_value = max(values)
+        denom = max_value - min_value
+        for sym, _, metrics in top:
+            value = metrics.get(key)
+            if value is None:
+                continue
+            if denom == 0:
+                normalized = 1.0
+            else:
+                normalized = (float(value) - min_value) / denom
+            normalized_map.setdefault(sym, {})[key] = normalized
+
+    ranking_entries: List[RankingEntry] = []
+    for sym, score, metrics in top:
+        pretty = pretty_symbol(sym)
+        normalized_metrics = normalized_map.get(sym, {})
+        ranking_entries.append(
+            RankingEntry(
+                symbol=pretty,
+                score=float(score),
+                features={k: float(v) for k, v in metrics.items()},
+                features_normalized={k: float(v) for k, v in normalized_metrics.items()},
+            )
+        )
+    return ranking_entries
+
+
+def _optimise_with_score(payload: PortfolioOptimizationPayload) -> PortfolioOptimizationResponse:
+    if not payload.score_components:
+        raise HTTPException(400, "Brak komponentów score do optymalizacji")
+
+    ch_client = get_ch()
+
+    def _execute(weights: Mapping[str, float]) -> Tuple[float, PortfolioResp, List[RankingEntry]]:
+        components = _build_components_for_weights(payload.score_components, weights)
+        if not components:
+            raise HTTPException(400, "Brak aktywnych komponentów score")
+
+        auto_config = AutoSelectionConfig(
+            top_n=payload.top_n,
+            components=components,
+            filters=_prepare_filters_with_fallback(payload),
+            weighting=payload.score_weighting,
+            direction=payload.score_direction,
+            min_score=payload.score_min_score,
+            max_score=payload.score_max_score,
+        )
+
+        request = BacktestPortfolioRequest(
+            start=payload.start_date,
+            end=payload.end_date,
+            rebalance=payload.rebalance,
+            initial_capital=payload.initial_cash,
+            fee_pct=payload.fee_pct,
+            threshold_pct=payload.threshold_pct,
+            benchmark=payload.benchmark,
+            auto=auto_config,
+        )
+
+        resp = _run_backtest(request)
+        ranking_entries = _build_ranking_from_components(ch_client, payload, components)
+        score = float(resp.stats.total_return or 0.0)
+        return score, resp, ranking_entries
+
+    initial_weights = {component.feature: float(component.weight) for component in payload.score_components}
+    score, base_resp, ranking_entries = _execute(initial_weights)
+
+    steps: Optional[List[OptimizationStepResponse]] = None
+    best_weights = initial_weights
+    best_score = score
+
+    if payload.enable_llm:
+        optimiser = LocalLLMOptimizer(
+            model_path=payload.llm_model_path or "",
+            temperature=payload.llm_temperature,
+            max_tokens=payload.llm_max_tokens,
+            gpu_layers=payload.llm_gpu_layers,
+        )
+
+        def _evaluate(weights: Dict[str, float]) -> float:
+            result_score, _, _ = _execute(weights)
+            return result_score
+
+        def _summarise(weights: Dict[str, float]) -> List[str]:
+            _, _, ranking_result = _execute(weights)
+            return [entry.symbol for entry in ranking_result[: payload.top_n]]
+
+        request = OptimizationRequest(
+            feature_names=list(initial_weights.keys()),
+            initial_weights=initial_weights,
+            iterations=payload.llm_iterations,
+        )
+        optimisation = optimiser.optimize(request, _evaluate, _summarise)
+        best_weights = optimisation.best_weights
+        best_score, base_resp, ranking_entries = _execute(best_weights)
+        steps = [
+            OptimizationStepResponse(
+                iteration=step.iteration,
+                weights=step.weights,
+                score=step.score,
+                top_symbols=step.top_symbols,
+                llm_response=step.llm_response,
+            )
+            for step in optimisation.steps
+        ]
+
+    simulation = _build_simulation_response_from_portfolio(base_resp)
+    top_symbols = [entry.symbol for entry in ranking_entries[: payload.top_n]]
+
+    return PortfolioOptimizationResponse(
+        top_symbols=top_symbols,
+        ranking=ranking_entries,
+        simulation=simulation,
+        optimisation=steps,
+    )
+
+
 @api_router.post("/portfolio/optimise", response_model=PortfolioOptimizationResponse)
 def optimise_portfolio(payload: PortfolioOptimizationPayload) -> PortfolioOptimizationResponse:
+    if payload.score_components:
+        return _optimise_with_score(payload)
+
     ohlc = _fetch_ohlc_frame(payload.symbols, payload.start_date, payload.end_date)
 
     feature_weights = {feature.name: feature.weight or 0.0 for feature in payload.features}
