@@ -52,6 +52,81 @@ detect_python() {
     return 1
 }
 
+ensure_tar() {
+    if command -v tar >/dev/null 2>&1; then
+        return 0
+    fi
+
+    local busybox_bin=""
+
+    if command -v busybox >/dev/null 2>&1; then
+        busybox_bin="$(command -v busybox)"
+    else
+        busybox_bin="${TARGET_DIR}/bin/busybox"
+        if [ ! -x "${busybox_bin}" ]; then
+            log "Brak tar – pobieranie busybox"
+            local arch="$(uname -m)"
+            local busybox_url=""
+            case "${arch}" in
+                x86_64|amd64)
+                    busybox_url="https://busybox.net/downloads/binaries/1.36.1-defconfig-multiarch/busybox-x86_64"
+                    ;;
+                aarch64|arm64)
+                    busybox_url="https://busybox.net/downloads/binaries/1.36.1-defconfig-multiarch/busybox-aarch64"
+                    ;;
+                *)
+                    echo "Błąd: brak wsparcia dla architektury ${arch} bez narzędzia tar" >&2
+                    return 1
+                    ;;
+            esac
+
+            if command -v curl >/dev/null 2>&1; then
+                if ! curl -fsSL "${busybox_url}" -o "${busybox_bin}"; then
+                    echo "Błąd: nie udało się pobrać busybox" >&2
+                    return 1
+                fi
+            elif command -v wget >/dev/null 2>&1; then
+                if ! wget -q -O "${busybox_bin}" "${busybox_url}"; then
+                    echo "Błąd: nie udało się pobrać busybox" >&2
+                    return 1
+                fi
+            else
+                echo "Błąd: wymagany jest curl lub wget, aby pobrać busybox" >&2
+                return 1
+            fi
+
+            chmod +x "${busybox_bin}" || {
+                echo "Błąd: nie można ustawić uprawnień dla busybox" >&2
+                return 1
+            }
+        fi
+    fi
+
+    if [ -z "${busybox_bin}" ]; then
+        echo "Błąd: nie można przygotować zastępczego tar" >&2
+        return 1
+    fi
+
+    if ! "${busybox_bin}" tar --help >/dev/null 2>&1; then
+        echo "Błąd: busybox nie obsługuje polecenia tar" >&2
+        return 1
+    fi
+
+    local tar_shim="${TARGET_DIR}/bin/tar"
+    printf '#!/usr/bin/env sh\nexec "%s" tar "$@"\n' "${busybox_bin}" >"${tar_shim}" || {
+        echo "Błąd: nie można utworzyć zastępczego tar" >&2
+        return 1
+    }
+    chmod +x "${tar_shim}" || {
+        echo "Błąd: nie można ustawić uprawnień dla tar" >&2
+        return 1
+    }
+
+    PATH="${TARGET_DIR}/bin:${PATH}"
+    export PATH
+    return 0
+}
+
 ensure_uv() {
     if command -v uv >/dev/null 2>&1; then
         UV_BIN="$(command -v uv)"
@@ -64,6 +139,10 @@ ensure_uv() {
     if [ -x "${uv_bin}" ]; then
         UV_BIN="${uv_bin}"
         return 0
+    fi
+
+    if ! ensure_tar; then
+        return 1
     fi
 
     log "Brak lokalnego Python – pobieranie uv"
