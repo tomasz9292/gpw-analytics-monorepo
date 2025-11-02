@@ -7998,7 +7998,13 @@ const CompanySyncPanel = ({ symbol, setSymbol }: CompanySyncPanelProps) => {
     );
 };
 
-export type DashboardView = "analysis" | "score" | "portfolio" | "wallet" | "sync";
+export type DashboardView =
+    | "analysis"
+    | "score"
+    | "portfolio"
+    | "wallet"
+    | "sync"
+    | "llm";
 
 export type AnalyticsDashboardProps = {
     view: DashboardView;
@@ -8081,6 +8087,34 @@ const IconTrophy = ({ className }: { className?: string }) => (
             stroke="currentColor"
             strokeWidth="1.8"
             strokeLinecap="round"
+            strokeLinejoin="round"
+        />
+    </svg>
+);
+
+const IconSparkles = ({ className }: { className?: string }) => (
+    <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        xmlns="http://www.w3.org/2000/svg"
+        className={className}
+    >
+        <path
+            d="M12 3l1.2 3.6L17 8l-3.8 1.4L12 13l-1.2-3.6L7 8l3.8-1.4L12 3z"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            strokeLinejoin="round"
+        />
+        <path
+            d="M5 14l0.9 2.7L8.5 18l-2.6 0.9L5 21l-0.9-2.7L1.5 18l2.6-0.9L5 14z"
+            stroke="currentColor"
+            strokeWidth="1.4"
+            strokeLinejoin="round"
+        />
+        <path
+            d="M19 11l0.9 2.7L22.5 15l-2.6 0.9L19 18l-0.9-2.7L15.5 15l2.6-0.9L19 11z"
+            stroke="currentColor"
+            strokeWidth="1.4"
             strokeLinejoin="round"
         />
     </svg>
@@ -14921,6 +14955,14 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                       description:
                           "Zarządzaj synchronizacją profili spółek oraz notowań historycznych.",
                   } satisfies NavItem,
+                  {
+                      href: view === "llm" ? "#llm" : "/optymalizacja-portfela",
+                      label: "Optymalizacja portfela (LLM)",
+                      key: "llm",
+                      icon: IconSparkles,
+                      description:
+                          "Eksperymentalny moduł optymalizacji portfela napędzany przez modele LLM.",
+                  } satisfies NavItem,
               ]
             : []),
     ];
@@ -17310,363 +17352,6 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                             )}
                         </div>
                     </Card>
-                    <Card
-                        title="Optymalizacja portfela (LLM)"
-                        right={<Chip active>Eksperymentalne</Chip>}
-                    >
-                        <div className="space-y-5 text-sm">
-                            <p className="text-xs text-subtle">
-                                Wybierz listę spółek, zakres dat i cechy rankingu. Opcjonalnie uruchom
-                                lokalny model LLM, aby dobrał najlepsze wagi dla portfela.
-                            </p>
-                            <div className="grid gap-4 md:grid-cols-2">
-                                <label className="flex flex-col gap-2">
-                                    <span className="text-xs uppercase tracking-wide text-muted">
-                                        Symbole (oddzielone przecinkami)
-                                    </span>
-                                    <textarea
-                                        value={llmSymbolsInput}
-                                        onChange={(e) => setLlmSymbolsInput(e.target.value)}
-                                        className={`${inputBaseClasses} min-h-[96px]`}
-                                        placeholder="np. CDR.WA, PKN.WA, PKO.WA"
-                                    />
-                                </label>
-                                <div className="grid gap-3 sm:grid-cols-2">
-                                    <label className="flex flex-col gap-2">
-                                        <span className="text-xs uppercase tracking-wide text-muted">
-                                            Data startu
-                                        </span>
-                                        <input
-                                            type="date"
-                                            value={llmStartDate}
-                                            onChange={(e) => setLlmStartDate(e.target.value)}
-                                            className={inputBaseClasses}
-                                        />
-                                    </label>
-                                    <label className="flex flex-col gap-2">
-                                        <span className="text-xs uppercase tracking-wide text-muted">
-                                            Data końca
-                                        </span>
-                                        <input
-                                            type="date"
-                                            value={llmEndDate}
-                                            onChange={(e) => setLlmEndDate(e.target.value)}
-                                            className={inputBaseClasses}
-                                        />
-                                    </label>
-                                    <label className="flex flex-col gap-2">
-                                        <span className="text-xs uppercase tracking-wide text-muted">
-                                            Liczba spółek w portfelu
-                                        </span>
-                                        <input
-                                            type="number"
-                                            min={1}
-                                            value={llmTopN}
-                                            onChange={(e) => setLlmTopN(Number(e.target.value))}
-                                            className={inputBaseClasses}
-                                        />
-                                    </label>
-                                    <label className="flex flex-col gap-2">
-                                        <span className="text-xs uppercase tracking-wide text-muted">
-                                            Kapitał początkowy
-                                        </span>
-                                        <input
-                                            type="number"
-                                            min={1}
-                                            step={1000}
-                                            value={llmInitialCash}
-                                            onChange={(e) => setLlmInitialCash(Number(e.target.value))}
-                                            className={inputBaseClasses}
-                                        />
-                                    </label>
-                                </div>
-                            </div>
-                            <div className="space-y-3">
-                                <div>
-                                    <div className="text-sm font-medium text-primary">Cechy rankingu</div>
-                                    <div className="text-xs text-subtle">
-                                        {llmSelectedFeatureCount
-                                            ? `Wybrano ${llmSelectedFeatureCount} ${
-                                                  llmSelectedFeatureCount === 1
-                                                      ? "cechę"
-                                                      : llmSelectedFeatureCount <= 4
-                                                      ? "cechy"
-                                                      : "cech"
-                                              }.`
-                                            : "Wybierz co najmniej jedną cechę rankingu."}
-                                    </div>
-                                </div>
-                                <div className="grid gap-3 md:grid-cols-3">
-                                    {LLM_FEATURES.map((feature) => {
-                                        const state = llmFeatureState[feature.name];
-                                        return (
-                                            <div
-                                                key={feature.name}
-                                                className="rounded-2xl border border-soft bg-white/80 px-3 py-3 shadow-sm"
-                                            >
-                                                <label className="flex items-start gap-2 text-sm font-medium text-neutral">
-                                                    <input
-                                                        type="checkbox"
-                                                        checked={state?.enabled ?? false}
-                                                        onChange={(e) =>
-                                                            handleToggleLlmFeature(
-                                                                feature.name,
-                                                                e.target.checked
-                                                            )
-                                                        }
-                                                        className="mt-1 h-4 w-4 rounded border-soft text-primary focus:ring-[rgba(16,163,127,0.35)]"
-                                                    />
-                                                    <span>
-                                                        {feature.label}
-                                                        <span className="mt-1 block text-xs font-normal text-subtle">
-                                                            {feature.description}
-                                                        </span>
-                                                    </span>
-                                                </label>
-                                                <label className="mt-3 flex flex-col gap-1 text-xs uppercase tracking-wide text-muted">
-                                                    Waga startowa
-                                                    <input
-                                                        type="number"
-                                                        min={0}
-                                                        step={0.1}
-                                                        value={state?.weight ?? ""}
-                                                        onChange={(e) =>
-                                                            handleChangeLlmFeatureWeight(
-                                                                feature.name,
-                                                                e.target.value
-                                                            )
-                                                        }
-                                                        disabled={!state?.enabled}
-                                                        className={inputBaseClasses}
-                                                    />
-                                                </label>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            </div>
-                            <div className="space-y-3">
-                                <label className="flex items-start gap-3 rounded-2xl border border-soft bg-soft-surface px-3 py-2 text-sm text-neutral shadow-sm">
-                                    <input
-                                        type="checkbox"
-                                        checked={llmEnable}
-                                        onChange={(e) => setLlmEnable(e.target.checked)}
-                                        className="mt-1 h-4 w-4 rounded border-soft text-primary focus:ring-[rgba(16,163,127,0.35)]"
-                                    />
-                                    <span>
-                                        <span className="font-semibold text-primary">
-                                            Włącz optymalizację LLM
-                                        </span>
-                                        <span className="block text-xs text-subtle">
-                                            Wymaga lokalnego modelu kompatybilnego z llama.cpp.
-                                        </span>
-                                    </span>
-                                </label>
-                                {llmEnable && (
-                                    <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-                                        <label className="flex flex-col gap-2">
-                                            <span className="text-xs uppercase tracking-wide text-muted">
-                                                Ścieżka do modelu
-                                            </span>
-                                            <input
-                                                type="text"
-                                                value={llmModelPath}
-                                                onChange={(e) => setLlmModelPath(e.target.value)}
-                                                className={inputBaseClasses}
-                                                placeholder="/ścieżka/do/modelu.gguf"
-                                            />
-                                        </label>
-                                        <label className="flex flex-col gap-2">
-                                            <span className="text-xs uppercase tracking-wide text-muted">
-                                                Iteracje
-                                            </span>
-                                            <input
-                                                type="number"
-                                                min={1}
-                                                max={20}
-                                                value={llmIterations}
-                                                onChange={(e) => setLlmIterations(Number(e.target.value))}
-                                                className={inputBaseClasses}
-                                            />
-                                        </label>
-                                        <label className="flex flex-col gap-2">
-                                            <span className="text-xs uppercase tracking-wide text-muted">
-                                                Temperatura
-                                            </span>
-                                            <input
-                                                type="number"
-                                                min={0}
-                                                max={1}
-                                                step={0.05}
-                                                value={llmTemperature}
-                                                onChange={(e) => setLlmTemperature(Number(e.target.value))}
-                                                className={inputBaseClasses}
-                                            />
-                                        </label>
-                                        <label className="flex flex-col gap-2">
-                                            <span className="text-xs uppercase tracking-wide text-muted">
-                                                Limit tokenów
-                                            </span>
-                                            <input
-                                                type="number"
-                                                min={16}
-                                                step={16}
-                                                value={llmMaxTokens}
-                                                onChange={(e) => setLlmMaxTokens(Number(e.target.value))}
-                                                className={inputBaseClasses}
-                                            />
-                                        </label>
-                                        <label className="flex flex-col gap-2">
-                                            <span className="text-xs uppercase tracking-wide text-muted">
-                                                Warstwy GPU (opcjonalnie)
-                                            </span>
-                                            <input
-                                                type="number"
-                                                value={llmGpuLayers}
-                                                onChange={(e) => setLlmGpuLayers(e.target.value)}
-                                                className={inputBaseClasses}
-                                                placeholder="np. 35"
-                                            />
-                                        </label>
-                                    </div>
-                                )}
-                            </div>
-                            <div className="flex flex-wrap items-center gap-3">
-                                <button
-                                    type="button"
-                                    onClick={runLlmOptimization}
-                                    disabled={llmLoading}
-                                    className="rounded-xl bg-accent px-4 py-2 font-semibold text-white transition hover:bg-[#27AE60] disabled:opacity-50"
-                                >
-                                    {llmLoading ? "Optymalizowanie…" : "Start"}
-                                </button>
-                                <InfoHint text="Wynik zawiera ranking, top spółki i symulację portfela." />
-                            </div>
-                            {llmError && <div className="text-sm text-negative">Błąd: {llmError}</div>}
-                            {llmResult ? (
-                                <div className="space-y-4">
-                                    <div className="text-xs text-subtle">
-                                        Top {llmResult.top_symbols.length} spółek: {llmResult.top_symbols.join(", ")}
-                                    </div>
-                                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-                                        <div className="rounded-xl border border-soft bg-white/70 px-3 py-2">
-                                            <div className="text-[11px] uppercase tracking-wide text-muted">
-                                                Wartość startowa
-                                            </div>
-                                            <div className="text-sm font-semibold text-neutral">
-                                                {formatNumber(llmResult.simulation.initial_value, 2)}
-                                            </div>
-                                        </div>
-                                        <div className="rounded-xl border border-soft bg-white/70 px-3 py-2">
-                                            <div className="text-[11px] uppercase tracking-wide text-muted">
-                                                Wartość końcowa
-                                            </div>
-                                            <div className="text-sm font-semibold text-neutral">
-                                                {formatNumber(llmResult.simulation.final_value, 2)}
-                                            </div>
-                                        </div>
-                                        <div className="rounded-xl border border-soft bg-white/70 px-3 py-2">
-                                            <div className="text-[11px] uppercase tracking-wide text-muted">
-                                                Łączna stopa zwrotu
-                                            </div>
-                                            <div className="text-sm font-semibold text-primary">
-                                                {formatPercent(llmResult.simulation.return_pct, 2)}
-                                            </div>
-                                        </div>
-                                        <div className="rounded-xl border border-soft bg-white/70 px-3 py-2">
-                                            <div className="text-[11px] uppercase tracking-wide text-muted">
-                                                Max drawdown
-                                            </div>
-                                            <div className="text-sm font-semibold text-negative">
-                                                {typeof llmResult.simulation.max_drawdown_pct === "number"
-                                                    ? formatPercent(llmResult.simulation.max_drawdown_pct, 2)
-                                                    : "—"}
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-                                        <div className="rounded-xl border border-soft bg-white/70 px-3 py-2">
-                                            <div className="text-[11px] uppercase tracking-wide text-muted">
-                                                Roczna stopa zwrotu
-                                            </div>
-                                            <div className="text-sm font-semibold text-primary">
-                                                {typeof llmResult.simulation.annualized_return_pct === "number"
-                                                    ? formatPercent(llmResult.simulation.annualized_return_pct, 2)
-                                                    : "—"}
-                                            </div>
-                                        </div>
-                                        <div className="rounded-xl border border-soft bg-white/70 px-3 py-2">
-                                            <div className="text-[11px] uppercase tracking-wide text-muted">
-                                                Liczba sesji
-                                            </div>
-                                            <div className="text-sm font-semibold text-neutral">
-                                                {llmResult.simulation.daily_values.length}
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <LlmRankingTable entries={llmResult.ranking} />
-                                    {llmResult.optimisation && llmResult.optimisation.length ? (
-                                        <div className="space-y-2">
-                                            <div className="text-sm font-medium text-primary">
-                                                Przebieg optymalizacji
-                                            </div>
-                                            <div className="space-y-2">
-                                                {llmResult.optimisation.map((step) => {
-                                                    const weightEntries = Object.entries(step.weights);
-                                                    const weightLabel = weightEntries
-                                                        .map(([name, value]) => {
-                                                            const label =
-                                                                LLM_FEATURE_LABEL_MAP[name as LlmFeatureName] ?? name;
-                                                            return `${label}: ${formatPercent(value, 0)}`;
-                                                        })
-                                                        .join(", ");
-                                                    return (
-                                                        <div
-                                                            key={step.iteration}
-                                                            className="rounded-xl border border-dashed border-soft bg-white/80 px-3 py-3 text-xs text-neutral"
-                                                        >
-                                                            <div className="flex flex-wrap items-center justify-between gap-2">
-                                                                <span className="font-semibold text-neutral">
-                                                                    Iteracja {step.iteration}
-                                                                </span>
-                                                                <span className="font-semibold text-primary">
-                                                                    Score: {formatNumber(step.score, Math.abs(step.score) >= 10 ? 2 : 4)}
-                                                                </span>
-                                                            </div>
-                                                            <div className="mt-2 text-[11px] text-subtle">
-                                                                Top: {step.top_symbols.length ? step.top_symbols.join(", ") : "—"}
-                                                            </div>
-                                                            {weightEntries.length > 0 && (
-                                                                <div className="mt-2 text-[11px] text-subtle">
-                                                                    Wagi: {weightLabel}
-                                                                </div>
-                                                            )}
-                                                            {step.llm_response && (
-                                                                <details className="mt-2 text-[11px] text-subtle">
-                                                                    <summary className="cursor-pointer text-neutral">
-                                                                        Odpowiedź LLM
-                                                                    </summary>
-                                                                    <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-soft-surface p-2 text-[10px] leading-relaxed text-muted">
-                                                                        {step.llm_response}
-                                                                    </pre>
-                                                                </details>
-                                                            )}
-                                                        </div>
-                                                    );
-                                                })}
-                                            </div>
-                                        </div>
-                                    ) : null}
-                                </div>
-                            ) : (
-                                <div className="text-xs text-subtle">
-                                    {llmLoading
-                                        ? "Łączenie z backendem…"
-                                        : "Uzupełnij dane i kliknij \"Start\", aby pobrać ranking oraz symulację."}
-                                </div>
-                            )}
-                        </div>
-                    </Card>
                     {benchmarkUniverseOptions.length > 0 && (
                         <Card title="Indeksy GPW Benchmark">
                             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -19223,6 +18908,391 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                 )}
                             </Card>
                         </Section>
+                    )}
+                    {view === "llm" && (
+                        isAdmin ? (
+                            <Section
+                                id="llm"
+                                title="Optymalizacja portfela (LLM)"
+                                kicker="Eksperymentalne"
+                                description="Eksploruj ranking spółek oraz symulację portfela z opcjonalną optymalizacją wag przez lokalny model LLM."
+                            >
+                                <Card
+                                    title="Konfiguracja optymalizacji"
+                                    right={<Chip active>Eksperymentalne</Chip>}
+                                >
+                                    <div className="space-y-5 text-sm">
+                                        <p className="text-xs text-subtle">
+                                            Wybierz listę spółek, zakres dat i cechy rankingu. Opcjonalnie uruchom lokalny
+                                            model LLM, aby dobrał najlepsze wagi dla portfela.
+                                        </p>
+                                        <div className="grid gap-4 md:grid-cols-2">
+                                            <label className="flex flex-col gap-2">
+                                                <span className="text-xs uppercase tracking-wide text-muted">
+                                                    Symbole (oddzielone przecinkami)
+                                                </span>
+                                                <textarea
+                                                    value={llmSymbolsInput}
+                                                    onChange={(e) => setLlmSymbolsInput(e.target.value)}
+                                                    className={`${inputBaseClasses} min-h-[96px]`}
+                                                    placeholder="np. CDR.WA, PKN.WA, PKO.WA"
+                                                />
+                                            </label>
+                                            <div className="grid gap-3 sm:grid-cols-2">
+                                                <label className="flex flex-col gap-2">
+                                                    <span className="text-xs uppercase tracking-wide text-muted">
+                                                        Data startu
+                                                    </span>
+                                                    <input
+                                                        type="date"
+                                                        value={llmStartDate}
+                                                        onChange={(e) => setLlmStartDate(e.target.value)}
+                                                        className={inputBaseClasses}
+                                                    />
+                                                </label>
+                                                <label className="flex flex-col gap-2">
+                                                    <span className="text-xs uppercase tracking-wide text-muted">
+                                                        Data końca
+                                                    </span>
+                                                    <input
+                                                        type="date"
+                                                        value={llmEndDate}
+                                                        onChange={(e) => setLlmEndDate(e.target.value)}
+                                                        className={inputBaseClasses}
+                                                    />
+                                                </label>
+                                                <label className="flex flex-col gap-2">
+                                                    <span className="text-xs uppercase tracking-wide text-muted">
+                                                        Liczba spółek w portfelu
+                                                    </span>
+                                                    <input
+                                                        type="number"
+                                                        min={1}
+                                                        value={llmTopN}
+                                                        onChange={(e) => setLlmTopN(Number(e.target.value))}
+                                                        className={inputBaseClasses}
+                                                    />
+                                                </label>
+                                                <label className="flex flex-col gap-2">
+                                                    <span className="text-xs uppercase tracking-wide text-muted">
+                                                        Kapitał początkowy
+                                                    </span>
+                                                    <input
+                                                        type="number"
+                                                        min={1}
+                                                        step={1000}
+                                                        value={llmInitialCash}
+                                                        onChange={(e) => setLlmInitialCash(Number(e.target.value))}
+                                                        className={inputBaseClasses}
+                                                    />
+                                                </label>
+                                            </div>
+                                        </div>
+                                        <div className="space-y-3">
+                                            <div>
+                                                <div className="text-sm font-medium text-primary">Cechy rankingu</div>
+                                                <div className="text-xs text-subtle">
+                                                    {llmSelectedFeatureCount
+                                                        ? `Wybrano ${llmSelectedFeatureCount} ${
+                                                              llmSelectedFeatureCount === 1
+                                                                  ? "cechę"
+                                                                  : llmSelectedFeatureCount <= 4
+                                                                    ? "cechy"
+                                                                    : "cech"
+                                                          }`
+                                                        : "Zaznacz, które sygnały mają być użyte do wyliczenia rankingu."}
+                                                </div>
+                                            </div>
+                                            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                                                {LLM_FEATURES.map((feature) => {
+                                                    const state = llmFeatureState[feature.name];
+                                                    return (
+                                                        <label
+                                                            key={feature.name}
+                                                            className={`rounded-2xl border p-4 transition ${
+                                                                state.enabled
+                                                                    ? "border-[var(--color-primary)] bg-primary/5"
+                                                                    : "border-soft bg-white/60 hover:border-[var(--color-primary)]"
+                                                            }`}
+                                                        >
+                                                            <div className="flex items-center justify-between gap-3">
+                                                                <div>
+                                                                    <div className="text-sm font-semibold text-primary">
+                                                                        {feature.label}
+                                                                    </div>
+                                                                    <p className="mt-1 text-xs text-subtle">
+                                                                        {feature.description}
+                                                                    </p>
+                                                                </div>
+                                                                <input
+                                                                    type="checkbox"
+                                                                    checked={state.enabled}
+                                                                    onChange={(e) =>
+                                                                        handleToggleLlmFeature(
+                                                                            feature.name,
+                                                                            e.target.checked
+                                                                        )
+                                                                    }
+                                                                    className="h-4 w-4"
+                                                                />
+                                                            </div>
+                                                            <div className="mt-3">
+                                                                <label className="flex flex-col gap-1">
+                                                                    <span className="text-[11px] uppercase tracking-wide text-muted">
+                                                                        Waga (0-1)
+                                                                    </span>
+                                                                    <input
+                                                                        type="number"
+                                                                        step={0.1}
+                                                                        min={0}
+                                                                        max={1}
+                                                                        value={state.weight}
+                                                                        onChange={(e) =>
+                                                                            handleChangeLlmFeatureWeight(
+                                                                                feature.name,
+                                                                                e.target.value
+                                                                            )
+                                                                        }
+                                                                        className={inputBaseClasses}
+                                                                    />
+                                                                </label>
+                                                            </div>
+                                                        </label>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                        <div className="rounded-2xl border border-dashed border-soft bg-white/70 p-4 text-xs text-subtle">
+                                            Aby użyć lokalnego modelu LLM (np. llama.cpp), włącz opcję poniżej i uzupełnij konfigurację.
+                                        </div>
+                                        <div className="space-y-3">
+                                            <label className="flex items-center gap-3 text-sm font-medium text-primary">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={llmEnable}
+                                                    onChange={(e) => setLlmEnable(e.target.checked)}
+                                                    className="h-4 w-4"
+                                                />
+                                                <span>Włącz lokalny model LLM</span>
+                                            </label>
+                                            {llmEnable && (
+                                                <div className="grid gap-3 md:grid-cols-2">
+                                                    <label className="flex flex-col gap-2">
+                                                        <span className="text-xs uppercase tracking-wide text-muted">
+                                                            Ścieżka do modelu (GGUF / GGML)
+                                                        </span>
+                                                        <input
+                                                            type="text"
+                                                            value={llmModelPath}
+                                                            onChange={(e) => setLlmModelPath(e.target.value)}
+                                                            className={inputBaseClasses}
+                                                        />
+                                                    </label>
+                                                    <label className="flex flex-col gap-2">
+                                                        <span className="text-xs uppercase tracking-wide text-muted">
+                                                            Liczba iteracji
+                                                        </span>
+                                                        <input
+                                                            type="number"
+                                                            min={1}
+                                                            max={20}
+                                                            value={llmIterations}
+                                                            onChange={(e) => setLlmIterations(Number(e.target.value))}
+                                                            className={inputBaseClasses}
+                                                        />
+                                                    </label>
+                                                    <label className="flex flex-col gap-2">
+                                                        <span className="text-xs uppercase tracking-wide text-muted">
+                                                            Temperatura
+                                                        </span>
+                                                        <input
+                                                            type="number"
+                                                            min={0}
+                                                            max={1}
+                                                            step={0.1}
+                                                            value={llmTemperature}
+                                                            onChange={(e) => setLlmTemperature(Number(e.target.value))}
+                                                            className={inputBaseClasses}
+                                                        />
+                                                    </label>
+                                                    <label className="flex flex-col gap-2">
+                                                        <span className="text-xs uppercase tracking-wide text-muted">
+                                                            Limit tokenów
+                                                        </span>
+                                                        <input
+                                                            type="number"
+                                                            min={16}
+                                                            max={1024}
+                                                            step={16}
+                                                            value={llmMaxTokens}
+                                                            onChange={(e) => setLlmMaxTokens(Number(e.target.value))}
+                                                            className={inputBaseClasses}
+                                                        />
+                                                    </label>
+                                                    <label className="flex flex-col gap-2">
+                                                        <span className="text-xs uppercase tracking-wide text-muted">
+                                                            Warstwy GPU (opcjonalnie)
+                                                        </span>
+                                                        <input
+                                                            type="number"
+                                                            min={0}
+                                                            value={llmGpuLayers}
+                                                            onChange={(e) => setLlmGpuLayers(e.target.value)}
+                                                            className={inputBaseClasses}
+                                                        />
+                                                    </label>
+                                                </div>
+                                            )}
+                                        </div>
+                                        <div className="flex flex-wrap items-center gap-3">
+                                            <button
+                                                type="button"
+                                                onClick={runLlmOptimization}
+                                                disabled={llmLoading}
+                                                className="rounded-xl bg-accent px-4 py-2 font-semibold text-white transition hover:bg-[#27AE60] disabled:opacity-50"
+                                            >
+                                                {llmLoading ? "Optymalizowanie…" : "Start"}
+                                            </button>
+                                            <InfoHint text="Wynik zawiera ranking, top spółki i symulację portfela." />
+                                        </div>
+                                        {llmError && <div className="text-sm text-negative">Błąd: {llmError}</div>}
+                                        {llmResult ? (
+                                            <div className="space-y-4">
+                                                <div className="text-xs text-subtle">
+                                                    Top {llmResult.top_symbols.length} spółek: {llmResult.top_symbols.join(", ")}
+                                                </div>
+                                                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                                                    <div className="rounded-xl border border-soft bg-white/70 px-3 py-2">
+                                                        <div className="text-[11px] uppercase tracking-wide text-muted">
+                                                            Wartość startowa
+                                                        </div>
+                                                        <div className="text-sm font-semibold text-neutral">
+                                                            {formatNumber(llmResult.simulation.initial_value, 2)}
+                                                        </div>
+                                                    </div>
+                                                    <div className="rounded-xl border border-soft bg-white/70 px-3 py-2">
+                                                        <div className="text-[11px] uppercase tracking-wide text-muted">
+                                                            Wartość końcowa
+                                                        </div>
+                                                        <div className="text-sm font-semibold text-neutral">
+                                                            {formatNumber(llmResult.simulation.final_value, 2)}
+                                                        </div>
+                                                    </div>
+                                                    <div className="rounded-xl border border-soft bg-white/70 px-3 py-2">
+                                                        <div className="text-[11px] uppercase tracking-wide text-muted">
+                                                            Łączna stopa zwrotu
+                                                        </div>
+                                                        <div className="text-sm font-semibold text-primary">
+                                                            {formatPercent(llmResult.simulation.return_pct, 2)}
+                                                        </div>
+                                                    </div>
+                                                    <div className="rounded-xl border border-soft bg-white/70 px-3 py-2">
+                                                        <div className="text-[11px] uppercase tracking-wide text-muted">
+                                                            Max drawdown
+                                                        </div>
+                                                        <div className="text-sm font-semibold text-negative">
+                                                            {typeof llmResult.simulation.max_drawdown_pct === "number"
+                                                                ? formatPercent(llmResult.simulation.max_drawdown_pct, 2)
+                                                                : "—"}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                                                    <div className="rounded-xl border border-soft bg-white/70 px-3 py-2">
+                                                        <div className="text-[11px] uppercase tracking-wide text-muted">
+                                                            Roczna stopa zwrotu
+                                                        </div>
+                                                        <div className="text-sm font-semibold text-primary">
+                                                            {typeof llmResult.simulation.annualized_return_pct === "number"
+                                                                ? formatPercent(llmResult.simulation.annualized_return_pct, 2)
+                                                                : "—"}
+                                                        </div>
+                                                    </div>
+                                                    <div className="rounded-xl border border-soft bg-white/70 px-3 py-2">
+                                                        <div className="text-[11px] uppercase tracking-wide text-muted">
+                                                            Liczba sesji
+                                                        </div>
+                                                        <div className="text-sm font-semibold text-neutral">
+                                                            {llmResult.simulation.daily_values.length}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <LlmRankingTable entries={llmResult.ranking} />
+                                                {llmResult.optimisation && llmResult.optimisation.length ? (
+                                                    <div className="space-y-2">
+                                                        <div className="text-sm font-medium text-primary">Przebieg optymalizacji</div>
+                                                        <div className="space-y-2">
+                                                            {llmResult.optimisation.map((step) => {
+                                                                const weightEntries = Object.entries(step.weights);
+                                                                const weightLabel = weightEntries
+                                                                    .map(([name, value]) => {
+                                                                        const label = LLM_FEATURE_LABEL_MAP[name as LlmFeatureName] ?? name;
+                                                                        return `${label}: ${formatPercent(value, 0)}`;
+                                                                    })
+                                                                    .join(", ");
+                                                                return (
+                                                                    <div
+                                                                        key={step.iteration}
+                                                                        className="rounded-xl border border-dashed border-soft bg-white/80 px-3 py-3 text-xs text-neutral"
+                                                                    >
+                                                                        <div className="flex flex-wrap items-center justify-between gap-2">
+                                                                            <span className="font-semibold text-neutral">
+                                                                                Iteracja {step.iteration}
+                                                                            </span>
+                                                                            <span className="font-semibold text-primary">
+                                                                                Score: {formatNumber(step.score, Math.abs(step.score) >= 10 ? 2 : 4)}
+                                                                            </span>
+                                                                        </div>
+                                                                        <div className="mt-2 text-[11px] text-subtle">
+                                                                            Top: {step.top_symbols.length ? step.top_symbols.join(", ") : "—"}
+                                                                        </div>
+                                                                        {weightEntries.length > 0 && (
+                                                                            <div className="mt-2 text-[11px] text-subtle">Wagi: {weightLabel}</div>
+                                                                        )}
+                                                                        {step.llm_response && (
+                                                                            <details className="mt-2 text-[11px] text-subtle">
+                                                                                <summary className="cursor-pointer text-neutral">Odpowiedź LLM</summary>
+                                                                                <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-soft-surface p-2 text-[10px] leading-relaxed text-muted">
+                                                                                    {step.llm_response}
+                                                                                </pre>
+                                                                            </details>
+                                                                        )}
+                                                                    </div>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                    </div>
+                                                ) : null}
+                                            </div>
+                                        ) : (
+                                            <div className="text-xs text-subtle">
+                                                {llmLoading
+                                                    ? "Łączenie z backendem…"
+                                                    : "Uzupełnij dane i kliknij \"Start\", aby pobrać ranking oraz symulację."}
+                                            </div>
+                                        )}
+                                    </div>
+                                </Card>
+                            </Section>
+                        ) : (
+                            <Section
+                                id="llm"
+                                kicker="Eksperymentalne"
+                                title="Optymalizacja portfela (LLM)"
+                                description="Moduł optymalizacji jest dostępny wyłącznie dla administratorów."
+                            >
+                                <div className="rounded-2xl border border-dashed border-soft bg-white/70 p-6 text-sm text-muted">
+                                    {isAuthenticated ? (
+                                        <p>
+                                            Twoje konto nie ma uprawnień administratora. Skontaktuj się z osobą
+                                            zarządzającą dostępem, aby uruchomić optymalizację portfela.
+                                        </p>
+                                    ) : (
+                                        <p>Zaloguj się na konto administratora, aby skorzystać z modułu optymalizacji portfela.</p>
+                                    )}
+                                </div>
+                            </Section>
+                        )
                     )}
 
                 <footer className="pt-6 text-center text-sm text-subtle">
