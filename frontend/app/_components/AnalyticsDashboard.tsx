@@ -12906,12 +12906,15 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
             setLlmFeatureState((prev) => {
                 const current = prev[name];
                 const nextState: LlmFeatureState[string] = {
-                    enabled: current?.enabled ?? true,
-                    weight: current?.weight ?? "1",
-                    transform: current?.transform ?? "raw",
                     ...current,
                     ...updates,
                 };
+                if (nextState.enabled === undefined) {
+                    nextState.enabled = true;
+                }
+                if (nextState.weight === undefined) {
+                    nextState.weight = "1";
+                }
                 if ("min" in updates && updates.min === undefined) {
                     delete nextState.min;
                 }
