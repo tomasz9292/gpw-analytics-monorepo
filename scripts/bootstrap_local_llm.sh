@@ -65,14 +65,22 @@ ensure_tar() {
         busybox_bin="${TARGET_DIR}/bin/busybox"
         if [ ! -x "${busybox_bin}" ]; then
             log "Brak tar – pobieranie busybox"
+
             local arch="$(uname -m)"
-            local busybox_url=""
+            local -a busybox_urls
             case "${arch}" in
                 x86_64|amd64)
-                    busybox_url="https://busybox.net/downloads/binaries/1.36.1-defconfig-multiarch/busybox-x86_64"
+                    busybox_urls=(
+                        "https://busybox.net/downloads/binaries/1.36.1-defconfig-multiarch/busybox-x86_64"
+                        "http://busybox.net/downloads/binaries/1.36.1-defconfig-multiarch/busybox-x86_64"
+                        "https://frippery.org/files/busybox/busybox-x86_64"
+                    )
                     ;;
                 aarch64|arm64)
-                    busybox_url="https://busybox.net/downloads/binaries/1.36.1-defconfig-multiarch/busybox-aarch64"
+                    busybox_urls=(
+                        "https://busybox.net/downloads/binaries/1.36.1-defconfig-multiarch/busybox-aarch64"
+                        "http://busybox.net/downloads/binaries/1.36.1-defconfig-multiarch/busybox-aarch64"
+                    )
                     ;;
                 *)
                     echo "Błąd: brak wsparcia dla architektury ${arch} bez narzędzia tar" >&2
@@ -80,18 +88,26 @@ ensure_tar() {
                     ;;
             esac
 
-            if command -v curl >/dev/null 2>&1; then
-                if ! curl -fsSL "${busybox_url}" -o "${busybox_bin}"; then
-                    echo "Błąd: nie udało się pobrać busybox" >&2
+            local download_succeeded=0
+            for busybox_url in "${busybox_urls[@]}"; do
+                if command -v curl >/dev/null 2>&1; then
+                    if curl -fsSL "${busybox_url}" -o "${busybox_bin}"; then
+                        download_succeeded=1
+                        break
+                    fi
+                elif command -v wget >/dev/null 2>&1; then
+                    if wget -q -O "${busybox_bin}" "${busybox_url}"; then
+                        download_succeeded=1
+                        break
+                    fi
+                else
+                    echo "Błąd: wymagany jest curl lub wget, aby pobrać busybox" >&2
                     return 1
                 fi
-            elif command -v wget >/dev/null 2>&1; then
-                if ! wget -q -O "${busybox_bin}" "${busybox_url}"; then
-                    echo "Błąd: nie udało się pobrać busybox" >&2
-                    return 1
-                fi
-            else
-                echo "Błąd: wymagany jest curl lub wget, aby pobrać busybox" >&2
+            done
+
+            if [ "${download_succeeded}" -ne 1 ]; then
+                echo "Błąd: nie udało się pobrać busybox" >&2
                 return 1
             fi
 
