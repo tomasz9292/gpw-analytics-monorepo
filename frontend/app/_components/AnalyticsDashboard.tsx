@@ -18990,17 +18990,17 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                         </div>
                                         <div className="space-y-3">
                                             <div>
-                                                <div className="text-sm font-medium text-primary">Cechy rankingu</div>
+                                                <div className="text-sm font-medium text-primary">Ranking score</div>
                                                 <div className="text-xs text-subtle">
                                                     {llmSelectedFeatureCount
                                                         ? `Wybrano ${llmSelectedFeatureCount} ${
                                                               llmSelectedFeatureCount === 1
-                                                                  ? "cechę"
+                                                                  ? "składnik"
                                                                   : llmSelectedFeatureCount <= 4
-                                                                    ? "cechy"
-                                                                    : "cech"
-                                                          }`
-                                                        : "Zaznacz, które sygnały mają być użyte do wyliczenia rankingu."}
+                                                                    ? "składniki"
+                                                                    : "składników"
+                                                          } ranking score`
+                                                        : "Ranking score tworzy ranking, który następnie testujemy, aby dobrać najbardziej optymalne parametry."}
                                                 </div>
                                             </div>
                                             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
