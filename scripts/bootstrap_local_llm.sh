@@ -1,7 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-TARGET_DIR="${HOME}/gpw-llm"
+DEFAULT_HOME="${LLM_BOOTSTRAP_HOME:-${HOME:-}}"
+
+if [ -z "${DEFAULT_HOME}" ]; then
+    DEFAULT_HOME="${XDG_DATA_HOME:-}"
+fi
+
+if [ -z "${DEFAULT_HOME}" ]; then
+    DEFAULT_HOME="/tmp"
+fi
+
+TARGET_DIR="${LLM_BOOTSTRAP_TARGET_DIR:-${DEFAULT_HOME}/gpw-llm}"
 VENV_DIR="${TARGET_DIR}/venv"
 MODEL_DIR="${TARGET_DIR}/models"
 MODEL_NAME="zephyr-7b-beta.Q4_K_M.gguf"
