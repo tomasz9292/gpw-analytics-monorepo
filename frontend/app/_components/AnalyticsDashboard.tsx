@@ -69,6 +69,46 @@ const CUSTOM_INDICES_STORAGE_KEY = "gpw-custom-indices";
 const SAVED_PORTFOLIOS_STORAGE_KEY = "gpw_saved_portfolios_v1";
 const PENDING_PORTFOLIO_STORAGE_KEY = "gpw_saved_portfolio_pending";
 const MAX_UNIVERSE_FALLBACK_SYMBOLS = 500;
+const DEFAULT_LLM_SYMBOLS = "CDR.WA, PKN.WA, PKO.WA, PZU.WA, KGH.WA";
+
+const LLM_FEATURES = [
+    {
+        name: "momentum",
+        label: "Momentum",
+        description: "Zwrot całkowity pomiędzy początkiem i końcem wybranego okresu.",
+    },
+    {
+        name: "volatility",
+        label: "Zmienność",
+        description: "Odwrotność odchylenia standardowego dziennych stóp zwrotu (mniejsze = lepsze).",
+    },
+    {
+        name: "average_volume",
+        label: "Średni wolumen",
+        description: "Średni dzienny wolumen obrotu – premiuje płynniejsze spółki.",
+    },
+] as const;
+
+type LlmFeatureName = (typeof LLM_FEATURES)[number]["name"];
+
+type LlmFeatureState = Record<LlmFeatureName, { enabled: boolean; weight: string }>;
+
+const createDefaultLlmFeatureState = (): LlmFeatureState =>
+    LLM_FEATURES.reduce(
+        (acc, feature) => ({
+            ...acc,
+            [feature.name]: { enabled: true, weight: "1" },
+        }),
+        {} as LlmFeatureState
+    );
+
+const LLM_FEATURE_LABEL_MAP: Record<LlmFeatureName, string> = LLM_FEATURES.reduce(
+    (acc, feature) => ({
+        ...acc,
+        [feature.name]: feature.label,
+    }),
+    {} as Record<LlmFeatureName, string>
+);
 
 const NETWORK_ERROR_PATTERNS = [
     "failed to fetch",
@@ -2125,6 +2165,62 @@ type ScorePortfolioOptions = BacktestOptions & {
     maxScore?: number | null;
 };
 
+type PortfolioOptimisationFeatureInput = {
+    name: string;
+    weight?: number;
+};
+
+type PortfolioOptimisationRequest = {
+    symbols: string[];
+    start_date: string;
+    end_date: string;
+    top_n: number;
+    initial_cash: number;
+    features: PortfolioOptimisationFeatureInput[];
+    enable_llm: boolean;
+    llm_model_path?: string;
+    llm_iterations?: number;
+    llm_temperature?: number;
+    llm_max_tokens?: number;
+    llm_gpu_layers?: number;
+};
+
+type PortfolioOptimisationRankingEntry = {
+    symbol: string;
+    score: number;
+    features: Record<string, number>;
+    features_normalized: Record<string, number>;
+};
+
+type PortfolioOptimisationStep = {
+    iteration: number;
+    weights: Record<string, number>;
+    score: number;
+    top_symbols: string[];
+    llm_response?: string | null;
+};
+
+type PortfolioOptimisationSimulationPoint = {
+    date: string;
+    value: number;
+};
+
+type PortfolioOptimisationSimulation = {
+    initial_value: number;
+    final_value: number;
+    return_pct: number;
+    annualized_return_pct: number | null;
+    max_drawdown_pct: number | null;
+    daily_values: PortfolioOptimisationSimulationPoint[];
+};
+
+type PortfolioOptimisationResponse = {
+    top_symbols: string[];
+    ranking: PortfolioOptimisationRankingEntry[];
+    simulation: PortfolioOptimisationSimulation;
+    optimisation?: PortfolioOptimisationStep[] | null;
+};
+
 type ScoreBuilderRule = {
     id: string;
     metric: string;
@@ -3257,6 +3353,47 @@ async function backtestPortfolioByScore(
 
     const json = await response.json();
     return normalizePortfolioResponse(json);
+}
+
+async function optimisePortfolio(
+    request: PortfolioOptimisationRequest
+): Promise<PortfolioOptimisationResponse> {
+    const featuresPayload = request.features.map((feature) =>
+        removeUndefined({ name: feature.name, weight: feature.weight })
+    );
+
+    const payload = removeUndefined({
+        symbols: request.symbols,
+        start_date: request.start_date,
+        end_date: request.end_date,
+        top_n: request.top_n,
+        initial_cash: request.initial_cash,
+        features: featuresPayload,
+        enable_llm: request.enable_llm,
+        llm_model_path: request.llm_model_path,
+        llm_iterations: request.llm_iterations,
+        llm_temperature: request.llm_temperature,
+        llm_max_tokens: request.llm_max_tokens,
+        llm_gpu_layers: request.llm_gpu_layers,
+    });
+
+    const response = await fetch(`/api/portfolio/optimise`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+        let message = "";
+        try {
+            message = await response.text();
+        } catch {
+            // ignore – fallback to generic error below
+        }
+        throw new Error(message || `API /portfolio/optimise ${response.status}`);
+    }
+
+    return (await response.json()) as PortfolioOptimisationResponse;
 }
 
 
@@ -9466,6 +9603,76 @@ function ScoreRankingTable({ rows }: { rows: ScorePreviewRow[] }) {
     );
 }
 
+function LlmRankingTable({ entries }: { entries: PortfolioOptimisationRankingEntry[] }) {
+    if (!entries.length) return null;
+
+    const featureNames = Array.from(
+        new Set(entries.flatMap((entry) => Object.keys(entry.features ?? {})))
+    ).sort((a, b) => {
+        const orderA = LLM_FEATURES.findIndex((feature) => feature.name === a);
+        const orderB = LLM_FEATURES.findIndex((feature) => feature.name === b);
+        const safeA = orderA === -1 ? Number.MAX_SAFE_INTEGER : orderA;
+        const safeB = orderB === -1 ? Number.MAX_SAFE_INTEGER : orderB;
+        return safeA - safeB;
+    });
+
+    return (
+        <div className="overflow-x-auto">
+            <table className="min-w-full border-separate border-spacing-y-2 text-sm">
+                <thead>
+                    <tr className="text-left text-[11px] uppercase tracking-wide text-muted">
+                        <th className="px-3 py-2">#</th>
+                        <th className="px-3 py-2">Symbol</th>
+                        <th className="px-3 py-2">Score</th>
+                        {featureNames.map((name) => (
+                            <th key={name} className="px-3 py-2">
+                                {LLM_FEATURE_LABEL_MAP[name as LlmFeatureName] ?? name}
+                            </th>
+                        ))}
+                    </tr>
+                </thead>
+                <tbody>
+                    {entries.map((entry, index) => {
+                        const scoreDigits = Math.abs(entry.score) >= 10 ? 2 : 4;
+                        return (
+                            <tr
+                                key={entry.symbol}
+                                className="rounded-xl border border-soft bg-white/80 text-sm text-neutral shadow-sm"
+                            >
+                                <td className="px-3 py-2 text-xs text-subtle">{index + 1}</td>
+                                <td className="px-3 py-2 font-semibold text-neutral">{entry.symbol}</td>
+                                <td className="px-3 py-2 font-semibold text-primary">
+                                    {formatNumber(entry.score, scoreDigits)}
+                                </td>
+                                {featureNames.map((name) => {
+                                    const rawValue = entry.features?.[name];
+                                    const normalizedValue = entry.features_normalized?.[name];
+                                    const normalizedText =
+                                        typeof normalizedValue === "number"
+                                            ? formatPercent(normalizedValue, 0)
+                                            : "—";
+                                    let rawText = "—";
+                                    if (typeof rawValue === "number") {
+                                        const magnitude = Math.abs(rawValue);
+                                        const digits = magnitude >= 1000 ? 0 : magnitude >= 10 ? 2 : 3;
+                                        rawText = formatNumber(rawValue, digits);
+                                    }
+                                    return (
+                                        <td key={name} className="px-3 py-2 text-xs">
+                                            <div className="font-medium text-neutral">{normalizedText}</div>
+                                            <div className="text-[11px] text-subtle">{rawText}</div>
+                                        </td>
+                                    );
+                                })}
+                            </tr>
+                        );
+                    })}
+                </tbody>
+            </table>
+        </div>
+    );
+}
+
 function ScoreMissingTable({ items }: { items: ScorePreviewMissingRow[] }) {
     if (!items.length) return null;
 
@@ -12600,6 +12807,52 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
     const [scoreTemplateFeedback, setScoreTemplateFeedback] = useState<
         { type: "success" | "error"; message: string } | null
     >(null);
+    const [llmSymbolsInput, setLlmSymbolsInput] = useState(DEFAULT_LLM_SYMBOLS);
+    const [llmStartDate, setLlmStartDate] = useState(() => {
+        const start = new Date();
+        start.setFullYear(start.getFullYear() - 3);
+        return start.toISOString().slice(0, 10);
+    });
+    const [llmEndDate, setLlmEndDate] = useState(() => new Date().toISOString().slice(0, 10));
+    const [llmTopN, setLlmTopN] = useState(5);
+    const [llmInitialCash, setLlmInitialCash] = useState(100_000);
+    const [llmFeatureState, setLlmFeatureState] = useState<LlmFeatureState>(() =>
+        createDefaultLlmFeatureState()
+    );
+    const [llmEnable, setLlmEnable] = useState(false);
+    const [llmModelPath, setLlmModelPath] = useState("");
+    const [llmIterations, setLlmIterations] = useState(3);
+    const [llmTemperature, setLlmTemperature] = useState(0.1);
+    const [llmMaxTokens, setLlmMaxTokens] = useState(256);
+    const [llmGpuLayers, setLlmGpuLayers] = useState("");
+    const [llmLoading, setLlmLoading] = useState(false);
+    const [llmError, setLlmError] = useState("");
+    const [llmResult, setLlmResult] = useState<PortfolioOptimisationResponse | null>(null);
+    const llmSelectedFeatureCount = useMemo(
+        () => Object.values(llmFeatureState).filter((item) => item.enabled).length,
+        [llmFeatureState]
+    );
+    const handleToggleLlmFeature = useCallback((name: LlmFeatureName, enabled: boolean) => {
+        setLlmFeatureState((prev) => ({
+            ...prev,
+            [name]: {
+                enabled,
+                weight: prev[name]?.weight ?? "1",
+            },
+        }));
+    }, []);
+    const handleChangeLlmFeatureWeight = useCallback(
+        (name: LlmFeatureName, value: string) => {
+            setLlmFeatureState((prev) => ({
+                ...prev,
+                [name]: {
+                    enabled: prev[name]?.enabled ?? true,
+                    weight: value.replace(/,/g, "."),
+                },
+            }));
+        },
+        []
+    );
     const templatesHydratedRef = useRef(false);
 
     useEffect(() => {
@@ -15315,6 +15568,112 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
         }
     };
 
+    const runLlmOptimization = async () => {
+        try {
+            setLlmError("");
+            setLlmLoading(true);
+            setLlmResult(null);
+
+            const symbols = llmSymbolsInput
+                .split(/[\s,;]+/)
+                .map((sym) => sym.trim().toUpperCase())
+                .filter(Boolean);
+            const uniqueSymbols = Array.from(new Set(symbols));
+            if (!uniqueSymbols.length) {
+                throw new Error("Podaj co najmniej jeden symbol spółki.");
+            }
+
+            const start = llmStartDate.trim();
+            const end = llmEndDate.trim();
+            if (!start || !end) {
+                throw new Error("Ustaw datę startu i końca okna analizy.");
+            }
+            if (end < start) {
+                throw new Error("Data końca musi być późniejsza niż data startu.");
+            }
+
+            const selectedFeatures = Object.entries(llmFeatureState).filter(
+                ([, state]) => state.enabled
+            );
+            if (!selectedFeatures.length) {
+                throw new Error("Wybierz co najmniej jedną cechę rankingu.");
+            }
+
+            const featurePayload: PortfolioOptimisationFeatureInput[] = selectedFeatures.map(
+                ([name, state]) => {
+                    const normalized = state.weight.trim();
+                    const numeric = normalized.length ? Number(normalized) : NaN;
+                    return Number.isFinite(numeric) && numeric > 0
+                        ? { name, weight: numeric }
+                        : { name };
+                }
+            );
+
+            if (!Number.isFinite(llmInitialCash) || llmInitialCash <= 0) {
+                throw new Error("Kapitał początkowy musi być dodatni.");
+            }
+
+            if (!Number.isFinite(llmTopN) || llmTopN < 1) {
+                throw new Error("Liczba spółek w portfelu musi być większa od zera.");
+            }
+
+            const normalizedTopN = Math.max(1, Math.floor(llmTopN));
+            const topN = Math.min(normalizedTopN, uniqueSymbols.length);
+
+            let gpuLayers: number | undefined;
+            if (llmGpuLayers.trim()) {
+                const parsedLayers = Number(llmGpuLayers.trim());
+                if (!Number.isFinite(parsedLayers)) {
+                    throw new Error("Warstwy GPU muszą być liczbą całkowitą.");
+                }
+                gpuLayers = Math.trunc(parsedLayers);
+            }
+
+            let safeIterations: number | undefined;
+            let safeTemperature: number | undefined;
+            let safeMaxTokens: number | undefined;
+            if (llmEnable) {
+                if (!llmModelPath.trim()) {
+                    throw new Error("Podaj ścieżkę do lokalnego modelu LLM.");
+                }
+                if (!Number.isFinite(llmIterations) || llmIterations < 1) {
+                    throw new Error("Liczba iteracji LLM musi być dodatnia.");
+                }
+                if (!Number.isFinite(llmTemperature) || llmTemperature < 0 || llmTemperature > 1) {
+                    throw new Error("Temperatura próbkowania powinna mieścić się w zakresie 0–1.");
+                }
+                if (!Number.isFinite(llmMaxTokens) || llmMaxTokens < 16) {
+                    throw new Error("Limit tokenów musi być większy lub równy 16.");
+                }
+                safeIterations = Math.floor(llmIterations);
+                safeTemperature = Math.min(Math.max(llmTemperature, 0), 1);
+                safeMaxTokens = Math.floor(llmMaxTokens);
+            }
+
+            const response = await optimisePortfolio({
+                symbols: uniqueSymbols,
+                start_date: start,
+                end_date: end,
+                top_n: topN,
+                initial_cash: llmInitialCash,
+                features: featurePayload,
+                enable_llm: llmEnable,
+                llm_model_path: llmEnable ? llmModelPath.trim() : undefined,
+                llm_iterations: safeIterations,
+                llm_temperature: safeTemperature,
+                llm_max_tokens: safeMaxTokens,
+                llm_gpu_layers: llmEnable ? gpuLayers : undefined,
+            });
+
+            setLlmResult(response);
+        } catch (e: unknown) {
+            const message = e instanceof Error ? e.message : String(e);
+            setLlmError(message);
+        } finally {
+            setLlmLoading(false);
+        }
+    };
+
     const runPortfolioSimulation = async () => {
         try {
             setPfErr("");
@@ -16947,6 +17306,363 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                     {scoreLoading
                                         ? "Łączenie z backendem…"
                                         : "Zdefiniuj zasady i kliknij \"Przelicz ranking\", aby pobrać wyniki."}
+                                </div>
+                            )}
+                        </div>
+                    </Card>
+                    <Card
+                        title="Optymalizacja portfela (LLM)"
+                        right={<Chip active>Eksperymentalne</Chip>}
+                    >
+                        <div className="space-y-5 text-sm">
+                            <p className="text-xs text-subtle">
+                                Wybierz listę spółek, zakres dat i cechy rankingu. Opcjonalnie uruchom
+                                lokalny model LLM, aby dobrał najlepsze wagi dla portfela.
+                            </p>
+                            <div className="grid gap-4 md:grid-cols-2">
+                                <label className="flex flex-col gap-2">
+                                    <span className="text-xs uppercase tracking-wide text-muted">
+                                        Symbole (oddzielone przecinkami)
+                                    </span>
+                                    <textarea
+                                        value={llmSymbolsInput}
+                                        onChange={(e) => setLlmSymbolsInput(e.target.value)}
+                                        className={`${inputBaseClasses} min-h-[96px]`}
+                                        placeholder="np. CDR.WA, PKN.WA, PKO.WA"
+                                    />
+                                </label>
+                                <div className="grid gap-3 sm:grid-cols-2">
+                                    <label className="flex flex-col gap-2">
+                                        <span className="text-xs uppercase tracking-wide text-muted">
+                                            Data startu
+                                        </span>
+                                        <input
+                                            type="date"
+                                            value={llmStartDate}
+                                            onChange={(e) => setLlmStartDate(e.target.value)}
+                                            className={inputBaseClasses}
+                                        />
+                                    </label>
+                                    <label className="flex flex-col gap-2">
+                                        <span className="text-xs uppercase tracking-wide text-muted">
+                                            Data końca
+                                        </span>
+                                        <input
+                                            type="date"
+                                            value={llmEndDate}
+                                            onChange={(e) => setLlmEndDate(e.target.value)}
+                                            className={inputBaseClasses}
+                                        />
+                                    </label>
+                                    <label className="flex flex-col gap-2">
+                                        <span className="text-xs uppercase tracking-wide text-muted">
+                                            Liczba spółek w portfelu
+                                        </span>
+                                        <input
+                                            type="number"
+                                            min={1}
+                                            value={llmTopN}
+                                            onChange={(e) => setLlmTopN(Number(e.target.value))}
+                                            className={inputBaseClasses}
+                                        />
+                                    </label>
+                                    <label className="flex flex-col gap-2">
+                                        <span className="text-xs uppercase tracking-wide text-muted">
+                                            Kapitał początkowy
+                                        </span>
+                                        <input
+                                            type="number"
+                                            min={1}
+                                            step={1000}
+                                            value={llmInitialCash}
+                                            onChange={(e) => setLlmInitialCash(Number(e.target.value))}
+                                            className={inputBaseClasses}
+                                        />
+                                    </label>
+                                </div>
+                            </div>
+                            <div className="space-y-3">
+                                <div>
+                                    <div className="text-sm font-medium text-primary">Cechy rankingu</div>
+                                    <div className="text-xs text-subtle">
+                                        {llmSelectedFeatureCount
+                                            ? `Wybrano ${llmSelectedFeatureCount} ${
+                                                  llmSelectedFeatureCount === 1
+                                                      ? "cechę"
+                                                      : llmSelectedFeatureCount <= 4
+                                                      ? "cechy"
+                                                      : "cech"
+                                              }.`
+                                            : "Wybierz co najmniej jedną cechę rankingu."}
+                                    </div>
+                                </div>
+                                <div className="grid gap-3 md:grid-cols-3">
+                                    {LLM_FEATURES.map((feature) => {
+                                        const state = llmFeatureState[feature.name];
+                                        return (
+                                            <div
+                                                key={feature.name}
+                                                className="rounded-2xl border border-soft bg-white/80 px-3 py-3 shadow-sm"
+                                            >
+                                                <label className="flex items-start gap-2 text-sm font-medium text-neutral">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={state?.enabled ?? false}
+                                                        onChange={(e) =>
+                                                            handleToggleLlmFeature(
+                                                                feature.name,
+                                                                e.target.checked
+                                                            )
+                                                        }
+                                                        className="mt-1 h-4 w-4 rounded border-soft text-primary focus:ring-[rgba(16,163,127,0.35)]"
+                                                    />
+                                                    <span>
+                                                        {feature.label}
+                                                        <span className="mt-1 block text-xs font-normal text-subtle">
+                                                            {feature.description}
+                                                        </span>
+                                                    </span>
+                                                </label>
+                                                <label className="mt-3 flex flex-col gap-1 text-xs uppercase tracking-wide text-muted">
+                                                    Waga startowa
+                                                    <input
+                                                        type="number"
+                                                        min={0}
+                                                        step={0.1}
+                                                        value={state?.weight ?? ""}
+                                                        onChange={(e) =>
+                                                            handleChangeLlmFeatureWeight(
+                                                                feature.name,
+                                                                e.target.value
+                                                            )
+                                                        }
+                                                        disabled={!state?.enabled}
+                                                        className={inputBaseClasses}
+                                                    />
+                                                </label>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                            <div className="space-y-3">
+                                <label className="flex items-start gap-3 rounded-2xl border border-soft bg-soft-surface px-3 py-2 text-sm text-neutral shadow-sm">
+                                    <input
+                                        type="checkbox"
+                                        checked={llmEnable}
+                                        onChange={(e) => setLlmEnable(e.target.checked)}
+                                        className="mt-1 h-4 w-4 rounded border-soft text-primary focus:ring-[rgba(16,163,127,0.35)]"
+                                    />
+                                    <span>
+                                        <span className="font-semibold text-primary">
+                                            Włącz optymalizację LLM
+                                        </span>
+                                        <span className="block text-xs text-subtle">
+                                            Wymaga lokalnego modelu kompatybilnego z llama.cpp.
+                                        </span>
+                                    </span>
+                                </label>
+                                {llmEnable && (
+                                    <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+                                        <label className="flex flex-col gap-2">
+                                            <span className="text-xs uppercase tracking-wide text-muted">
+                                                Ścieżka do modelu
+                                            </span>
+                                            <input
+                                                type="text"
+                                                value={llmModelPath}
+                                                onChange={(e) => setLlmModelPath(e.target.value)}
+                                                className={inputBaseClasses}
+                                                placeholder="/ścieżka/do/modelu.gguf"
+                                            />
+                                        </label>
+                                        <label className="flex flex-col gap-2">
+                                            <span className="text-xs uppercase tracking-wide text-muted">
+                                                Iteracje
+                                            </span>
+                                            <input
+                                                type="number"
+                                                min={1}
+                                                max={20}
+                                                value={llmIterations}
+                                                onChange={(e) => setLlmIterations(Number(e.target.value))}
+                                                className={inputBaseClasses}
+                                            />
+                                        </label>
+                                        <label className="flex flex-col gap-2">
+                                            <span className="text-xs uppercase tracking-wide text-muted">
+                                                Temperatura
+                                            </span>
+                                            <input
+                                                type="number"
+                                                min={0}
+                                                max={1}
+                                                step={0.05}
+                                                value={llmTemperature}
+                                                onChange={(e) => setLlmTemperature(Number(e.target.value))}
+                                                className={inputBaseClasses}
+                                            />
+                                        </label>
+                                        <label className="flex flex-col gap-2">
+                                            <span className="text-xs uppercase tracking-wide text-muted">
+                                                Limit tokenów
+                                            </span>
+                                            <input
+                                                type="number"
+                                                min={16}
+                                                step={16}
+                                                value={llmMaxTokens}
+                                                onChange={(e) => setLlmMaxTokens(Number(e.target.value))}
+                                                className={inputBaseClasses}
+                                            />
+                                        </label>
+                                        <label className="flex flex-col gap-2">
+                                            <span className="text-xs uppercase tracking-wide text-muted">
+                                                Warstwy GPU (opcjonalnie)
+                                            </span>
+                                            <input
+                                                type="number"
+                                                value={llmGpuLayers}
+                                                onChange={(e) => setLlmGpuLayers(e.target.value)}
+                                                className={inputBaseClasses}
+                                                placeholder="np. 35"
+                                            />
+                                        </label>
+                                    </div>
+                                )}
+                            </div>
+                            <div className="flex flex-wrap items-center gap-3">
+                                <button
+                                    type="button"
+                                    onClick={runLlmOptimization}
+                                    disabled={llmLoading}
+                                    className="rounded-xl bg-accent px-4 py-2 font-semibold text-white transition hover:bg-[#27AE60] disabled:opacity-50"
+                                >
+                                    {llmLoading ? "Optymalizowanie…" : "Start"}
+                                </button>
+                                <InfoHint text="Wynik zawiera ranking, top spółki i symulację portfela." />
+                            </div>
+                            {llmError && <div className="text-sm text-negative">Błąd: {llmError}</div>}
+                            {llmResult ? (
+                                <div className="space-y-4">
+                                    <div className="text-xs text-subtle">
+                                        Top {llmResult.top_symbols.length} spółek: {llmResult.top_symbols.join(", ")}
+                                    </div>
+                                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                                        <div className="rounded-xl border border-soft bg-white/70 px-3 py-2">
+                                            <div className="text-[11px] uppercase tracking-wide text-muted">
+                                                Wartość startowa
+                                            </div>
+                                            <div className="text-sm font-semibold text-neutral">
+                                                {formatNumber(llmResult.simulation.initial_value, 2)}
+                                            </div>
+                                        </div>
+                                        <div className="rounded-xl border border-soft bg-white/70 px-3 py-2">
+                                            <div className="text-[11px] uppercase tracking-wide text-muted">
+                                                Wartość końcowa
+                                            </div>
+                                            <div className="text-sm font-semibold text-neutral">
+                                                {formatNumber(llmResult.simulation.final_value, 2)}
+                                            </div>
+                                        </div>
+                                        <div className="rounded-xl border border-soft bg-white/70 px-3 py-2">
+                                            <div className="text-[11px] uppercase tracking-wide text-muted">
+                                                Łączna stopa zwrotu
+                                            </div>
+                                            <div className="text-sm font-semibold text-primary">
+                                                {formatPercent(llmResult.simulation.return_pct, 2)}
+                                            </div>
+                                        </div>
+                                        <div className="rounded-xl border border-soft bg-white/70 px-3 py-2">
+                                            <div className="text-[11px] uppercase tracking-wide text-muted">
+                                                Max drawdown
+                                            </div>
+                                            <div className="text-sm font-semibold text-negative">
+                                                {typeof llmResult.simulation.max_drawdown_pct === "number"
+                                                    ? formatPercent(llmResult.simulation.max_drawdown_pct, 2)
+                                                    : "—"}
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                                        <div className="rounded-xl border border-soft bg-white/70 px-3 py-2">
+                                            <div className="text-[11px] uppercase tracking-wide text-muted">
+                                                Roczna stopa zwrotu
+                                            </div>
+                                            <div className="text-sm font-semibold text-primary">
+                                                {typeof llmResult.simulation.annualized_return_pct === "number"
+                                                    ? formatPercent(llmResult.simulation.annualized_return_pct, 2)
+                                                    : "—"}
+                                            </div>
+                                        </div>
+                                        <div className="rounded-xl border border-soft bg-white/70 px-3 py-2">
+                                            <div className="text-[11px] uppercase tracking-wide text-muted">
+                                                Liczba sesji
+                                            </div>
+                                            <div className="text-sm font-semibold text-neutral">
+                                                {llmResult.simulation.daily_values.length}
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <LlmRankingTable entries={llmResult.ranking} />
+                                    {llmResult.optimisation && llmResult.optimisation.length ? (
+                                        <div className="space-y-2">
+                                            <div className="text-sm font-medium text-primary">
+                                                Przebieg optymalizacji
+                                            </div>
+                                            <div className="space-y-2">
+                                                {llmResult.optimisation.map((step) => {
+                                                    const weightEntries = Object.entries(step.weights);
+                                                    const weightLabel = weightEntries
+                                                        .map(([name, value]) => {
+                                                            const label =
+                                                                LLM_FEATURE_LABEL_MAP[name as LlmFeatureName] ?? name;
+                                                            return `${label}: ${formatPercent(value, 0)}`;
+                                                        })
+                                                        .join(", ");
+                                                    return (
+                                                        <div
+                                                            key={step.iteration}
+                                                            className="rounded-xl border border-dashed border-soft bg-white/80 px-3 py-3 text-xs text-neutral"
+                                                        >
+                                                            <div className="flex flex-wrap items-center justify-between gap-2">
+                                                                <span className="font-semibold text-neutral">
+                                                                    Iteracja {step.iteration}
+                                                                </span>
+                                                                <span className="font-semibold text-primary">
+                                                                    Score: {formatNumber(step.score, Math.abs(step.score) >= 10 ? 2 : 4)}
+                                                                </span>
+                                                            </div>
+                                                            <div className="mt-2 text-[11px] text-subtle">
+                                                                Top: {step.top_symbols.length ? step.top_symbols.join(", ") : "—"}
+                                                            </div>
+                                                            {weightEntries.length > 0 && (
+                                                                <div className="mt-2 text-[11px] text-subtle">
+                                                                    Wagi: {weightLabel}
+                                                                </div>
+                                                            )}
+                                                            {step.llm_response && (
+                                                                <details className="mt-2 text-[11px] text-subtle">
+                                                                    <summary className="cursor-pointer text-neutral">
+                                                                        Odpowiedź LLM
+                                                                    </summary>
+                                                                    <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-soft-surface p-2 text-[10px] leading-relaxed text-muted">
+                                                                        {step.llm_response}
+                                                                    </pre>
+                                                                </details>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                    ) : null}
+                                </div>
+                            ) : (
+                                <div className="text-xs text-subtle">
+                                    {llmLoading
+                                        ? "Łączenie z backendem…"
+                                        : "Uzupełnij dane i kliknij \"Start\", aby pobrać ranking oraz symulację."}
                                 </div>
                             )}
                         </div>
