@@ -1,40 +1,17 @@
 import { NextResponse } from "next/server";
 import path from "path";
 import { access } from "fs/promises";
-import { spawn, spawnSync } from "child_process";
+import { spawn } from "child_process";
 
 type LlmBootstrapVariant = "bash" | "powershell";
 
-type PythonCommand = {
-    command: string;
-    args: string[];
-};
-
 const MODEL_PATH_REGEX = /^MODEL_PATH=(.+)$/m;
 const GPU_LAYERS_REGEX = /^GPU_LAYERS=(.+)$/m;
-const SCRIPT_PATH = path.resolve(process.cwd(), "..", "scripts", "llm_auto_setup.py");
+const SCRIPTS_DIR = path.resolve(process.cwd(), "..", "scripts");
+const BASH_SCRIPT = "bootstrap_local_llm.sh";
+const POWERSHELL_SCRIPT = "bootstrap_local_llm.ps1";
 
 export const runtime = "nodejs";
-
-const candidateCommands = (): PythonCommand[] => {
-    const items: PythonCommand[] = [];
-    const fromEnv = [
-        process.env.LLM_BOOTSTRAP_PYTHON,
-        process.env.PYTHON,
-    ].filter((value): value is string => Boolean(value && value.trim()));
-
-    for (const command of fromEnv) {
-        items.push({ command, args: [] });
-    }
-
-    if (process.platform === "win32") {
-        items.push({ command: "py", args: ["-3"] });
-    }
-
-    items.push({ command: "python3", args: [] }, { command: "python", args: [] });
-
-    return items;
-};
 
 const detectVariant = (): LlmBootstrapVariant =>
     process.platform === "win32" ? "powershell" : "bash";
@@ -47,49 +24,47 @@ const extractValue = (pattern: RegExp, source: string): string | undefined => {
     return match[1].trim();
 };
 
-const findPythonCommand = (): PythonCommand => {
-    for (const candidate of candidateCommands()) {
-        try {
-            const result = spawnSync(candidate.command, [...candidate.args, "--version"], {
-                stdio: "ignore",
-            });
-            if (!result.error && result.status === 0) {
-                return candidate;
-            }
-        } catch {
-            // Ignore and try next candidate.
-        }
+const resolveScriptPath = (variant: LlmBootstrapVariant): string =>
+    path.join(SCRIPTS_DIR, variant === "powershell" ? POWERSHELL_SCRIPT : BASH_SCRIPT);
+
+const createBootstrapCommand = (variant: LlmBootstrapVariant, scriptPath: string) => {
+    if (variant === "powershell") {
+        return {
+            command: "powershell",
+            args: [
+                "-NoLogo",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                scriptPath,
+            ],
+        } as const;
     }
 
-    throw new Error(
-        "Nie znaleziono interpretera Python. Zainstaluj python3 lub ustaw zmienną LLM_BOOTSTRAP_PYTHON."
-    );
+    return {
+        command: "bash",
+        args: [scriptPath],
+    } as const;
 };
 
 export async function POST() {
+    const variant = detectVariant();
+    const scriptPath = resolveScriptPath(variant);
+
     try {
-        await access(SCRIPT_PATH);
+        await access(scriptPath);
     } catch (error) {
         const message =
             error && typeof error === "object" && "code" in error && (error as { code?: string }).code === "ENOENT"
-                ? "Brak skryptu automatycznej instalacji (scripts/llm_auto_setup.py)."
+                ? "Brak skryptu automatycznej instalacji (scripts/bootstrap_local_llm.*)."
                 : "Nie udało się zweryfikować skryptu instalacyjnego.";
         return NextResponse.json({ error: message }, { status: 500 });
     }
 
-    let python: PythonCommand;
-    try {
-        python = findPythonCommand();
-    } catch (error) {
-        const message =
-            error instanceof Error && error.message
-                ? error.message
-                : "Nie znaleziono interpretera Python.";
-        return NextResponse.json({ error: message }, { status: 500 });
-    }
-
-    const child = spawn(python.command, [...python.args, SCRIPT_PATH, "--yes"], {
-        cwd: path.dirname(SCRIPT_PATH),
+    const bootstrap = createBootstrapCommand(variant, scriptPath);
+    const child = spawn(bootstrap.command, bootstrap.args, {
+        cwd: SCRIPTS_DIR,
         env: {
             ...process.env,
             PYTHONUNBUFFERED: "1",
@@ -143,7 +118,6 @@ export async function POST() {
         );
     }
 
-    const variant = detectVariant();
     const modelPath = extractValue(MODEL_PATH_REGEX, stdout);
     const gpuLayersRaw = extractValue(GPU_LAYERS_REGEX, stdout);
     const gpuLayers =
