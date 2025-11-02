@@ -78,7 +78,16 @@ type LlmFeatureOption = {
     defaultWeight: number;
 };
 
-type LlmFeatureState = Record<string, { enabled: boolean; weight: string }>;
+type LlmFeatureState = Record<
+    string,
+    {
+        enabled: boolean;
+        weight: string;
+        min?: string;
+        max?: string;
+        transform?: "" | "raw" | "zscore" | "percentile";
+    }
+>;
 
 const NETWORK_ERROR_PATTERNS = [
     "failed to fetch",
@@ -1010,6 +1019,15 @@ const clampNumber = (value: number, min: number, max: number): number => {
     if (value < min) return min;
     if (value > max) return max;
     return value;
+};
+
+const clampScaleInputValue = (value: string): string => {
+    const parsed = parseOptionalNumber(value);
+    if (typeof parsed !== "number") {
+        return value;
+    }
+    const clamped = clampNumber(parsed, -1000, 1000);
+    return `${clamped}`;
 };
 
 const resolveLookbackDays = (
@@ -12883,26 +12901,45 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
         () => Object.values(llmFeatureState).filter((item) => item.enabled).length,
         [llmFeatureState]
     );
-    const handleToggleLlmFeature = useCallback((name: string, enabled: boolean) => {
-        setLlmFeatureState((prev) => ({
-            ...prev,
-            [name]: {
-                enabled,
-                weight: prev[name]?.weight ?? "1",
-            },
-        }));
-    }, []);
-    const handleChangeLlmFeatureWeight = useCallback(
-        (name: string, value: string) => {
-            setLlmFeatureState((prev) => ({
-                ...prev,
-                [name]: {
-                    enabled: prev[name]?.enabled ?? true,
-                    weight: value.replace(/,/g, "."),
-                },
-            }));
+    const mergeLlmFeatureState = useCallback(
+        (name: string, updates: Partial<LlmFeatureState[string]>) => {
+            setLlmFeatureState((prev) => {
+                const current = prev[name];
+                const nextState: LlmFeatureState[string] = {
+                    ...current,
+                    ...updates,
+                };
+                if (nextState.enabled === undefined) {
+                    nextState.enabled = true;
+                }
+                if (nextState.weight === undefined) {
+                    nextState.weight = "1";
+                }
+                if ("min" in updates && updates.min === undefined) {
+                    delete nextState.min;
+                }
+                if ("max" in updates && updates.max === undefined) {
+                    delete nextState.max;
+                }
+                if (!nextState.transform || nextState.transform.length === 0) {
+                    nextState.transform = "raw";
+                }
+                return { ...prev, [name]: nextState };
+            });
         },
         []
+    );
+    const handleToggleLlmFeature = useCallback(
+        (name: string, enabled: boolean) => {
+            mergeLlmFeatureState(name, { enabled });
+        },
+        [mergeLlmFeatureState]
+    );
+    const handleChangeLlmFeatureWeight = useCallback(
+        (name: string, value: string) => {
+            mergeLlmFeatureState(name, { weight: value.replace(/,/g, ".") });
+        },
+        [mergeLlmFeatureState]
     );
     const templatesHydratedRef = useRef(false);
 
@@ -12921,6 +12958,16 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
     }, [customIndices]);
 
     const scoreComponents = useMemo(() => buildScoreComponents(scoreRules), [scoreRules]);
+    const activeScoreRules = useMemo(() => {
+        return scoreRules.filter((rule) => {
+            const option = findScoreMetric(rule.metric);
+            if (!option) {
+                return false;
+            }
+            const weightNumeric = Number(rule.weight);
+            return Number.isFinite(weightNumeric) && weightNumeric > 0;
+        });
+    }, [scoreRules]);
 
     const llmFeatureOptions = useMemo<LlmFeatureOption[]>(() => {
         return scoreComponents.map((component, idx) => {
@@ -12940,18 +12987,98 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
     useEffect(() => {
         setLlmFeatureState((prev) => {
             const next: LlmFeatureState = {};
-            llmFeatureOptions.forEach((option) => {
+            llmFeatureOptions.forEach((option, idx) => {
                 const existing = prev[option.name];
-                next[option.name] = existing ?? {
-                    enabled: true,
-                    weight: Number.isFinite(option.defaultWeight)
-                        ? `${option.defaultWeight}`
-                        : "1",
+                const component = scoreComponents[idx];
+                const defaultWeight = Number.isFinite(option.defaultWeight)
+                    ? `${option.defaultWeight}`
+                    : "1";
+                if (!component) {
+                    next[option.name] = {
+                        enabled: existing?.enabled ?? true,
+                        weight: existing?.weight ?? defaultWeight,
+                        transform:
+                            (existing?.transform && existing.transform.length > 0
+                                ? existing.transform
+                                : "raw") ?? "raw",
+                        ...(existing?.min !== undefined ? { min: existing.min } : {}),
+                        ...(existing?.max !== undefined ? { max: existing.max } : {}),
+                    };
+                    return;
+                }
+
+                const sourceRule = activeScoreRules[idx];
+                const existingTransform =
+                    existing?.transform && existing.transform.length > 0
+                        ? existing.transform
+                        : undefined;
+                const transformFromRule =
+                    sourceRule?.transform && sourceRule.transform.length > 0
+                        ? (sourceRule.transform as LlmFeatureState[string]["transform"])
+                        : component.normalize === "percentile"
+                        ? "percentile"
+                        : "raw";
+                const transformValue =
+                    existingTransform ?? transformFromRule ?? "raw";
+
+                const state: LlmFeatureState[string] = {
+                    enabled: existing?.enabled ?? true,
+                    weight: existing?.weight ?? defaultWeight,
+                    transform: transformValue,
                 };
+
+                if (component.metric === "price_change") {
+                    const minValue =
+                        existing?.min ??
+                        sourceRule?.min ??
+                        (component.scoring ? `${component.scoring.worst}` : undefined);
+                    const maxValue =
+                        existing?.max ??
+                        sourceRule?.max ??
+                        (component.scoring ? `${component.scoring.best}` : undefined);
+                    if (minValue !== undefined) {
+                        state.min = minValue;
+                    }
+                    if (maxValue !== undefined) {
+                        state.max = maxValue;
+                    }
+                } else {
+                    const percentBased = PERCENT_BASED_SCORE_METRICS.has(component.metric);
+                    const minValue =
+                        existing?.min ??
+                        sourceRule?.min ??
+                        (typeof component.min_value === "number" &&
+                        Number.isFinite(component.min_value)
+                            ? `${
+                                  percentBased
+                                      ? component.min_value * 100
+                                      : component.min_value
+                              }`
+                            : undefined);
+                    const maxValue =
+                        existing?.max ??
+                        sourceRule?.max ??
+                        (typeof component.max_value === "number" &&
+                        Number.isFinite(component.max_value)
+                            ? `${
+                                  percentBased
+                                      ? component.max_value * 100
+                                      : component.max_value
+                              }`
+                            : undefined);
+                    if (minValue !== undefined) {
+                        state.min = minValue;
+                    }
+                    if (maxValue !== undefined) {
+                        state.max = maxValue;
+                    }
+                }
+
+                next[option.name] = state;
             });
             return next;
         });
-    }, [llmFeatureOptions]);
+    }, [llmFeatureOptions, scoreComponents, activeScoreRules]);
 
     const llmFeatureLabelMap = useMemo(() => {
         const map: Record<string, string> = {};
@@ -15732,6 +15859,60 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                 }
                 if (typeof component.max_value === "number") {
                     payload.max_value = component.max_value;
+                }
+
+                const transformValue =
+                    state?.transform && state.transform.length > 0
+                        ? state.transform
+                        : component.normalize === "percentile"
+                        ? "percentile"
+                        : "raw";
+
+                payload.weight = safeWeight;
+                payload.normalize = transformValue === "percentile" ? "percentile" : "none";
+
+                if (component.metric === "price_change") {
+                    let worst = component.scoring?.worst ?? 0;
+                    let best = component.scoring?.best ?? 100;
+                    const worstInput = parseOptionalNumber(state?.min);
+                    const bestInput = parseOptionalNumber(state?.max);
+                    if (typeof worstInput === "number" && Number.isFinite(worstInput)) {
+                        worst = clampNumber(worstInput, -1000, 1000);
+                    }
+                    if (typeof bestInput === "number" && Number.isFinite(bestInput)) {
+                        best = clampNumber(bestInput, -1000, 1000);
+                    }
+                    if (best <= worst) {
+                        if (worst >= 1000) {
+                            worst = 999.999;
+                            best = 1000;
+                        } else {
+                            best = Math.min(1000, worst + 0.0001);
+                        }
+                    }
+                    payload.scoring = { type: "linear_clamped", worst, best };
+                    delete payload.min_value;
+                    delete payload.max_value;
+                } else {
+                    const minInput = parseOptionalNumber(state?.min);
+                    const maxInput = parseOptionalNumber(state?.max);
+                    const hasScale =
+                        typeof minInput === "number" &&
+                        typeof maxInput === "number" &&
+                        Number.isFinite(minInput) &&
+                        Number.isFinite(maxInput) &&
+                        maxInput > minInput;
+                    if (hasScale) {
+                        const percentBased = PERCENT_BASED_SCORE_METRICS.has(component.metric);
+                        payload.min_value = percentBased ? minInput / 100 : minInput;
+                        payload.max_value = percentBased ? maxInput / 100 : maxInput;
+                    } else if (state?.min !== undefined || state?.max !== undefined) {
+                        delete payload.min_value;
+                        delete payload.max_value;
+                    }
+                    if (payload.scoring) {
+                        delete payload.scoring;
+                    }
                 }
 
                 acc.push(payload);
@@ -19122,11 +19303,23 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                 </div>
                                             </div>
                                             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                                                {llmFeatureOptions.map((feature) => {
+                                                {llmFeatureOptions.map((feature, idx) => {
+                                                    const component = scoreComponents[idx];
                                                     const state = llmFeatureState[feature.name] ?? {
                                                         enabled: true,
                                                         weight: `${feature.defaultWeight ?? 1}`,
+                                                        transform:
+                                                            component?.normalize === "percentile"
+                                                                ? "percentile"
+                                                                : "raw",
                                                     };
+                                                    const transformValue =
+                                                        state.transform && state.transform.length > 0
+                                                            ? state.transform
+                                                            : "raw";
+                                                    const isPriceChange = component?.metric === "price_change";
+                                                    const minValue = state.min ?? "";
+                                                    const maxValue = state.max ?? "";
                                                     return (
                                                         <label
                                                             key={feature.name}
@@ -19159,7 +19352,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                                     className="h-4 w-4"
                                                                 />
                                                             </div>
-                                                            <div className="mt-3">
+                                                            <div className="mt-3 space-y-3">
                                                                 <label className="flex flex-col gap-1">
                                                                     <span className="text-[11px] uppercase tracking-wide text-muted">
                                                                         Waga (0-1)
@@ -19179,6 +19372,156 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                                         className={inputBaseClasses}
                                                                     />
                                                                 </label>
+                                                                {isPriceChange ? (
+                                                                    <div className="space-y-2 rounded-2xl border border-soft bg-soft-surface p-4">
+                                                                        <div className="flex items-center gap-2 text-sm font-medium text-primary">
+                                                                            Skala punktacji
+                                                                            <InfoHint text="Skala liniowa, obcięta do [0,1]. Wartości r poniżej „Najgorszego wyniku” dostają 0, powyżej „Najlepszego” otrzymują 1." />
+                                                                        </div>
+                                                                        <div className="grid gap-3 sm:grid-cols-2">
+                                                                            <label className="flex flex-col gap-2">
+                                                                                <span className="text-xs uppercase tracking-wide text-muted">
+                                                                                    Najgorszy wynik
+                                                                                </span>
+                                                                                <div className="relative">
+                                                                                    <input
+                                                                                        type="number"
+                                                                                        min={-1000}
+                                                                                        max={1000}
+                                                                                        step={0.1}
+                                                                                        value={minValue}
+                                                                                        onChange={(e) =>
+                                                                                            mergeLlmFeatureState(feature.name, {
+                                                                                                min: e.target.value,
+                                                                                            })
+                                                                                        }
+                                                                                        onBlur={(e) => {
+                                                                                            const sanitized = clampScaleInputValue(e.target.value);
+                                                                                            if (sanitized !== e.target.value) {
+                                                                                                mergeLlmFeatureState(feature.name, {
+                                                                                                    min: sanitized,
+                                                                                                });
+                                                                                            }
+                                                                                        }}
+                                                                                        className={`${inputBaseClasses} pr-10`}
+                                                                                    />
+                                                                                    <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-muted">
+                                                                                        %
+                                                                                    </span>
+                                                                                </div>
+                                                                            </label>
+                                                                            <label className="flex flex-col gap-2">
+                                                                                <span className="text-xs uppercase tracking-wide text-muted">
+                                                                                    Najlepszy wynik
+                                                                                </span>
+                                                                                <div className="relative">
+                                                                                    <input
+                                                                                        type="number"
+                                                                                        min={-1000}
+                                                                                        max={1000}
+                                                                                        step={0.1}
+                                                                                        value={maxValue}
+                                                                                        onChange={(e) =>
+                                                                                            mergeLlmFeatureState(feature.name, {
+                                                                                                max: e.target.value,
+                                                                                            })
+                                                                                        }
+                                                                                        onBlur={(e) => {
+                                                                                            const sanitized = clampScaleInputValue(e.target.value);
+                                                                                            if (sanitized !== e.target.value) {
+                                                                                                mergeLlmFeatureState(feature.name, {
+                                                                                                    max: sanitized,
+                                                                                                });
+                                                                                            }
+                                                                                        }}
+                                                                                        className={`${inputBaseClasses} pr-10`}
+                                                                                    />
+                                                                                    <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-muted">
+                                                                                        %
+                                                                                    </span>
+                                                                                </div>
+                                                                            </label>
+                                                                        </div>
+                                                                    </div>
+                                                                ) : (
+                                                                    <div className="grid gap-3 sm:grid-cols-2">
+                                                                        <label className="flex flex-col gap-2">
+                                                                            <span className="text-xs uppercase tracking-wide text-muted">
+                                                                                Minimalna wartość
+                                                                            </span>
+                                                                            <input
+                                                                                type="number"
+                                                                                value={minValue}
+                                                                                onChange={(e) =>
+                                                                                    mergeLlmFeatureState(feature.name, {
+                                                                                        min: e.target.value,
+                                                                                    })
+                                                                                }
+                                                                                className={inputBaseClasses}
+                                                                            />
+                                                                        </label>
+                                                                        <label className="flex flex-col gap-2">
+                                                                            <span className="text-xs uppercase tracking-wide text-muted">
+                                                                                Maksymalna wartość
+                                                                            </span>
+                                                                            <input
+                                                                                type="number"
+                                                                                value={maxValue}
+                                                                                onChange={(e) =>
+                                                                                    mergeLlmFeatureState(feature.name, {
+                                                                                        max: e.target.value,
+                                                                                    })
+                                                                                }
+                                                                                className={inputBaseClasses}
+                                                                            />
+                                                                        </label>
+                                                                    </div>
+                                                                )}
+                                                                <div className="grid gap-3 md:grid-cols-2">
+                                                                    {isPriceChange ? (
+                                                                        <label className="flex items-center gap-3 rounded-xl border border-soft bg-soft-surface px-3 py-2 text-sm text-primary">
+                                                                            <input
+                                                                                type="checkbox"
+                                                                                checked={transformValue === "percentile"}
+                                                                                onChange={(e) =>
+                                                                                    mergeLlmFeatureState(feature.name, {
+                                                                                        transform: e.target.checked
+                                                                                            ? "percentile"
+                                                                                            : "raw",
+                                                                                    })
+                                                                                }
+                                                                                className="h-4 w-4 rounded border-soft text-primary focus:ring-primary"
+                                                                            />
+                                                                            <span className="font-medium">
+                                                                                Zastosuj normalizację percentylową po skali
+                                                                            </span>
+                                                                        </label>
+                                                                    ) : (
+                                                                        <label className="flex flex-col gap-2">
+                                                                            <span className="text-xs uppercase tracking-wide text-muted">
+                                                                                Normalizacja
+                                                                            </span>
+                                                                            <select
+                                                                                value={transformValue}
+                                                                                onChange={(e) =>
+                                                                                    mergeLlmFeatureState(feature.name, {
+                                                                                        transform: e.target.value as LlmFeatureState[string]["transform"],
+                                                                                    })
+                                                                                }
+                                                                                className={inputBaseClasses}
+                                                                            >
+                                                                                <option value="raw">Bez zmian</option>
+                                                                                <option value="zscore">Z-score</option>
+                                                                                <option value="percentile">Percentyl</option>
+                                                                            </select>
+                                                                        </label>
+                                                                    )}
+                                                                    <div className="text-xs text-subtle">
+                                                                        {isPriceChange
+                                                                            ? "Percentyle liczone po score."
+                                                                            : "Metryki korzystają z danych cenowych (zwroty, zmienność, Sharpe). Wagi są skalowane automatycznie."}
+                                                                    </div>
+                                                                </div>
                                                             </div>
                                                         </label>
                                                     );
