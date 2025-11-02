@@ -22,7 +22,18 @@ POST /api/admin/portfolio/optimise
 | `end_date` | `YYYY-MM-DD` | Koniec okna czasowego. |
 | `top_n` | `int` | Liczba spółek wybieranych do portfela (domyślnie 5). |
 | `initial_cash` | `float` | Wartość początkowa portfela (domyślnie 100 000). |
-| `features` | `[{"name": str, "weight": float}]` | Lista cech rankingu wraz z wagami (opcjonalnie). |
+| `features` | `[{"name": str, "weight": float}]` | Opcjonalne wagi kompatybilnościowe dla prostego rankingu. |
+| `score_components` | `[{...}]` | Lista komponentów score (pola: `feature`, `metric`, `lookback_days`, `weight`, `direction`, `min_value`, `max_value`, `normalize`, `scoring`). |
+| `score_filters` | `object` | Filtry wszechświata (jak w `/backtest/portfolio`). |
+| `score_weighting` | `"equal"/"score"` | Sposób ważenia portfela opartego o ranking. |
+| `score_direction` | `"asc"/"desc"` | Kierunek sortowania score (domyślnie `desc`). |
+| `score_min_score` | `float` | Minimalny score (opcjonalnie). |
+| `score_max_score` | `float` | Maksymalny score (opcjonalnie). |
+| `score_universe_fallback` | `List[str]` | Lista symboli zapasowych dla wszechświata (opcjonalnie). |
+| `rebalance` | `str` | Częstotliwość rebalansingu (`none`, `monthly`, `quarterly`, `yearly`). |
+| `fee_pct` | `float` | Koszt transakcyjny (np. 0.001 = 0,1%). |
+| `threshold_pct` | `float` | Próg rebalansingu (np. 0.05 = 5%). |
+| `benchmark` | `str` | Opcjonalny symbol benchmarku. |
 | `enable_llm` | `bool` | Włączenie optymalizacji LLM. |
 | `llm_model_path` | `str` | Ścieżka do lokalnego pliku modelu GGML/GGUF dla `llama.cpp`. |
 | `llm_iterations` | `int` | Liczba iteracji optymalizacji (domyślnie 3). |
@@ -55,10 +66,10 @@ znalezionego rozwiązania.
 
 ## Dostępne cechy rankingu
 
-- `momentum` – całkowita stopa zwrotu w analizowanym oknie.
-- `volatility` – odwrotność zmienności dziennych stóp zwrotu (im mniejsza
-  zmienność, tym większa wartość).
-- `average_volume` – średni wolumen obrotu.
-
-Wagi są normalizowane i muszą sumować się do 1.0. W przypadku braku jawnie
-podanych wag system rozdziela je po równo.
+Ranking korzysta z tych samych komponentów, które udostępnia moduł score w
+panelu (`/backtest/portfolio`). Można łączyć metryki (np. `total_return`,
+`max_drawdown`, `volatility`, `roc`, `price_change`) z różnymi oknami czasowymi,
+wagami, normalizacją (`none` lub `percentile`) oraz skalowaniem typu
+`linear_clamped`. Dzięki temu jeden endpoint obsługuje zarówno klasyczny
+ranking oparty na kilku wskaźnikach, jak i złożone konfiguracje budowane w
+konfiguratorze score.
