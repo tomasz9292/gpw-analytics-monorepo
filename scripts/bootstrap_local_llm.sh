@@ -64,16 +64,31 @@ ensure_tar() {
     else
         busybox_bin="${TARGET_DIR}/bin/busybox"
         if [ ! -x "${busybox_bin}" ]; then
-            log "Brak tar – pobieranie busybox"
+            if [ -n "${LLM_BOOTSTRAP_BUSYBOX_PATH:-}" ] && [ -f "${LLM_BOOTSTRAP_BUSYBOX_PATH}" ]; then
+                log "Brak tar – używam lokalnego busybox z ${LLM_BOOTSTRAP_BUSYBOX_PATH}"
+                mkdir -p "${TARGET_DIR}/bin"
+                cp "${LLM_BOOTSTRAP_BUSYBOX_PATH}" "${busybox_bin}" || {
+                    echo "Błąd: nie można skopiować lokalnego busybox" >&2
+                    return 1
+                }
+                chmod +x "${busybox_bin}" || {
+                    echo "Błąd: nie można ustawić uprawnień dla busybox" >&2
+                    return 1
+                }
+            else
+                log "Brak tar – pobieranie busybox"
 
             local arch="$(uname -m)"
             local busybox_filename=""
+            local busybox_arch_slug="${arch}"
             case "${arch}" in
                 x86_64|amd64)
                     busybox_filename="busybox-x86_64"
+                    busybox_arch_slug="x86_64"
                     ;;
                 aarch64|arm64)
                     busybox_filename="busybox-aarch64"
+                    busybox_arch_slug="aarch64"
                     ;;
                 *)
                     echo "Błąd: brak wsparcia dla architektury ${arch} bez narzędzia tar" >&2
@@ -91,56 +106,86 @@ EOF
             fi
 
             if [ "${#busybox_urls[@]}" -eq 0 ]; then
-                busybox_urls=(
-                    "https://busybox.net/downloads/binaries/1.36.1-defconfig-multiarch/${busybox_filename}"
-                    "http://busybox.net/downloads/binaries/1.36.1-defconfig-multiarch/${busybox_filename}"
-                    "https://busybox.net/downloads/binaries/1.36.0-defconfig-multiarch/${busybox_filename}"
-                    "http://busybox.net/downloads/binaries/1.36.0-defconfig-multiarch/${busybox_filename}"
-                    "https://busybox.net/downloads/binaries/1.35.0-defconfig-multiarch/${busybox_filename}"
-                    "http://busybox.net/downloads/binaries/1.35.0-defconfig-multiarch/${busybox_filename}"
-                    "https://busybox.net/downloads/binaries/1.34.1-defconfig-multiarch/${busybox_filename}"
-                    "http://busybox.net/downloads/binaries/1.34.1-defconfig-multiarch/${busybox_filename}"
+                local -a busybox_versions=(
+                    "1.36.1"
+                    "1.36.0"
+                    "1.35.0"
+                    "1.34.1"
+                )
+
+                for version in "${busybox_versions[@]}"; do
+                    busybox_urls+=(
+                        "https://busybox.net/downloads/binaries/${version}-defconfig-multiarch/${busybox_filename}"
+                        "http://busybox.net/downloads/binaries/${version}-defconfig-multiarch/${busybox_filename}"
+                        "https://busybox.net/downloads/binaries/${version}/${busybox_filename}"
+                        "http://busybox.net/downloads/binaries/${version}/${busybox_filename}"
+                        "https://busybox.net/downloads/binaries/${version}-${busybox_arch_slug}-linux-musl/${busybox_filename}"
+                        "http://busybox.net/downloads/binaries/${version}-${busybox_arch_slug}-linux-musl/${busybox_filename}"
+                    )
+                done
+
+                busybox_urls+=(
                     "https://frippery.org/files/busybox/${busybox_filename}"
+                    "https://raw.githubusercontent.com/andrew-d/static-binaries/master/${busybox_filename}"
+                    "https://raw.githubusercontent.com/moparisthebest/static-binaries/master/${busybox_filename}"
                     "https://raw.githubusercontent.com/landley/busybox/master/${busybox_filename}"
                     "https://raw.githubusercontent.com/mirror/busybox/master/${busybox_filename}"
                 )
+
                 if [ "${arch}" = "x86_64" ] || [ "${arch}" = "amd64" ]; then
                     busybox_urls+=(
                         "https://raw.githubusercontent.com/termux/termux-packages/master/packages/busybox-static/${busybox_filename}"
+                        "https://raw.githubusercontent.com/andrew-d/static-binaries/master/busybox-amd64"
+                        "https://raw.githubusercontent.com/moparisthebest/static-binaries/master/busybox-amd64"
+                    )
+                fi
+
+                if [ "${arch}" = "aarch64" ] || [ "${arch}" = "arm64" ]; then
+                    busybox_urls+=(
+                        "https://raw.githubusercontent.com/andrew-d/static-binaries/master/busybox-arm64"
+                        "https://raw.githubusercontent.com/moparisthebest/static-binaries/master/busybox-arm64"
                     )
                 fi
             fi
 
-            local download_succeeded=0
-            for busybox_url in "${busybox_urls[@]}"; do
-                log "Próba pobrania busybox z ${busybox_url}"
-                if command -v curl >/dev/null 2>&1; then
-                    if curl -fsSL "${busybox_url}" -o "${busybox_bin}"; then
-                        download_succeeded=1
-                        break
+                local download_succeeded=0
+                for busybox_url in "${busybox_urls[@]}"; do
+                    log "Próba pobrania busybox z ${busybox_url}"
+                    if command -v curl >/dev/null 2>&1; then
+                        if curl -fsSL --retry 2 --retry-connrefused --retry-delay 1 "${busybox_url}" -o "${busybox_bin}"; then
+                            download_succeeded=1
+                            break
+                        else
+                            local curl_status=$?
+                            log "Niepowodzenie pobrania busybox (curl exit ${curl_status})"
+                        fi
+                    elif command -v wget >/dev/null 2>&1; then
+                        if wget -q -O "${busybox_bin}" "${busybox_url}"; then
+                            download_succeeded=1
+                            break
+                        else
+                            local wget_status=$?
+                            log "Niepowodzenie pobrania busybox (wget exit ${wget_status})"
+                        fi
+                    else
+                        echo "Błąd: wymagany jest curl lub wget, aby pobrać busybox" >&2
+                        return 1
                     fi
-                elif command -v wget >/dev/null 2>&1; then
-                    if wget -q -O "${busybox_bin}" "${busybox_url}"; then
-                        download_succeeded=1
-                        break
-                    fi
-                else
-                    echo "Błąd: wymagany jest curl lub wget, aby pobrać busybox" >&2
+
+                    rm -f "${busybox_bin}" >/dev/null 2>&1 || true
+                done
+
+                if [ "${download_succeeded}" -ne 1 ]; then
+                    echo "Błąd: nie udało się pobrać busybox" >&2
+                    echo "Ustaw LLM_BOOTSTRAP_BUSYBOX_PATH lub LLM_BOOTSTRAP_BUSYBOX_URLS, aby wskazać własne źródło" >&2
                     return 1
                 fi
 
-                rm -f "${busybox_bin}" >/dev/null 2>&1 || true
-            done
-
-            if [ "${download_succeeded}" -ne 1 ]; then
-                echo "Błąd: nie udało się pobrać busybox" >&2
-                return 1
+                chmod +x "${busybox_bin}" || {
+                    echo "Błąd: nie można ustawić uprawnień dla busybox" >&2
+                    return 1
+                }
             fi
-
-            chmod +x "${busybox_bin}" || {
-                echo "Błąd: nie można ustawić uprawnień dla busybox" >&2
-                return 1
-            }
         fi
     fi
 
