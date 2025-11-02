@@ -19569,7 +19569,10 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                     </div>
                                                 </div>
                                                 <label className="flex flex-col gap-2 md:col-span-2">
-                                                    <span className="text-[11px] uppercase tracking-wide text-muted">Wszechświat (symbole, indeksy)</span>
+                                                    <span className="flex items-center gap-2 text-[11px] uppercase tracking-wide text-muted">
+                                                        Wszechświat (symbole, indeksy)
+                                                        <InfoHint text="Możesz łączyć kilka indeksów oraz własne konfiguracje, np. index:MWIG40 + index:SWIG80." />
+                                                    </span>
                                                     <input
                                                         type="text"
                                                         value={pfScoreUniverse}
@@ -19577,6 +19580,38 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                         className={inputBaseClasses}
                                                         placeholder="np. WIG20, index:MWIG40"
                                                     />
+                                                    {benchmarkUniverseOptions.length > 0 && (
+                                                        <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
+                                                            <InfoHint text="Wybierz indeks, aby dodać jego skład do filtra Universe." />
+                                                            {benchmarkUniverseOptions.map((option) => {
+                                                                const token = `index:${option.code}`.toLowerCase();
+                                                                const isActive = universeIncludesToken(pfScoreUniverse, token);
+                                                                const baseClasses = "rounded-full border px-3 py-1 transition text-xs";
+                                                                const activeClasses = "border-[var(--color-primary)] text-primary bg-primary/10";
+                                                                const inactiveClasses = "border-soft text-muted hover:border-[var(--color-primary)] hover:text-primary";
+                                                                return (
+                                                                    <button
+                                                                        key={`pf-${option.code}`}
+                                                                        type="button"
+                                                                        onClick={() => handleBenchmarkUniverseSelect(option, "pf")}
+                                                                        className={`${baseClasses} ${isActive ? activeClasses : inactiveClasses}`}
+                                                                        title={`Skład indeksu na ${option.effectiveDate}`}
+                                                                    >
+                                                                        <span className="font-semibold">{option.code}</span>
+                                                                        {option.isCustom && (
+                                                                            <span className="ml-2 rounded-full bg-primary/10 px-2 py-[1px] text-[10px] uppercase tracking-wide text-primary">
+                                                                                Własny
+                                                                            </span>
+                                                                        )}
+                                                                        {option.name && option.name !== option.code && (
+                                                                            <span className="ml-1 text-[10px]">{option.name}</span>
+                                                                        )}
+                                                                        <span className="ml-1 text-[10px] text-subtle">{option.effectiveDate}</span>
+                                                                    </button>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                    )}
                                                 </label>
                                                 <label className="flex flex-col gap-2">
                                                     <span className="text-[11px] uppercase tracking-wide text-muted">Minimalny score</span>
