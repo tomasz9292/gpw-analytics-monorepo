@@ -63,11 +63,18 @@ export async function POST() {
     }
 
     const bootstrap = createBootstrapCommand(variant, scriptPath);
+    const bootstrapHome =
+        process.env.LLM_BOOTSTRAP_HOME ??
+        process.env.HOME ??
+        process.env.USERPROFILE ??
+        "/tmp";
+
     const child = spawn(bootstrap.command, bootstrap.args, {
         cwd: SCRIPTS_DIR,
         env: {
             ...process.env,
             PYTHONUNBUFFERED: "1",
+            LLM_BOOTSTRAP_HOME: bootstrapHome,
         },
     });
 
