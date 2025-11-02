@@ -67,20 +67,13 @@ ensure_tar() {
             log "Brak tar – pobieranie busybox"
 
             local arch="$(uname -m)"
-            local -a busybox_urls
+            local busybox_filename=""
             case "${arch}" in
                 x86_64|amd64)
-                    busybox_urls=(
-                        "https://busybox.net/downloads/binaries/1.36.1-defconfig-multiarch/busybox-x86_64"
-                        "http://busybox.net/downloads/binaries/1.36.1-defconfig-multiarch/busybox-x86_64"
-                        "https://frippery.org/files/busybox/busybox-x86_64"
-                    )
+                    busybox_filename="busybox-x86_64"
                     ;;
                 aarch64|arm64)
-                    busybox_urls=(
-                        "https://busybox.net/downloads/binaries/1.36.1-defconfig-multiarch/busybox-aarch64"
-                        "http://busybox.net/downloads/binaries/1.36.1-defconfig-multiarch/busybox-aarch64"
-                    )
+                    busybox_filename="busybox-aarch64"
                     ;;
                 *)
                     echo "Błąd: brak wsparcia dla architektury ${arch} bez narzędzia tar" >&2
@@ -88,8 +81,39 @@ ensure_tar() {
                     ;;
             esac
 
+            local -a busybox_urls=()
+            if [ -n "${LLM_BOOTSTRAP_BUSYBOX_URLS:-}" ]; then
+                while IFS= read -r line; do
+                    [ -n "${line}" ] && busybox_urls+=("${line}")
+                done <<EOF
+${LLM_BOOTSTRAP_BUSYBOX_URLS}
+EOF
+            fi
+
+            if [ "${#busybox_urls[@]}" -eq 0 ]; then
+                busybox_urls=(
+                    "https://busybox.net/downloads/binaries/1.36.1-defconfig-multiarch/${busybox_filename}"
+                    "http://busybox.net/downloads/binaries/1.36.1-defconfig-multiarch/${busybox_filename}"
+                    "https://busybox.net/downloads/binaries/1.36.0-defconfig-multiarch/${busybox_filename}"
+                    "http://busybox.net/downloads/binaries/1.36.0-defconfig-multiarch/${busybox_filename}"
+                    "https://busybox.net/downloads/binaries/1.35.0-defconfig-multiarch/${busybox_filename}"
+                    "http://busybox.net/downloads/binaries/1.35.0-defconfig-multiarch/${busybox_filename}"
+                    "https://busybox.net/downloads/binaries/1.34.1-defconfig-multiarch/${busybox_filename}"
+                    "http://busybox.net/downloads/binaries/1.34.1-defconfig-multiarch/${busybox_filename}"
+                    "https://frippery.org/files/busybox/${busybox_filename}"
+                    "https://raw.githubusercontent.com/landley/busybox/master/${busybox_filename}"
+                    "https://raw.githubusercontent.com/mirror/busybox/master/${busybox_filename}"
+                )
+                if [ "${arch}" = "x86_64" ] || [ "${arch}" = "amd64" ]; then
+                    busybox_urls+=(
+                        "https://raw.githubusercontent.com/termux/termux-packages/master/packages/busybox-static/${busybox_filename}"
+                    )
+                fi
+            fi
+
             local download_succeeded=0
             for busybox_url in "${busybox_urls[@]}"; do
+                log "Próba pobrania busybox z ${busybox_url}"
                 if command -v curl >/dev/null 2>&1; then
                     if curl -fsSL "${busybox_url}" -o "${busybox_bin}"; then
                         download_succeeded=1
@@ -104,6 +128,8 @@ ensure_tar() {
                     echo "Błąd: wymagany jest curl lub wget, aby pobrać busybox" >&2
                     return 1
                 fi
+
+                rm -f "${busybox_bin}" >/dev/null 2>&1 || true
             done
 
             if [ "${download_succeeded}" -ne 1 ]; then
