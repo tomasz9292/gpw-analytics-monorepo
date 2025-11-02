@@ -72,178 +72,11 @@ const MAX_UNIVERSE_FALLBACK_SYMBOLS = 500;
 const DEFAULT_LLM_SYMBOLS = "CDR.WA, PKN.WA, PKO.WA, PZU.WA, KGH.WA";
 const LLM_BOOTSTRAP_DEFAULT_MODEL_PATH = "~/gpw-llm/models/zephyr-7b-beta.Q4_K_M.gguf";
 const LLM_BOOTSTRAP_DEFAULT_GPU_LAYERS = "0";
-const LLM_BOOTSTRAP_SCRIPT_BASH_NAME = "bootstrap_local_llm.sh";
-const LLM_BOOTSTRAP_SCRIPT_POWERSHELL_NAME = "bootstrap_local_llm.ps1";
-const LLM_BOOTSTRAP_SCRIPT_BASH = `#!/usr/bin/env bash
-set -euo pipefail
-
-TARGET_DIR="\${HOME}/gpw-llm"
-VENV_DIR="\${TARGET_DIR}/venv"
-MODEL_DIR="\${TARGET_DIR}/models"
-MODEL_NAME="zephyr-7b-beta.Q4_K_M.gguf"
-MODEL_URL="https://huggingface.co/TheBloke/zephyr-7B-beta-GGUF/resolve/main/\${MODEL_NAME}?download=1"
-
-log() {
-    printf '\n>>> %s\n' "$1"
-}
-
-log "Tworzenie katalogów w \${TARGET_DIR}"
-mkdir -p "\${MODEL_DIR}"
-
-if ! command -v python3 >/dev/null 2>&1; then
-    echo "Błąd: wymagany jest python3" >&2
-    exit 1
-fi
-
-if [ ! -d "\${VENV_DIR}" ]; then
-    log "Tworzenie wirtualnego środowiska"
-    python3 -m venv "\${VENV_DIR}"
-fi
-
-log "Aktywowanie środowiska i instalacja zależności"
-# shellcheck disable=SC1090
-source "\${VENV_DIR}/bin/activate"
-python -m pip install --upgrade pip
-python -m pip install "llama-cpp-python==0.2.78"
-
-log "Pobieranie przykładowego modelu GGUF"
-if command -v curl >/dev/null 2>&1; then
-    DOWNLOADER=(curl -L "\${MODEL_URL}" -o "\${MODEL_DIR}/\${MODEL_NAME}")
-elif command -v wget >/dev/null 2>&1; then
-    DOWNLOADER=(wget "\${MODEL_URL}" -O "\${MODEL_DIR}/\${MODEL_NAME}")
-else
-    echo "Błąd: wymagany jest curl lub wget" >&2
-    deactivate || true
-    exit 1
-fi
-
-if [ ! -f "\${MODEL_DIR}/\${MODEL_NAME}" ]; then
-    "\${DOWNLOADER[@]}"
-else
-    log "Plik modelu już istnieje – pomijam pobieranie"
-fi
-
-GPU_LAYERS=0
-if command -v nvidia-smi >/dev/null 2>&1; then
-    GPU_LAYERS=20
-elif command -v rocm-smi >/dev/null 2>&1; then
-    GPU_LAYERS=16
-fi
-
-CONFIG_FILE="\${TARGET_DIR}/config.json"
-cat >"\${CONFIG_FILE}" <<JSON
-{
-  "model_path": "\${MODEL_DIR}/\${MODEL_NAME}",
-  "gpu_layers": \${GPU_LAYERS}
-}
-JSON
-
-deactivate || true
-
-log "Środowisko LLM przygotowane"
-echo "MODEL_PATH=\${MODEL_DIR}/\${MODEL_NAME}"
-echo "GPU_LAYERS=\${GPU_LAYERS}"
-echo "Konfiguracja zapisana w \${CONFIG_FILE}"
-`;
-const LLM_BOOTSTRAP_SCRIPT_POWERSHELL = [
-    "#!/usr/bin/env pwsh",
-    "Set-StrictMode -Version Latest",
-    "$ErrorActionPreference = \"Stop\"",
-    "",
-    "function Write-Log {",
-    "    param(",
-    "        [Parameter(Mandatory=$true)][string]$Message",
-    "    )",
-    "    Write-Host \"`n>>> $Message\"",
-    "}",
-    "",
-    "$HomeDir = if ($env:USERPROFILE) { $env:USERPROFILE } elseif ($env:HOME) { $env:HOME } else { [Environment]::GetFolderPath('UserProfile') }",
-    "$TargetDir = Join-Path $HomeDir \"gpw-llm\"",
-    "$VenvDir = Join-Path $TargetDir \"venv\"",
-    "$ModelDir = Join-Path $TargetDir \"models\"",
-    "$ModelName = \"zephyr-7b-beta.Q4_K_M.gguf\"",
-    "$ModelUrl = \"https://huggingface.co/TheBloke/zephyr-7B-beta-GGUF/resolve/main/$ModelName?download=1\"",
-    "$PythonCommand = $null",
-    "",
-    "Write-Log \"Tworzenie katalogów w $TargetDir\"",
-    "New-Item -ItemType Directory -Path $ModelDir -Force | Out-Null",
-    "",
-    "$pythonCandidates = @(\"python\", \"python3\")",
-    "foreach ($candidate in $pythonCandidates) {",
-    "    if (Get-Command $candidate -ErrorAction SilentlyContinue) {",
-    "        $PythonCommand = $candidate",
-    "        break",
-    "    }",
-    "}",
-    "",
-    "if (-not $PythonCommand) {",
-    "    Write-Error \"Błąd: wymagany jest python lub python3\"",
-    "}",
-    "",
-    "if (-not (Test-Path $VenvDir)) {",
-    "    Write-Log \"Tworzenie wirtualnego środowiska\"",
-    "    & $PythonCommand -m venv $VenvDir",
-    "}",
-    "",
-    "$VenvPython = Join-Path $VenvDir \"Scripts/python.exe\"",
-    "if (-not (Test-Path $VenvPython)) {",
-    "    $VenvPython = Join-Path $VenvDir \"bin/python\"",
-    "}",
-    "",
-    "if (-not (Test-Path $VenvPython)) {",
-    "    Write-Error \"Nie można odnaleźć interpretera wirtualnego środowiska w $VenvDir\"",
-    "}",
-    "",
-    "Write-Log \"Instalacja zależności w środowisku\"",
-    "& $VenvPython -m pip install --upgrade pip",
-    "& $VenvPython -m pip install \"llama-cpp-python==0.2.78\"",
-    "",
-    "$ModelPath = Join-Path $ModelDir $ModelName",
-    "if (-not (Test-Path $ModelPath)) {",
-    "    Write-Log \"Pobieranie przykładowego modelu GGUF\"",
-    "    if (Get-Command \"curl\" -ErrorAction SilentlyContinue) {",
-    "        & curl -L $ModelUrl -o $ModelPath",
-    "    } elseif (Get-Command \"wget\" -ErrorAction SilentlyContinue) {",
-    "        & wget $ModelUrl -O $ModelPath",
-    "    } else {",
-    "        Write-Log \"Brak curl oraz wget - używam Invoke-WebRequest\"",
-    "        Invoke-WebRequest -Uri $ModelUrl -OutFile $ModelPath",
-    "    }",
-    "} else {",
-    "    Write-Log \"Plik modelu już istnieje – pomijam pobieranie\"",
-    "}",
-    "",
-    "$GpuLayers = 0",
-    "if (Get-Command \"nvidia-smi\" -ErrorAction SilentlyContinue -CommandType Application) {",
-    "    $GpuLayers = 20",
-    "} elseif (Get-Command \"rocm-smi\" -ErrorAction SilentlyContinue -CommandType Application) {",
-    "    $GpuLayers = 16",
-    "}",
-    "",
-    "$ConfigFile = Join-Path $TargetDir \"config.json\"",
-    "$Config = @{ model_path = $ModelPath; gpu_layers = $GpuLayers }",
-    "$Config | ConvertTo-Json -Depth 3 | Set-Content -Path $ConfigFile -Encoding UTF8",
-    "",
-    "Write-Log \"Środowisko LLM przygotowane\"",
-    "Write-Host \"MODEL_PATH=$ModelPath\"",
-    "Write-Host \"GPU_LAYERS=$GpuLayers\"",
-    "Write-Host \"Konfiguracja zapisana w $ConfigFile\"",
-].join("\n");
-const LLM_BOOTSTRAP_VARIANTS = {
-    bash: {
-        name: LLM_BOOTSTRAP_SCRIPT_BASH_NAME,
-        mime: "text/x-shellscript",
-        script: LLM_BOOTSTRAP_SCRIPT_BASH,
-        instruction: `bash ${LLM_BOOTSTRAP_SCRIPT_BASH_NAME}`,
-    },
-    powershell: {
-        name: LLM_BOOTSTRAP_SCRIPT_POWERSHELL_NAME,
-        mime: "text/x-powershell",
-        script: LLM_BOOTSTRAP_SCRIPT_POWERSHELL,
-        instruction: `powershell -ExecutionPolicy Bypass -File .\\${LLM_BOOTSTRAP_SCRIPT_POWERSHELL_NAME}`,
-    },
-} as const;
-type LlmBootstrapVariant = keyof typeof LLM_BOOTSTRAP_VARIANTS;
+type LlmBootstrapVariant = "bash" | "powershell";
+const LLM_BOOTSTRAP_VARIANT_LABELS: Record<LlmBootstrapVariant, string> = {
+    bash: "Linux / macOS (Bash)",
+    powershell: "Windows / PowerShell",
+};
 
 type LlmFeatureOption = {
     name: string;
@@ -13100,16 +12933,12 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
         }
         setLlmBootstrapVariant(detectBootstrapVariant());
     }, [detectBootstrapVariant]);
-    const bootstrapVariantConfig = useMemo(
-        () => LLM_BOOTSTRAP_VARIANTS[llmBootstrapVariant] ?? LLM_BOOTSTRAP_VARIANTS.bash,
+    const bootstrapVariantLabel = useMemo(
+        () =>
+            LLM_BOOTSTRAP_VARIANT_LABELS[llmBootstrapVariant] ??
+            LLM_BOOTSTRAP_VARIANT_LABELS.bash,
         [llmBootstrapVariant]
     );
-    const bootstrapVariantLabel = useMemo(() => {
-        if (llmBootstrapVariant === "powershell") {
-            return "Windows / PowerShell";
-        }
-        return "Linux / macOS (Bash)";
-    }, [llmBootstrapVariant]);
     const [llmLoading, setLlmLoading] = useState(false);
     const [llmError, setLlmError] = useState("");
     const [llmResult, setLlmResult] = useState<PortfolioOptimisationResponse | null>(null);
@@ -13157,38 +12986,86 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
         },
         [mergeLlmFeatureState]
     );
-    const handleBootstrapLocalLlm = useCallback(() => {
+    const handleBootstrapLocalLlm = useCallback(async () => {
+        setLlmBootstrapStatus("downloading");
+        setLlmBootstrapError("");
+
         try {
-            setLlmBootstrapStatus("downloading");
-            setLlmBootstrapError("");
-
-            const variant = detectBootstrapVariant();
-            setLlmBootstrapVariant(variant);
-            const variantConfig =
-                LLM_BOOTSTRAP_VARIANTS[variant] ?? LLM_BOOTSTRAP_VARIANTS.bash;
-
-            const blob = new Blob([variantConfig.script], {
-                type: variantConfig.mime,
+            const response = await fetch("/api/llm/bootstrap", {
+                method: "POST",
+                headers: {
+                    "content-type": "application/json",
+                },
             });
-            const url = URL.createObjectURL(blob);
-            const anchor = document.createElement("a");
-            anchor.href = url;
-            anchor.download = variantConfig.name;
-            document.body.appendChild(anchor);
-            anchor.click();
-            document.body.removeChild(anchor);
-            URL.revokeObjectURL(url);
+
+            const responseText = await response.text();
+            let payload: unknown = null;
+            if (responseText) {
+                try {
+                    payload = JSON.parse(responseText);
+                } catch {
+                    payload = null;
+                }
+            }
+
+            if (!response.ok) {
+                let message = "Nie udało się przygotować lokalnego środowiska LLM.";
+                if (
+                    payload &&
+                    typeof payload === "object" &&
+                    "error" in payload &&
+                    typeof (payload as { error?: unknown }).error === "string"
+                ) {
+                    message = (payload as { error: string }).error;
+                }
+                throw new Error(message);
+            }
+
+            const data = (payload ?? {}) as {
+                variant?: LlmBootstrapVariant;
+                modelPath?: unknown;
+                gpuLayers?: unknown;
+                logs?: unknown;
+            };
+
+            if (typeof data.logs === "string" && data.logs.trim().length > 0) {
+                console.info(
+                    "Logi instalatora lokalnego LLM:\n",
+                    data.logs.trim()
+                );
+            }
+
+            const variant = data.variant ?? detectBootstrapVariant();
+            setLlmBootstrapVariant(variant);
+
+            if (typeof data.modelPath === "string" && data.modelPath.length > 0) {
+                setLlmModelPath(data.modelPath);
+            } else {
+                setLlmModelPath(LLM_BOOTSTRAP_DEFAULT_MODEL_PATH);
+            }
+
+            if (
+                (typeof data.gpuLayers === "string" && data.gpuLayers.length > 0) ||
+                typeof data.gpuLayers === "number"
+            ) {
+                setLlmGpuLayers(String(data.gpuLayers));
+            } else {
+                setLlmGpuLayers(LLM_BOOTSTRAP_DEFAULT_GPU_LAYERS);
+            }
 
             setLlmEnable(true);
-            setLlmModelPath(LLM_BOOTSTRAP_DEFAULT_MODEL_PATH);
-            setLlmGpuLayers(LLM_BOOTSTRAP_DEFAULT_GPU_LAYERS);
             setLlmBootstrapStatus("success");
         } catch (error) {
-            console.error("Failed to download local LLM bootstrap script", error);
+            console.error("Failed to bootstrap local LLM environment", error);
             setLlmBootstrapStatus("error");
-            setLlmBootstrapError("Nie udało się pobrać skryptu instalacyjnego.");
+            setLlmBootstrapError(
+                resolveErrorMessage(
+                    error,
+                    "Nie udało się przygotować lokalnego środowiska LLM."
+                )
+            );
         }
-    }, [detectBootstrapVariant, setLlmEnable, setLlmModelPath, setLlmGpuLayers]);
+    }, [detectBootstrapVariant]);
     const templatesHydratedRef = useRef(false);
 
     useEffect(() => {
@@ -19995,11 +19872,9 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                             <span className="font-medium text-neutral">
                                                                 ({bootstrapVariantLabel})
                                                             </span>
-                                                            . Po pobraniu uruchom go w terminalu poleceniem
-                                                            <code className="mx-1 rounded bg-neutral-100 px-1 py-0.5 text-[10px] text-neutral-600">
-                                                                {bootstrapVariantConfig.instruction}
-                                                            </code>
-                                                            . Domyślna ścieżka modelu i liczba warstw GPU zostaną uzupełnione poniżej.
+                                                            {" "}
+                                                            i uruchamiamy go w tle. Po zakończeniu domyślna ścieżka modelu i liczba
+                                                            warstw GPU zostaną uzupełnione poniżej.
                                                         </p>
                                                         {llmBootstrapStatus === "success" && (
                                                             <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-[11px] text-emerald-700">
