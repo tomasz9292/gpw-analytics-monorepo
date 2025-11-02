@@ -17,7 +17,7 @@ $ModelName = "zephyr-7b-beta.Q4_K_M.gguf"
 $ModelUrl = "https://huggingface.co/TheBloke/zephyr-7B-beta-GGUF/resolve/main/$ModelName?download=1"
 $PythonCommand = $null
 
-Write-Log "Tworzenie katalogów w $TargetDir"
+Write-Log "Tworzenie katalogow w $TargetDir"
 New-Item -ItemType Directory -Path $ModelDir -Force | Out-Null
 
 $pythonCandidates = @("python", "python3")
@@ -29,11 +29,11 @@ foreach ($candidate in $pythonCandidates) {
 }
 
 if (-not $PythonCommand) {
-    Write-Error "Błąd: wymagany jest python lub python3"
+    Write-Error "Blad: wymagany jest python lub python3"
 }
 
 if (-not (Test-Path $VenvDir)) {
-    Write-Log "Tworzenie wirtualnego środowiska"
+    Write-Log "Tworzenie wirtualnego srodowiska"
     & $PythonCommand -m venv $VenvDir
 }
 
@@ -43,26 +43,26 @@ if (-not (Test-Path $VenvPython)) {
 }
 
 if (-not (Test-Path $VenvPython)) {
-    Write-Error "Nie można odnaleźć interpretera wirtualnego środowiska w $VenvDir"
+    Write-Error "Nie mozna odnalezc interpretera wirtualnego srodowiska w $VenvDir"
 }
 
-Write-Log "Instalacja zależności w środowisku"
+Write-Log "Instalacja zaleznosci w srodowisku"
 & $VenvPython -m pip install --upgrade pip
 & $VenvPython -m pip install "llama-cpp-python==0.2.78"
 
 $ModelPath = Join-Path $ModelDir $ModelName
 if (-not (Test-Path $ModelPath)) {
-    Write-Log "Pobieranie przykładowego modelu GGUF"
+    Write-Log "Pobieranie przykladowego modelu GGUF"
     if (Get-Command "curl" -ErrorAction SilentlyContinue) {
         & curl -L $ModelUrl -o $ModelPath
     } elseif (Get-Command "wget" -ErrorAction SilentlyContinue) {
         & wget $ModelUrl -O $ModelPath
     } else {
-        Write-Log "Brak curl oraz wget - używam Invoke-WebRequest"
+        Write-Log "Brak curl oraz wget - uzywam Invoke-WebRequest"
         Invoke-WebRequest -Uri $ModelUrl -OutFile $ModelPath
     }
 } else {
-    Write-Log "Plik modelu już istnieje – pomijam pobieranie"
+    Write-Log "Plik modelu juz istnieje - pomijam pobieranie"
 }
 
 $GpuLayers = 0
@@ -76,7 +76,7 @@ $ConfigFile = Join-Path $TargetDir "config.json"
 $Config = @{ model_path = $ModelPath; gpu_layers = $GpuLayers }
 $Config | ConvertTo-Json -Depth 3 | Set-Content -Path $ConfigFile -Encoding UTF8
 
-Write-Log "Środowisko LLM przygotowane"
+Write-Log "Srodowisko LLM przygotowane"
 Write-Host "MODEL_PATH=$ModelPath"
 Write-Host "GPU_LAYERS=$GpuLayers"
 Write-Host "Konfiguracja zapisana w $ConfigFile"
