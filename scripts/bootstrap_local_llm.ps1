@@ -55,13 +55,16 @@ if (-not (Test-Path $ModelPath)) {
     Write-Log "Pobieranie przykladowego modelu GGUF"
     if (Get-Command "curl" -ErrorAction SilentlyContinue) {
         & curl -L $ModelUrl -o $ModelPath
-    } elseif (Get-Command "wget" -ErrorAction SilentlyContinue) {
+    }
+    elseif (Get-Command "wget" -ErrorAction SilentlyContinue) {
         & wget $ModelUrl -O $ModelPath
-    } else {
+    }
+    else {
         Write-Log "Brak curl oraz wget - uzywam Invoke-WebRequest"
         Invoke-WebRequest -Uri $ModelUrl -OutFile $ModelPath
     }
-} else {
+}
+else {
     Write-Log "Plik modelu juz istnieje - pomijam pobieranie"
 }
 
@@ -79,4 +82,5 @@ $Config | ConvertTo-Json -Depth 3 | Set-Content -Path $ConfigFile -Encoding UTF8
 Write-Log "Srodowisko LLM przygotowane"
 Write-Host "MODEL_PATH=$ModelPath"
 Write-Host "GPU_LAYERS=$GpuLayers"
-Write-Host "Konfiguracja zapisana w $ConfigFile"
+Write-Host ("Konfiguracja zapisana w {0}" -f $ConfigFile)
+
