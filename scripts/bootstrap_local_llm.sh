@@ -78,75 +78,100 @@ ensure_tar() {
             else
                 log "Brak tar – pobieranie busybox"
 
-            local arch="$(uname -m)"
-            local busybox_filename=""
-            local busybox_arch_slug="${arch}"
-            case "${arch}" in
-                x86_64|amd64)
-                    busybox_filename="busybox-x86_64"
-                    busybox_arch_slug="x86_64"
-                    ;;
-                aarch64|arm64)
-                    busybox_filename="busybox-aarch64"
-                    busybox_arch_slug="aarch64"
-                    ;;
-                *)
-                    echo "Błąd: brak wsparcia dla architektury ${arch} bez narzędzia tar" >&2
-                    return 1
-                    ;;
-            esac
+                local arch="$(uname -m)"
+                local -a busybox_file_candidates=()
+                local busybox_arch_slug="${arch}"
+                case "${arch}" in
+                    x86_64|amd64)
+                        busybox_file_candidates+=(
+                            "busybox-x86_64"
+                            "busybox-amd64"
+                            "busybox"
+                        )
+                        busybox_arch_slug="x86_64"
+                        ;;
+                    aarch64|arm64)
+                        busybox_file_candidates+=(
+                            "busybox-aarch64"
+                            "busybox-arm64"
+                            "busybox"
+                        )
+                        busybox_arch_slug="aarch64"
+                        ;;
+                    *)
+                        echo "Błąd: brak wsparcia dla architektury ${arch} bez narzędzia tar" >&2
+                        return 1
+                        ;;
+                esac
 
-            local -a busybox_urls=()
-            if [ -n "${LLM_BOOTSTRAP_BUSYBOX_URLS:-}" ]; then
-                while IFS= read -r line; do
-                    [ -n "${line}" ] && busybox_urls+=("${line}")
-                done <<EOF
+                if [ "${#busybox_file_candidates[@]}" -eq 0 ]; then
+                    busybox_file_candidates+=("busybox")
+                fi
+
+                local -a busybox_urls=()
+                if [ -n "${LLM_BOOTSTRAP_BUSYBOX_URLS:-}" ]; then
+                    while IFS= read -r line; do
+                        [ -n "${line}" ] && busybox_urls+=("${line}")
+                    done <<EOF
 ${LLM_BOOTSTRAP_BUSYBOX_URLS}
 EOF
-            fi
-
-            if [ "${#busybox_urls[@]}" -eq 0 ]; then
-                local -a busybox_versions=(
-                    "1.36.1"
-                    "1.36.0"
-                    "1.35.0"
-                    "1.34.1"
-                )
-
-                for version in "${busybox_versions[@]}"; do
-                    busybox_urls+=(
-                        "https://busybox.net/downloads/binaries/${version}-defconfig-multiarch/${busybox_filename}"
-                        "http://busybox.net/downloads/binaries/${version}-defconfig-multiarch/${busybox_filename}"
-                        "https://busybox.net/downloads/binaries/${version}/${busybox_filename}"
-                        "http://busybox.net/downloads/binaries/${version}/${busybox_filename}"
-                        "https://busybox.net/downloads/binaries/${version}-${busybox_arch_slug}-linux-musl/${busybox_filename}"
-                        "http://busybox.net/downloads/binaries/${version}-${busybox_arch_slug}-linux-musl/${busybox_filename}"
-                    )
-                done
-
-                busybox_urls+=(
-                    "https://frippery.org/files/busybox/${busybox_filename}"
-                    "https://raw.githubusercontent.com/andrew-d/static-binaries/master/${busybox_filename}"
-                    "https://raw.githubusercontent.com/moparisthebest/static-binaries/master/${busybox_filename}"
-                    "https://raw.githubusercontent.com/landley/busybox/master/${busybox_filename}"
-                    "https://raw.githubusercontent.com/mirror/busybox/master/${busybox_filename}"
-                )
-
-                if [ "${arch}" = "x86_64" ] || [ "${arch}" = "amd64" ]; then
-                    busybox_urls+=(
-                        "https://raw.githubusercontent.com/termux/termux-packages/master/packages/busybox-static/${busybox_filename}"
-                        "https://raw.githubusercontent.com/andrew-d/static-binaries/master/busybox-amd64"
-                        "https://raw.githubusercontent.com/moparisthebest/static-binaries/master/busybox-amd64"
-                    )
                 fi
 
-                if [ "${arch}" = "aarch64" ] || [ "${arch}" = "arm64" ]; then
-                    busybox_urls+=(
-                        "https://raw.githubusercontent.com/andrew-d/static-binaries/master/busybox-arm64"
-                        "https://raw.githubusercontent.com/moparisthebest/static-binaries/master/busybox-arm64"
+                if [ "${#busybox_urls[@]}" -eq 0 ]; then
+                    local -a busybox_versions=(
+                        "1.36.1"
+                        "1.36.0"
+                        "1.35.0"
+                        "1.34.1"
                     )
+
+                    local -a busybox_dir_templates=(
+                        "%s-defconfig-multiarch"
+                        "%s"
+                        "%s-${busybox_arch_slug}-linux-musl"
+                        "%s.${busybox_arch_slug}-linux-musl"
+                        "%s-${busybox_arch_slug}-linux-musl-static"
+                    )
+
+                    for version in "${busybox_versions[@]}"; do
+                        for dir_template in "${busybox_dir_templates[@]}"; do
+                            local dir=""
+                            dir="$(printf "${dir_template}" "${version}")"
+                            for file_candidate in "${busybox_file_candidates[@]}"; do
+                                busybox_urls+=(
+                                    "https://busybox.net/downloads/binaries/${dir}/${file_candidate}"
+                                    "http://busybox.net/downloads/binaries/${dir}/${file_candidate}"
+                                )
+                            done
+                        done
+                    done
+
+                    for file_candidate in "${busybox_file_candidates[@]}"; do
+                        busybox_urls+=(
+                            "https://frippery.org/files/busybox/${file_candidate}"
+                            "https://raw.githubusercontent.com/andrew-d/static-binaries/master/${file_candidate}"
+                            "https://raw.githubusercontent.com/moparisthebest/static-binaries/master/${file_candidate}"
+                            "https://raw.githubusercontent.com/landley/busybox/master/${file_candidate}"
+                            "https://raw.githubusercontent.com/mirror/busybox/master/${file_candidate}"
+                        )
+                    done
+
+                    if [ "${arch}" = "x86_64" ] || [ "${arch}" = "amd64" ]; then
+                        busybox_urls+=(
+                            "https://raw.githubusercontent.com/termux/termux-packages/master/packages/busybox-static/busybox-x86_64"
+                            "https://raw.githubusercontent.com/termux/termux-packages/master/packages/busybox-static/busybox"
+                        )
+                    fi
+
+                    if [ "${arch}" = "aarch64" ] || [ "${arch}" = "arm64" ]; then
+                        busybox_urls+=(
+                            "https://raw.githubusercontent.com/andrew-d/static-binaries/master/busybox-aarch64"
+                            "https://raw.githubusercontent.com/moparisthebest/static-binaries/master/busybox-aarch64"
+                            "https://raw.githubusercontent.com/termux/termux-packages/master/packages/busybox-static/busybox-aarch64"
+                            "https://raw.githubusercontent.com/termux/termux-packages/master/packages/busybox-static/busybox"
+                        )
+                    fi
                 fi
-            fi
 
                 local download_succeeded=0
                 for busybox_url in "${busybox_urls[@]}"; do
