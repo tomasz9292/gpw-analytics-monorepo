@@ -10,6 +10,7 @@ const GPU_LAYERS_REGEX = /^GPU_LAYERS=(.+)$/m;
 const SCRIPTS_DIR = path.resolve(process.cwd(), "..", "scripts");
 const BASH_SCRIPT = "bootstrap_local_llm.sh";
 const POWERSHELL_SCRIPT = "bootstrap_local_llm.ps1";
+const MAX_ERROR_SUMMARY_LINES = 6;
 
 export const runtime = "nodejs";
 
@@ -46,6 +47,38 @@ const createBootstrapCommand = (variant: LlmBootstrapVariant, scriptPath: string
         command: "bash",
         args: [scriptPath],
     } as const;
+};
+
+const sanitizeLog = (value: string | undefined): string => {
+    if (!value) {
+        return "";
+    }
+    return value
+        .split(/\r?\n/)
+        .map((line) => line.replace(/\s+$/u, ""))
+        .join("\n")
+        .trim();
+};
+
+const buildErrorSummary = (stdout: string, stderr: string): string | undefined => {
+    const candidates = `${stderr}\n${stdout}`
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+
+    for (let index = candidates.length - 1; index >= 0; index -= 1) {
+        const line = candidates[index];
+        if (/error|failed|błąd/i.test(line)) {
+            return line;
+        }
+    }
+
+    if (candidates.length === 0) {
+        return undefined;
+    }
+
+    const tail = candidates.slice(-MAX_ERROR_SUMMARY_LINES);
+    return tail.join(" \u2192 ");
 };
 
 export async function POST() {
@@ -111,22 +144,30 @@ export async function POST() {
         );
     }
 
+    const stdoutLog = sanitizeLog(stdout);
+    const stderrLog = sanitizeLog(stderr);
+
     if (exitCode !== 0) {
-        const message =
-            stderr.trim() ||
-            "Instalator lokalnego modelu LLM zakończył się błędem. Sprawdź logi serwera.";
+        const combinedLogs = [stdoutLog, stderrLog]
+            .filter((value) => value.length > 0)
+            .join("\n\n");
+        const summary =
+            buildErrorSummary(stdoutLog, stderrLog) ??
+            `Instalator lokalnego modelu LLM zakończył się z kodem ${exitCode}.`;
+        const message = `${summary} Jeśli problem będzie się powtarzał, sprawdź logi instalacji i konfigurację sieci.`;
         return NextResponse.json(
             {
                 error: message,
-                logs: stdout,
-                details: stderr,
+                logs: combinedLogs,
+                details: stderrLog || undefined,
+                exitCode,
             },
             { status: 500 }
         );
     }
 
-    const modelPath = extractValue(MODEL_PATH_REGEX, stdout);
-    const gpuLayersRaw = extractValue(GPU_LAYERS_REGEX, stdout);
+    const modelPath = extractValue(MODEL_PATH_REGEX, stdoutLog);
+    const gpuLayersRaw = extractValue(GPU_LAYERS_REGEX, stdoutLog);
     const gpuLayers =
         gpuLayersRaw && !Number.isNaN(Number(gpuLayersRaw))
             ? Number(gpuLayersRaw)
@@ -136,6 +177,6 @@ export async function POST() {
         variant,
         modelPath,
         gpuLayers,
-        logs: stdout,
+        logs: stdoutLog,
     });
 }
