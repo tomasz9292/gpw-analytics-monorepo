@@ -303,10 +303,11 @@ ensure_python() {
 
     if [ ! -d "${VENV_DIR}" ]; then
         log "Tworzenie wirtualnego środowiska za pomocą uv"
-        "${UV_BIN}" venv "${VENV_DIR}" >/dev/null 2>&1 || {
+        if ! "${UV_BIN}" venv "${VENV_DIR}"; then
             echo "Błąd: nie udało się utworzyć środowiska wirtualnego przez uv" >&2
+            echo "Sprawdź powyższe komunikaty uv, aby poznać szczegóły błędu." >&2
             return 1
-        }
+        fi
     fi
 
     PYTHON_BIN="${VENV_DIR}/bin/python"
