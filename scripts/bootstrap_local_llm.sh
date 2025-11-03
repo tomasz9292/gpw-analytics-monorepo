@@ -260,16 +260,19 @@ ensure_uv() {
     log "Brak lokalnego Python – pobieranie uv"
     mkdir -p "${uv_dir}"
 
-    local installer=(sh)
+    local -a install_env=(
+        "UV_INSTALL_DIR=${uv_dir}"
+        "UV_BIN_DIR=${uv_dir}"
+        "UV_LINK_MODE=copy"
+    )
+
     if command -v curl >/dev/null 2>&1; then
-        installer=(sh -s -- --install-dir "${uv_dir}" --bin-dir "${uv_dir}" --quiet)
-        if ! curl -fsSL https://astral.sh/uv/install.sh | "${installer[@]}"; then
+        if ! curl -fsSL https://astral.sh/uv/install.sh | env "${install_env[@]}" sh; then
             echo "Błąd: nie udało się pobrać uv" >&2
             return 1
         fi
     elif command -v wget >/dev/null 2>&1; then
-        installer=(sh -s -- --install-dir "${uv_dir}" --bin-dir "${uv_dir}" --quiet)
-        if ! wget -qO- https://astral.sh/uv/install.sh | "${installer[@]}"; then
+        if ! wget -qO- https://astral.sh/uv/install.sh | env "${install_env[@]}" sh; then
             echo "Błąd: nie udało się pobrać uv" >&2
             return 1
         fi
