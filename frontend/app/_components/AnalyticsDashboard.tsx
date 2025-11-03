@@ -82,6 +82,10 @@ type LlmBootstrapProcessError = Error & {
     logs?: string;
     details?: string;
     exitCode?: number;
+    errorSummary?: string;
+    probableCause?: string;
+    remediation?: string[];
+    errorCode?: string;
 };
 
 type LlmFeatureOption = {
@@ -12913,6 +12917,9 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
     const [llmBootstrapVariant, setLlmBootstrapVariant] =
         useState<LlmBootstrapVariant>("bash");
     const [llmBootstrapError, setLlmBootstrapError] = useState("");
+    const [llmBootstrapProbableCause, setLlmBootstrapProbableCause] = useState("");
+    const [llmBootstrapRemediation, setLlmBootstrapRemediation] = useState<string[]>([]);
+    const [llmBootstrapErrorCode, setLlmBootstrapErrorCode] = useState("");
     const detectBootstrapVariant = useCallback((): LlmBootstrapVariant => {
         if (typeof window === "undefined") {
             return "bash";
@@ -12997,6 +13004,9 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
     const handleBootstrapLocalLlm = useCallback(async () => {
         setLlmBootstrapStatus("downloading");
         setLlmBootstrapError("");
+        setLlmBootstrapProbableCause("");
+        setLlmBootstrapRemediation([]);
+        setLlmBootstrapErrorCode("");
         setLlmBootstrapLogs("");
         setLlmBootstrapExitCode(null);
 
@@ -13026,39 +13036,64 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                 exitCode?: unknown;
                 details?: unknown;
                 error?: unknown;
+                ok?: unknown;
+                errorSummary?: unknown;
+                probableCause?: unknown;
+                remediation?: unknown;
+                errorCode?: unknown;
             };
 
-            if (!response.ok) {
-                let message = "Nie udało się przygotować lokalnego środowiska LLM.";
-                if (typeof data?.error === "string" && data.error.trim().length > 0) {
-                    message = data.error.trim();
-                }
-                const error = new Error(message) as LlmBootstrapProcessError & {
-                    details?: unknown;
-                };
-                if (typeof data.logs === "string") {
-                    error.logs = data.logs;
-                }
-                if (typeof data.details === "string") {
-                    error.details = data.details;
-                }
-                if (typeof data.exitCode === "number") {
-                    error.exitCode = data.exitCode;
-                }
-                throw error;
+            const isOkFlag = typeof data.ok === "boolean" ? data.ok : true;
+
+            if (!response.ok || !isOkFlag) {
+                const summaryCandidates = [
+                    typeof data.errorSummary === "string" ? data.errorSummary.trim() : "",
+                    typeof data.error === "string" ? data.error.trim() : "",
+                ].filter((item) => item.length > 0);
+                const message =
+                    summaryCandidates[0] ?? "Nie udało się przygotować lokalnego środowiska LLM.";
+                setLlmBootstrapStatus("error");
+                setLlmBootstrapError(message);
+                setLlmBootstrapProbableCause(
+                    typeof data.probableCause === "string" ? data.probableCause.trim() : ""
+                );
+                const remediationList = Array.isArray(data.remediation)
+                    ? data.remediation
+                          .map((item) => (typeof item === "string" ? item.trim() : ""))
+                          .filter((item) => item.length > 0)
+                    : [];
+                setLlmBootstrapRemediation(remediationList);
+                setLlmBootstrapErrorCode(
+                    typeof data.errorCode === "string" && data.errorCode.trim().length > 0
+                        ? data.errorCode.trim()
+                        : ""
+                );
+                const logsParts = [
+                    typeof data.logs === "string" ? data.logs.trim() : "",
+                    typeof data.details === "string" ? data.details.trim() : "",
+                ].filter((value) => value.length > 0);
+                setLlmBootstrapLogs(logsParts.join("\n\n"));
+                setLlmBootstrapExitCode(
+                    typeof data.exitCode === "number" ? data.exitCode : null
+                );
+                return;
             }
 
-            if (typeof data.logs === "string" && data.logs.trim().length > 0) {
-                console.info(
-                    "Logi instalatora lokalnego LLM:\n",
-                    data.logs.trim()
-                );
-                setLlmBootstrapLogs(data.logs.trim());
-                setLlmBootstrapExitCode(0);
+            const logsValue =
+                typeof data.logs === "string" && data.logs.trim().length > 0
+                    ? data.logs.trim()
+                    : "";
+            if (logsValue) {
+                console.info("Logi instalatora lokalnego LLM:\n", logsValue);
+                setLlmBootstrapLogs(logsValue);
             } else {
                 setLlmBootstrapLogs("");
-                setLlmBootstrapExitCode(0);
             }
+            setLlmBootstrapExitCode(0);
+            setLlmBootstrapError("");
+            setLlmBootstrapProbableCause("");
+            setLlmBootstrapRemediation([]);
+            setLlmBootstrapErrorCode("");
 
             const variant = data.variant ?? detectBootstrapVariant();
             setLlmBootstrapVariant(variant);
@@ -13099,6 +13134,20 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
             setLlmBootstrapLogs(combinedLogs);
             setLlmBootstrapExitCode(
                 typeof meta?.exitCode === "number" ? meta.exitCode : null
+            );
+            setLlmBootstrapProbableCause(
+                typeof meta?.probableCause === "string" ? meta.probableCause.trim() : ""
+            );
+            const remediationFromMeta = Array.isArray(meta?.remediation)
+                ? meta?.remediation
+                      .map((item) => (typeof item === "string" ? item.trim() : ""))
+                      .filter((item) => item.length > 0)
+                : [];
+            setLlmBootstrapRemediation(remediationFromMeta);
+            setLlmBootstrapErrorCode(
+                typeof meta?.errorCode === "string" && meta.errorCode.trim().length > 0
+                    ? meta.errorCode.trim()
+                    : ""
             );
         }
     }, [detectBootstrapVariant]);
@@ -19917,11 +19966,43 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                                 Środowisko lokalnego modelu LLM zostało przygotowane. Upewnij się, że skrypt zakończył się powodzeniem; w przeciwnym razie uzupełnij pola ręcznie.
                                                             </div>
                                                         )}
-                                                        {llmBootstrapStatus === "error" && (
-                                                            <div className="mt-3 rounded-lg border border-negative/30 bg-negative/10 p-3 text-[11px] text-negative">
-                                                                {llmBootstrapError}
-                                                            </div>
-                                                        )}
+                    {llmBootstrapStatus === "error" && (
+                        <div className="mt-3 rounded-lg border border-negative/30 bg-negative/10 p-3 text-[11px] text-negative">
+                            <div className="space-y-2">
+                                <div className="text-xs font-semibold uppercase tracking-wide">
+                                    Co się wykrzaczyło (diagnoza)
+                                </div>
+                                {llmBootstrapError && (
+                                    <p className="leading-relaxed">{llmBootstrapError}</p>
+                                )}
+                                {llmBootstrapProbableCause && (
+                                    <p className="leading-relaxed">
+                                        <span className="font-semibold">Prawdopodobna przyczyna:</span>{" "}
+                                        {llmBootstrapProbableCause}
+                                    </p>
+                                )}
+                                {llmBootstrapRemediation.length > 0 && (
+                                    <div className="space-y-1">
+                                        <div className="font-semibold">Jak naprawić:</div>
+                                        <ul className="list-disc space-y-1 pl-4 text-negative/90">
+                                            {llmBootstrapRemediation.map((item, index) => (
+                                                <li key={`${item}-${index}`}>{item}</li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                )}
+                                {(llmBootstrapErrorCode ||
+                                    (llmBootstrapExitCode !== null && llmBootstrapExitCode !== 0)) && (
+                                    <div className="text-[10px] uppercase tracking-wide text-negative/80">
+                                        Kod błędu:{" "}
+                                        {llmBootstrapErrorCode
+                                            ? llmBootstrapErrorCode.toLowerCase()
+                                            : "(brak)"}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
                                                         {(llmBootstrapLogs ||
                                                             (llmBootstrapExitCode !== null &&
                                                                 llmBootstrapExitCode !== 0)) &&
