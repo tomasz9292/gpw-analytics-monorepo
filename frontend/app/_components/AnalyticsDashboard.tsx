@@ -78,6 +78,12 @@ const LLM_BOOTSTRAP_VARIANT_LABELS: Record<LlmBootstrapVariant, string> = {
     powershell: "Windows / PowerShell",
 };
 
+type LlmBootstrapProcessError = Error & {
+    logs?: string;
+    details?: string;
+    exitCode?: number;
+};
+
 type LlmFeatureOption = {
     name: string;
     label: string;
@@ -12942,6 +12948,8 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
     const [llmLoading, setLlmLoading] = useState(false);
     const [llmError, setLlmError] = useState("");
     const [llmResult, setLlmResult] = useState<PortfolioOptimisationResponse | null>(null);
+    const [llmBootstrapLogs, setLlmBootstrapLogs] = useState("");
+    const [llmBootstrapExitCode, setLlmBootstrapExitCode] = useState<number | null>(null);
     const llmSelectedFeatureCount = useMemo(
         () => Object.values(llmFeatureState).filter((item) => item.enabled).length,
         [llmFeatureState]
@@ -12989,6 +12997,8 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
     const handleBootstrapLocalLlm = useCallback(async () => {
         setLlmBootstrapStatus("downloading");
         setLlmBootstrapError("");
+        setLlmBootstrapLogs("");
+        setLlmBootstrapExitCode(null);
 
         try {
             const response = await fetch("/api/llm/bootstrap", {
@@ -13008,31 +13018,46 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                 }
             }
 
-            if (!response.ok) {
-                let message = "Nie udało się przygotować lokalnego środowiska LLM.";
-                if (
-                    payload &&
-                    typeof payload === "object" &&
-                    "error" in payload &&
-                    typeof (payload as { error?: unknown }).error === "string"
-                ) {
-                    message = (payload as { error: string }).error;
-                }
-                throw new Error(message);
-            }
-
             const data = (payload ?? {}) as {
                 variant?: LlmBootstrapVariant;
                 modelPath?: unknown;
                 gpuLayers?: unknown;
                 logs?: unknown;
+                exitCode?: unknown;
+                details?: unknown;
+                error?: unknown;
             };
+
+            if (!response.ok) {
+                let message = "Nie udało się przygotować lokalnego środowiska LLM.";
+                if (typeof data?.error === "string" && data.error.trim().length > 0) {
+                    message = data.error.trim();
+                }
+                const error = new Error(message) as LlmBootstrapProcessError & {
+                    details?: unknown;
+                };
+                if (typeof data.logs === "string") {
+                    error.logs = data.logs;
+                }
+                if (typeof data.details === "string") {
+                    error.details = data.details;
+                }
+                if (typeof data.exitCode === "number") {
+                    error.exitCode = data.exitCode;
+                }
+                throw error;
+            }
 
             if (typeof data.logs === "string" && data.logs.trim().length > 0) {
                 console.info(
                     "Logi instalatora lokalnego LLM:\n",
                     data.logs.trim()
                 );
+                setLlmBootstrapLogs(data.logs.trim());
+                setLlmBootstrapExitCode(0);
+            } else {
+                setLlmBootstrapLogs("");
+                setLlmBootstrapExitCode(0);
             }
 
             const variant = data.variant ?? detectBootstrapVariant();
@@ -13063,6 +13088,17 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                     error,
                     "Nie udało się przygotować lokalnego środowiska LLM."
                 )
+            );
+            const meta = error as Partial<LlmBootstrapProcessError>;
+            const logs = typeof meta?.logs === "string" ? meta.logs.trim() : "";
+            const details =
+                typeof meta?.details === "string" ? meta.details.trim() : "";
+            const combinedLogs = [logs, details]
+                .filter((value) => value.length > 0)
+                .join("\n\n");
+            setLlmBootstrapLogs(combinedLogs);
+            setLlmBootstrapExitCode(
+                typeof meta?.exitCode === "number" ? meta.exitCode : null
             );
         }
     }, [detectBootstrapVariant]);
@@ -19885,6 +19921,24 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                             <div className="mt-3 rounded-lg border border-negative/30 bg-negative/10 p-3 text-[11px] text-negative">
                                                                 {llmBootstrapError}
                                                             </div>
+                                                        )}
+                                                        {(llmBootstrapLogs ||
+                                                            (llmBootstrapExitCode !== null &&
+                                                                llmBootstrapExitCode !== 0)) &&
+                                                            llmBootstrapStatus !== "downloading" && (
+                                                            <details className="mt-3 rounded-lg border border-soft bg-white/60 p-3 text-[11px] text-primary shadow-sm">
+                                                                <summary className="cursor-pointer text-xs font-semibold">
+                                                                    Logi instalatora lokalnego LLM
+                                                                </summary>
+                                                                <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words text-[10px] leading-relaxed text-neutral">
+                                                                    {llmBootstrapLogs || "(brak dodatkowych logów)"}
+                                                                </pre>
+                                                                {llmBootstrapExitCode !== null && (
+                                                                    <div className="mt-2 text-[10px] uppercase tracking-wide text-subtle">
+                                                                        Kod zakończenia procesu: {llmBootstrapExitCode}
+                                                                    </div>
+                                                                )}
+                                                            </details>
                                                         )}
                                                     </div>
                                                     <div className="grid gap-3 md:grid-cols-2">
