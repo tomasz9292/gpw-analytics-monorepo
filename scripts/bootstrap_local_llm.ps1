@@ -83,4 +83,5 @@ Write-Log "Srodowisko LLM przygotowane"
 Write-Host "MODEL_PATH=$ModelPath"
 Write-Host "GPU_LAYERS=$GpuLayers"
 Write-Host ("Konfiguracja zapisana w {0}" -f $ConfigFile)
+Write-Host "LLM_OK=1"
 
