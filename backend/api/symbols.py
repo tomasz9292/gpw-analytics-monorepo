@@ -84,6 +84,22 @@ def pretty_symbol(raw: str) -> str:
     return ALIASES_RAW_TO_WA.get(raw, raw)
 
 
+def to_base_symbol(raw: str) -> str:
+    """Zwraca podstawowy ticker GPW dla kanonicznego symbolu."""
+
+    cleaned = raw.strip().upper()
+    alias = ALIASES_RAW_TO_WA.get(cleaned)
+    if alias:
+        base = alias.split(".", 1)[0].strip()
+        if base:
+            return base.upper()
+    if "." in cleaned:
+        base = cleaned.split(".", 1)[0].strip()
+        if base:
+            return base.upper()
+    return cleaned
+
+
 def normalize_input_symbol(s: str) -> str:
     """
     Dla wejścia użytkownika zwraca bazowy ticker używany przy pobieraniu
@@ -138,5 +154,6 @@ __all__ = [
     "DEFAULT_OHLC_SYNC_SYMBOLS",
     "normalize_input_symbol",
     "pretty_symbol",
+    "to_base_symbol",
     "to_stooq_symbol",
 ]

@@ -59,6 +59,7 @@ from .symbols import (
     DEFAULT_OHLC_SYNC_SYMBOLS,
     normalize_input_symbol,
     pretty_symbol,
+    to_base_symbol,
 )
 from .windows_agent import router as windows_agent_router
 from .portfolio import (
@@ -1778,8 +1779,11 @@ class OhlcSyncRequest(BaseModel):
             if item is None:
                 continue
             normalized = normalize_input_symbol(str(item))
-            if normalized:
-                symbols.append(normalized)
+            if not normalized:
+                continue
+            base_symbol = to_base_symbol(normalized)
+            if base_symbol:
+                symbols.append(base_symbol)
         return symbols or None
 
     @field_validator("start", mode="before")
@@ -2468,8 +2472,10 @@ def _build_company_name_lookup(ch_client) -> Dict[str, _CompanyNameLookupEntry]:
         if not normalized_raw:
             continue
 
+        base_symbol = to_base_symbol(normalized_raw)
         pretty = pretty_symbol(normalized_raw)
         base = pretty.split(".", 1)[0] if "." in pretty else pretty
+        display_symbol = pretty_symbol(base_symbol)
 
         resolved_names: List[str] = []
         for column in name_columns:
@@ -2542,8 +2548,8 @@ def _build_company_name_lookup(ch_client) -> Dict[str, _CompanyNameLookupEntry]:
             )
 
         entry: _CompanyNameLookupEntry = {
-            "raw_symbol": normalized_raw,
-            "symbol": pretty,
+            "raw_symbol": base_symbol,
+            "symbol": display_symbol,
             "name": preferred_name,
             "names": deduplicated_names,
         }
@@ -2553,6 +2559,8 @@ def _build_company_name_lookup(ch_client) -> Dict[str, _CompanyNameLookupEntry]:
             pretty,
             base,
             raw_symbol,
+            base_symbol,
+            display_symbol,
         }
 
         for alias in deduplicated_names:
@@ -3803,10 +3811,11 @@ def _perform_ohlc_sync(
         normalized = normalize_input_symbol(raw_symbol)
         if not normalized:
             continue
-        if normalized in seen:
+        base_symbol = to_base_symbol(normalized)
+        if base_symbol in seen:
             continue
-        seen.add(normalized)
-        deduplicated.append(normalized)
+        seen.add(base_symbol)
+        deduplicated.append(base_symbol)
 
     if not deduplicated:
         message = "Brak poprawnych symboli do synchronizacji"
