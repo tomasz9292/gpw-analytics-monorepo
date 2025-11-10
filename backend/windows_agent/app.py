@@ -18,6 +18,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 import clickhouse_connect
 import keyring
@@ -1060,12 +1061,13 @@ class App:
             self._log("Użyto listy domyślnej – nie udało się pobrać symboli z bazy.")
 
     def _save_config(self) -> None:
+        host, port, scheme = self._normalize_clickhouse_target()
         config = DbConfig(
-            host=self.db_host_var.get().strip() or "localhost",
-            port=int(self.db_port_var.get() or 8123),
+            host=host,
+            port=port,
             database=self.db_database_var.get().strip() or "default",
             username=self.db_username_var.get().strip() or "default",
-            use_https=bool(self.db_https_var.get()),
+            use_https=scheme == "https",
             table_ohlc=self.db_table_ohlc_var.get().strip() or "ohlc",
             table_companies=self.db_table_companies_var.get().strip() or "companies",
             table_news=self.db_table_news_var.get().strip() or "company_news",
@@ -1848,11 +1850,9 @@ class App:
             client.close()
 
     def _create_clickhouse_client(self) -> ClickHouseClient:
-        host = self.db_host_var.get().strip() or "localhost"
-        port = int(self.db_port_var.get() or 8123)
+        host, port, scheme = self._normalize_clickhouse_target()
         database = self.db_database_var.get().strip() or "default"
         username = self.db_username_var.get().strip() or "default"
-        scheme = "https" if self.db_https_var.get() else "http"
         password = self.db_password_cache or keyring.get_password(KEYRING_SERVICE, username) or ""
         if not password:
             raise OperationalError("Brak hasła w magazynie poświadczeń. Wybierz 'Wprowadź hasło'.")
@@ -1864,6 +1864,34 @@ class App:
             database=database,
             interface="https" if scheme == "https" else "http",
         )
+
+    def _normalize_clickhouse_target(self) -> Tuple[str, int, str]:
+        raw_host = (self.db_host_var.get() or "").strip()
+        raw_port = (self.db_port_var.get() or "").strip()
+        default_host = "localhost"
+        port = int(raw_port) if raw_port.isdigit() else 8123
+        use_https = bool(self.db_https_var.get())
+        scheme = "https" if use_https else "http"
+
+        if raw_host:
+            parsed = urlparse(raw_host if "://" in raw_host else f"{scheme}://{raw_host}")
+            if parsed.scheme in ("http", "https"):
+                scheme = parsed.scheme
+                use_https = scheme == "https"
+            host = parsed.hostname or raw_host
+            if parsed.port:
+                port = parsed.port
+        else:
+            host = default_host
+
+        if host != raw_host and raw_host:
+            self.db_host_var.set(host)
+        if str(port) != raw_port and raw_port:
+            self.db_port_var.set(port)
+        if use_https != bool(self.db_https_var.get()):
+            self.db_https_var.set(use_https)
+
+        return host, port, scheme
 
     # ------------------------------------------------------------------
     @staticmethod
