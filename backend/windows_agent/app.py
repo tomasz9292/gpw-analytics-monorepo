@@ -23,8 +23,31 @@ from urllib.parse import urlparse
 import clickhouse_connect
 import keyring
 import requests
-from clickhouse_connect.driver import Client as ClickHouseClient
-from clickhouse_connect.driver.exceptions import OperationalError
+
+try:
+    # Starsze wersje clickhouse-connect (z modułem driver)
+    from clickhouse_connect.driver import Client as ClickHouseClient
+    from clickhouse_connect.driver.exceptions import OperationalError
+except ImportError:
+    # Nowsze wersje: używamy oficjalnego get_client
+    from clickhouse_connect import get_client as _get_client
+
+    class ClickHouseClient:
+        """
+        Minimalny wrapper, żeby kod agenta działał niezależnie od struktury pakietu.
+        Tworzy klienta przez clickhouse_connect.get_client(**kwargs).
+        """
+
+        def __init__(self, **kwargs):
+            self._client = _get_client(**kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self._client, name)
+
+    class OperationalError(Exception):
+        """Fallback gdy brak konkretnej klasy błędu w tej wersji pakietu."""
+
+        pass
 from tkinter import (
     BooleanVar,
     END,
