@@ -1043,6 +1043,19 @@ if _cors_origins == "*":
 else:
     CORS_ALLOW_ORIGINS = [origin.strip() for origin in _cors_origins.split(",") if origin.strip()]
 
+_cors_origin_regex = os.getenv("CORS_ALLOW_ORIGIN_REGEX")
+_cors_allow_credentials = (
+    os.getenv("CORS_ALLOW_CREDENTIALS", "true").strip().lower() in {"1", "true", "yes"}
+)
+
+if CORS_ALLOW_ORIGINS == ["*"]:
+    # Starlette nie pozwala łączyć `allow_credentials=True` z listą `['*']`.
+    # Gdy użytkownik chce dopuścić dowolny origin, stosujemy regex i czyścimy listę.
+    CORS_ALLOW_ORIGIN_REGEX: Optional[str] = _cors_origin_regex or ".*"
+    CORS_ALLOW_ORIGINS = []
+else:
+    CORS_ALLOW_ORIGIN_REGEX = _cors_origin_regex
+
 
 # Cache konfiguracji klienta ClickHouse + klienci per wątek
 _CH_CLIENT_KWARGS = None
@@ -1507,12 +1520,9 @@ OHLC_SYNC_PROGRESS_TRACKER = OhlcSyncProgressTracker()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://gpw-frontend.vercel.app",
-        "http://localhost:3000",
-        "*",  # opcjonalnie na czas testów
-    ],
-    allow_credentials=True,
+    allow_origins=CORS_ALLOW_ORIGINS,
+    allow_origin_regex=CORS_ALLOW_ORIGIN_REGEX,
+    allow_credentials=_cors_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
