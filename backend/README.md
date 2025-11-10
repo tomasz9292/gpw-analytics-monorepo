@@ -98,6 +98,20 @@ export CLICKHOUSE_PASSWORD="<haslo>"
   przekazanej konfiguracji. Aktualne ustawienia można podejrzeć i zresetować
   do wartości środowiskowych tym samym panelem.
 
+### Konfiguracja CORS
+
+Backend domyślnie dopuszcza zapytania z dowolnego originu. W środowisku
+produkcyjnym warto zawęzić listę poprzez zmienną `CORS_ALLOW_ORIGINS`, np.:
+
+```bash
+export CORS_ALLOW_ORIGINS="https://gpw-frontend.vercel.app,https://twoj-panel.vercel.app"
+```
+
+Jeżeli chcesz użyć wyrażeń regularnych (np. `https://*.vercel.app`), skorzystaj
+ze zmiennej `CORS_ALLOW_ORIGIN_REGEX`. Dla zapytań wymagających ciasteczek
+(`credentials`) można włączyć bądź wyłączyć nagłówki poprzez
+`CORS_ALLOW_CREDENTIALS` (domyślnie `true`).
+
 ## Narzędzia pomocnicze
 
 ### Lista symboli z `_list_candidate_symbols`
