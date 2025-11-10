@@ -1891,7 +1891,12 @@ class App:
 
     def _normalize_clickhouse_target(self) -> Tuple[str, int, str]:
         raw_host = (self.db_host_var.get() or "").strip()
-        raw_port = (self.db_port_var.get() or "").strip()
+        # db_port_var może zwrócić int; rzutujemy na string, żeby uniknąć błędu `.strip()` na int
+        port_value = self.db_port_var.get()
+        if port_value is None:
+            raw_port = ""
+        else:
+            raw_port = str(port_value).strip()
         default_host = "localhost"
         port = int(raw_port) if raw_port.isdigit() else 8123
         use_https = bool(self.db_https_var.get())
