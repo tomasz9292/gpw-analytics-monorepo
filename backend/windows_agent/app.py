@@ -1853,9 +1853,10 @@ class App:
         host, port, scheme = self._normalize_clickhouse_target()
         database = self.db_database_var.get().strip() or "default"
         username = self.db_username_var.get().strip() or "default"
-        password = self.db_password_cache or keyring.get_password(KEYRING_SERVICE, username) or ""
-        if not password:
-            raise OperationalError("Brak hasła w magazynie poświadczeń. Wybierz 'Wprowadź hasło'.")
+        password = self.db_password_cache
+        if password is None:
+            stored_password = keyring.get_password(KEYRING_SERVICE, username)
+            password = stored_password if stored_password is not None else ""
         return clickhouse_connect.get_client(
             host=host,
             port=port,
