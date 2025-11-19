@@ -3,11 +3,13 @@ ARG NODE_VERSION=20
 ARG NEXT_PUBLIC_API_BASE=http://backend:8000
 
 FROM node:${NODE_VERSION}-bullseye AS deps
+ARG NEXT_PUBLIC_API_BASE
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 
 FROM node:${NODE_VERSION}-bullseye AS builder
+ARG NEXT_PUBLIC_API_BASE
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1 \
     NODE_ENV=production \
@@ -17,6 +19,7 @@ COPY . .
 RUN npm run build
 
 FROM node:${NODE_VERSION}-bullseye AS runner
+ARG NEXT_PUBLIC_API_BASE
 WORKDIR /app
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
