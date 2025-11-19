@@ -20,12 +20,10 @@ FROM node:${NODE_VERSION}-bullseye AS runner
 WORKDIR /app
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
-    NEXT_PUBLIC_API_BASE=${NEXT_PUBLIC_API_BASE} \
-    PORT=3000
+    NEXT_PUBLIC_API_BASE=${NEXT_PUBLIC_API_BASE}
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
-COPY --from=builder /app/.next/standalone ./
-COPY --from=builder /app/.next/static ./.next/static
-
 EXPOSE 3000
-
-CMD ["sh", "-c", "node server.js"]
+CMD ["npm", "run", "start"]

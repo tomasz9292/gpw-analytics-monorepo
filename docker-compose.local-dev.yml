@@ -10,12 +10,16 @@ services:
       - "${CLICKHOUSE_TCP_PORT:-9000}:9000"
     environment:
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
-      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse}
       CLICKHOUSE_DB: ${CLICKHOUSE_DATABASE:-gpw}
     volumes:
       - ./.docker/clickhouse-data:/var/lib/clickhouse
     healthcheck:
-      test: ["CMD-SHELL", "clickhouse-client --host localhost --query 'SELECT 1'"]
+      test:
+        [
+          "CMD-SHELL",
+          "clickhouse-client --host localhost --user ${CLICKHOUSE_USER:-default} --password ${CLICKHOUSE_PASSWORD:-clickhouse} --query 'SELECT 1'",
+        ]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -32,12 +36,12 @@ services:
       - .env.local
     environment:
       BACKEND_PORT: ${BACKEND_PORT:-8000}
-      CLICKHOUSE_URL: ${CLICKHOUSE_URL:-http://db:8123/gpw}
+      CLICKHOUSE_URL: ${CLICKHOUSE_URL:-http://default:clickhouse@db:8123/gpw}
       CLICKHOUSE_HOST: ${CLICKHOUSE_HOST:-db}
       CLICKHOUSE_PORT: ${CLICKHOUSE_PORT:-9000}
       CLICKHOUSE_DATABASE: ${CLICKHOUSE_DATABASE:-gpw}
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
-      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse}
       CLICKHOUSE_SECURE: ${CLICKHOUSE_SECURE:-false}
       CLICKHOUSE_VERIFY: ${CLICKHOUSE_VERIFY:-false}
     ports:

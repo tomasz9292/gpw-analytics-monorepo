@@ -20,7 +20,7 @@ Po kilku chwilach usługi będą dostępne pod adresami:
 | ---------- | -------------------------------------------- |
 | Frontend   | http://localhost:3000                        |
 | Backend API| http://localhost:8000/api/admin/ping         |
-| ClickHouse | http://localhost:8123                        |
+| ClickHouse | http://localhost:8123 (login `default` / hasło `clickhouse`) |
 
 Jeśli potrzebujesz innych portów lub poświadczeń, zaktualizuj `.env.local`
 (wartości domyślne znajdują się w `.env.local.example`).
