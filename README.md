@@ -2,6 +2,29 @@
 
 ## Development
 
+### Lokalny start w Dockerze ("one click")
+
+Minimalne wymagania to działający Docker Desktop (lub Docker Engine + `docker compose`).
+Po świeżym `git clone` wykonaj:
+
+1. `cd gpw-analytics-monorepo`
+2. Jedno polecenie dla swojego systemu:
+   - Linux/macOS: `./scripts/run_local_env.sh`
+   - Windows: `powershell -ExecutionPolicy Bypass -File .\\scripts\\run_local_env.ps1`
+
+Skrypty automatycznie kopiują `.env.local.example` → `.env.local` przy pierwszym uruchomieniu
+i startują `docker compose -f docker-compose.local-dev.yml up --build`.
+Po kilku chwilach usługi będą dostępne pod adresami:
+
+| Komponent  | Adres lokalny                                |
+| ---------- | -------------------------------------------- |
+| Frontend   | http://localhost:3000                        |
+| Backend API| http://localhost:8000/api/admin/ping         |
+| ClickHouse | http://localhost:8123 (login `default` / hasło `clickhouse`) |
+
+Jeśli potrzebujesz innych portów lub poświadczeń, zaktualizuj `.env.local`
+(wartości domyślne znajdują się w `.env.local.example`).
+
 ### Cloning the repository locally
 
 If the codebase is currently only on GitHub and you need to create a working copy on your computer, you can use the helper script provided in `scripts/setup_local_repo.py`:
