@@ -39,6 +39,10 @@ export type StoredScoreTemplateRule = {
     label?: string | null;
     transform?: "raw" | "zscore" | "percentile" | "";
     lookbackDays?: number | null;
+    min?: number | null;
+    max?: number | null;
+    scoring?: { type: "linear_clamped"; worst: number; best: number } | null;
+    normalize?: "none" | "percentile" | null;
 };
 
 export type StoredScoreTemplate = {
@@ -282,7 +286,14 @@ const normalizeRule = (rule: unknown): StoredScoreBuilderRule | null => {
 
 const normalizeTemplateRule = (rule: unknown): StoredScoreTemplateRule | null => {
     if (!rule || typeof rule !== "object") return null;
-    const candidate = rule as Partial<StoredScoreTemplateRule>;
+    
+    const candidate = rule as Partial<StoredScoreTemplateRule> & { 
+        min?: unknown; 
+        max?: unknown; 
+        scoring?: unknown; 
+        normalize?: unknown; 
+    };
+    
     const metric = normalizeString(candidate.metric);
     if (!metric) return null;
     const direction = candidate.direction === "asc" ? "asc" : "desc";
@@ -292,6 +303,30 @@ const normalizeTemplateRule = (rule: unknown): StoredScoreTemplateRule | null =>
         (candidate as { lookback_days?: unknown }).lookback_days ??
         (candidate as { lookback?: unknown }).lookback;
     const lookbackDays = normalizeOptionalNumber(lookbackCandidate);
+
+    const minValue = normalizeOptionalNumber(candidate.min);
+    const maxValue = normalizeOptionalNumber(candidate.max);
+    
+    let scoring: { type: "linear_clamped"; worst: number; best: number } | null = null;
+    
+    if (
+        candidate.scoring &&
+        typeof candidate.scoring === "object"
+    ) {
+        const s = candidate.scoring as Record<string, unknown>;
+        if (s.type === "linear_clamped") {
+            scoring = {
+                type: "linear_clamped",
+                worst: normalizeNumber(s.worst),
+                best: normalizeNumber(s.best),
+            };
+        }
+    }
+    
+    const normalizeRaw = String(candidate.normalize || "").trim();
+    const normalize =
+        normalizeRaw === "percentile" ? "percentile" : normalizeRaw === "none" ? "none" : null;
+
     return {
         metric,
         direction,
@@ -304,6 +339,10 @@ const normalizeTemplateRule = (rule: unknown): StoredScoreTemplateRule | null =>
                 ? "percentile"
                 : "raw",
         lookbackDays: lookbackDays ?? undefined,
+        min: minValue,
+        max: maxValue,
+        scoring,
+        normalize,
     };
 };
 

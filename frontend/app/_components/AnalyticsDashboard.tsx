@@ -1589,8 +1589,37 @@ const toTemplateRule = (rule: ScoreBuilderRule): ScoreTemplateRule => {
         rule.label ??
         option?.label ??
         rule.metric;
-    const minValue = parseOptionalNumber(rule.min);
-    const maxValue = parseOptionalNumber(rule.max);
+
+    const rawMin = parseOptionalNumber(rule.min);
+    const rawMax = parseOptionalNumber(rule.max);
+    
+    let scoring: ScoreTemplateRule["scoring"] = undefined;
+    let min_value: number | undefined | null = rawMin;
+    let max_value: number | undefined | null = rawMax;
+
+    if (option?.backendMetric === "price_change") {
+        let worst = clampNumber(rawMin ?? 0, -1000, 1000);
+        let best = clampNumber(rawMax ?? 100, -1000, 1000);
+        if (best <= worst) {
+            if (worst >= 1000) {
+                worst = 999.999;
+                best = 1000;
+            } else {
+                best = Math.min(1000, worst + 0.0001);
+            }
+        }
+        scoring = {
+            type: "linear_clamped",
+            worst: worst / 100.0,
+            best: best / 100.0,
+        };
+        min_value = undefined;
+        max_value = undefined;
+    } else if (option && PERCENT_BASED_SCORE_METRICS.has(option.backendMetric)) {
+        if (typeof rawMin === "number") min_value = rawMin / 100.0;
+        if (typeof rawMax === "number") max_value = rawMax / 100.0;
+    }
+
     return {
         metric: rule.metric,
         weight: Number(rule.weight) || 0,
@@ -1598,8 +1627,10 @@ const toTemplateRule = (rule: ScoreBuilderRule): ScoreTemplateRule => {
         label: label ?? null,
         transform: rule.transform ?? "raw",
         lookbackDays,
-        min: minValue,
-        max: maxValue,
+        min: min_value,
+        max: max_value,
+        scoring,
+        normalize: rule.transform === "percentile" ? "percentile" : "none",
     };
 };
 
@@ -1612,16 +1643,38 @@ const fromTemplateRules = (rules: ScoreTemplateRule[]): ScoreBuilderRule[] =>
             rule.label ??
             option?.label ??
             rule.metric;
+        
+        let minStr: string | undefined;
+        let maxStr: string | undefined;
+        const isPercent = option && PERCENT_BASED_SCORE_METRICS.has(option.backendMetric);
+
+        if (rule.scoring?.type === "linear_clamped") {
+            // Przywracamy procenty ze scoringu
+            const w = rule.scoring.worst * 100;
+            const b = rule.scoring.best * 100;
+            minStr = Number.isFinite(w) ? String(parseFloat(w.toFixed(4))) : undefined;
+            maxStr = Number.isFinite(b) ? String(parseFloat(b.toFixed(4))) : undefined;
+        } else {
+            if (typeof rule.min === "number") {
+                const val = isPercent ? rule.min * 100 : rule.min;
+                minStr = String(parseFloat(val.toFixed(4)));
+            }
+            if (typeof rule.max === "number") {
+                const val = isPercent ? rule.max * 100 : rule.max;
+                maxStr = String(parseFloat(val.toFixed(4)));
+            }
+        }
+
         return {
             id: createRuleId(),
             metric: rule.metric,
             weight: Number(rule.weight) || 0,
             direction: rule.direction === "asc" ? "asc" : "desc",
             label,
-            transform: rule.transform ?? "raw",
+            transform: rule.normalize === "percentile" || rule.transform === "percentile" ? "percentile" : "raw",
             lookbackDays,
-            min: stringifyOptionalNumber(rule.min),
-            max: stringifyOptionalNumber(rule.max),
+            min: minStr,
+            max: maxStr,
         };
     });
 

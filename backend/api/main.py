@@ -6396,7 +6396,15 @@ def _run_score_preview(req: ScorePreviewRequest) -> ScorePreviewResponse:
 
     candidates = _list_candidate_symbols(ch, auto_config.filters, as_of=as_of_date)
     if not candidates:
-        raise HTTPException(404, "Brak symboli do oceny")
+        # Zamiast błędu 404 zwracamy pusty wynik, aby frontend nie panikował
+        return ScorePreviewResponse(
+            name=req.name,
+            as_of=as_of_date.isoformat(),
+            universe_count=0,
+            rows=[],
+            missing=[],
+            meta={"info": "Brak symboli do oceny w bazie danych"},
+        )
 
     ranked_result = _rank_symbols_by_score(
         ch,
@@ -6411,8 +6419,17 @@ def _run_score_preview(req: ScorePreviewRequest) -> ScorePreviewResponse:
     else:
         ranked = ranked_result
         failures = {}
+    
     if not ranked and not failures:
-        raise HTTPException(404, "Brak symboli ze wszystkimi wymaganymi danymi")
+        # Zamiast błędu 404 zwracamy pusty wynik
+        return ScorePreviewResponse(
+            name=req.name,
+            as_of=as_of_date.isoformat(),
+            universe_count=len(candidates),
+            rows=[],
+            missing=[],
+            meta={"info": "Brak symboli spełniających kryteria rankingu"},
+        )
 
     prepared: List[Dict[str, object]] = []
     for sym, score, metrics in ranked:  # type: ignore[misc]
