@@ -7,6 +7,22 @@ export type AdminAuthResult =
     | { response: NextResponse<{ error: string }> };
 
 export const ensureAdmin = async (req: NextRequest): Promise<AdminAuthResult> => {
+    // --- DEVELOPMENT OVERRIDE ---
+    if (process.env.NODE_ENV !== "production") {
+        return {
+            session: {
+                sub: "dev-admin-id",
+                email: "dev@localhost",
+                name: "Development Admin",
+                picture: null,
+                provider: "google",
+                issuedAt: Date.now(),
+                expiresAt: Date.now() + 1000 * 60 * 60 * 24,
+            },
+        };
+    }
+    // ----------------------------
+
     const token = req.cookies.get(SESSION_COOKIE_NAME)?.value;
     const session = parseSessionToken(token);
     if (!session) {

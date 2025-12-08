@@ -1818,6 +1818,11 @@ class OhlcImportResponse(BaseModel):
     errors: List[str] = Field(default_factory=list, description="Lista komunikatów o błędach")
 
 
+class OhlcTickerSummary(BaseModel):
+    symbol: str = Field(..., description="Znormalizowany ticker spółki")
+    rows: int = Field(..., description="Liczba dostępnych rekordów OHLC w tabeli")
+
+
 # Aktualizacja modeli zależnych po zdefiniowaniu OhlcSyncRequest
 OhlcSyncScheduleStatus.model_rebuild()
 OhlcSyncScheduleRequest.model_rebuild()
@@ -2878,11 +2883,25 @@ class PortfolioAllocation(BaseModel):
     value: Optional[float] = None
 
 
+class PortfolioHolding(BaseModel):
+    symbol: str
+    weight: float
+    value: Optional[float] = None
+
+
+class PortfolioHoldingsPoint(BaseModel):
+    date: str
+    portfolio_value: Optional[float] = None
+    positions: List[PortfolioHolding]
+
+
 class PortfolioResp(BaseModel):
     equity: List[PortfolioPoint]
     stats: PortfolioStats
     allocations: Optional[List[PortfolioAllocation]] = None
     rebalances: Optional[List[PortfolioRebalanceEvent]] = None
+    holdings: Optional[List[PortfolioHolding]] = None
+    holdings_timeline: Optional[List[PortfolioHoldingsPoint]] = None
 
 
 class PortfolioScoreItem(BaseModel):
@@ -3777,6 +3796,28 @@ async def import_ohlc_file(file: UploadFile = File(...)) -> OhlcImportResponse:
         inserted += len(chunk)
 
     return OhlcImportResponse(inserted=inserted, skipped=skipped, errors=errors)
+
+
+@api_router.get("/ohlc/tickers", response_model=List[OhlcTickerSummary])
+def list_ohlc_tickers(min_rows: int = Query(default=0, ge=0)) -> List[OhlcTickerSummary]:
+    """List available OHLC tickers with row counts to help validate imports."""
+
+    ch = get_ch()
+    try:
+        rows = ch.query(
+            f"""
+            SELECT symbol, count() AS rows
+            FROM {TABLE_OHLC}
+            GROUP BY symbol
+            HAVING rows >= %(min_rows)s
+            ORDER BY symbol
+            """,
+            parameters={"min_rows": min_rows},
+        ).named_results()
+    except Exception as exc:  # pragma: no cover - depends on DB availability
+        raise HTTPException(500, f"Nie udało się pobrać listy tickerów: {exc}") from exc
+
+    return [OhlcTickerSummary(symbol=str(row["symbol"]), rows=int(row["rows"])) for row in rows]
 
 
 def _perform_ohlc_sync(
@@ -5772,7 +5813,13 @@ def _compute_backtest(
     dynamic_allocator: Optional[
         Callable[[str, List[str]], Tuple[Dict[str, float], float, Optional[str]]]
     ] = None,
-) -> Tuple[List[PortfolioPoint], PortfolioStats, List[PortfolioRebalanceEvent]]:
+) -> Tuple[
+    List[PortfolioPoint],
+    PortfolioStats,
+    List[PortfolioRebalanceEvent],
+    List[PortfolioHoldingsPoint],
+    Dict[str, float],
+]:
     """
     Prosty backtest na dziennych close'ach z rebalancingiem.
     Obsługuje okresy przed debiutem spółki poprzez normalizację wag
@@ -5825,6 +5872,7 @@ def _compute_backtest(
     equity: List[PortfolioPoint] = []
     rebalances: List[PortfolioRebalanceEvent] = []
     shares: Dict[str, float] = {sym: 0.0 for sym in closes_map.keys()}
+    holdings_timeline: List[PortfolioHoldingsPoint] = []
 
     def _to_ratio(value: float) -> float:
         return value / 100.0 if abs(value) > 1 else value
@@ -6065,6 +6113,39 @@ def _compute_backtest(
 
         equity.append(PortfolioPoint(date=ds, value=portfolio_value))
 
+        positions_today: List[PortfolioHolding] = []
+        for sym, qty in shares.items():
+            if qty <= 0:
+                continue
+            price = prices_today.get(sym) or last_prices.get(sym)
+            if price is None or price <= 0:
+                continue
+            value = qty * price
+            weight_ratio = value / portfolio_value if portfolio_value > 0 else 0.0
+            positions_today.append(
+                PortfolioHolding(
+                    symbol=pretty_symbol(sym),
+                    weight=weight_ratio,
+                    value=value,
+                )
+            )
+        if cash_value > 0 and portfolio_value > 0:
+            positions_today.append(
+                PortfolioHolding(
+                    symbol="Wolne środki",
+                    weight=cash_value / portfolio_value,
+                    value=cash_value,
+                )
+            )
+        positions_today.sort(key=lambda p: p.weight, reverse=True)
+        holdings_timeline.append(
+            PortfolioHoldingsPoint(
+                date=ds,
+                portfolio_value=portfolio_value,
+                positions=positions_today,
+            )
+        )
+
     if not equity:
         raise HTTPException(404, "Brak notowań do zbudowania portfela")
 
@@ -6133,7 +6214,10 @@ def _compute_backtest(
             fees=total_fees_paid,
         )
 
-    return equity, stats, rebalances
+    final_weights = dict(base_weights)
+    final_weights["__cash__"] = active_cash_weight
+
+    return equity, stats, rebalances, holdings_timeline, final_weights
 
 
 def _run_backtest(req: BacktestPortfolioRequest) -> PortfolioResp:
@@ -6339,7 +6423,10 @@ def _run_backtest(req: BacktestPortfolioRequest) -> PortfolioResp:
                 series = []
             closes_map[rs] = series
 
-    equity, stats, rebalances = _compute_backtest(
+    symbol_labels = {raw: pretty_symbol(raw) for raw in raw_syms}
+    symbol_labels["__cash__"] = "Wolne środki"
+
+    equity, stats, rebalances, holdings_timeline, final_weights = _compute_backtest(
         closes_map,
         weights_list,
         dt_start,
@@ -6351,11 +6438,48 @@ def _run_backtest(req: BacktestPortfolioRequest) -> PortfolioResp:
         cash_weight=cash_weight,
         dynamic_allocator=dynamic_allocator,
     )
+
+    latest_holdings = holdings_timeline[-1].positions if holdings_timeline else []
+    cash_label = symbol_labels.get("__cash__", "Wolne środki")
+    pretty_to_raw = {
+        pretty: raw for raw, pretty in symbol_labels.items() if raw != "__cash__"
+    }
+
+    allocation_map: Dict[str, PortfolioAllocation] = {}
+    for alloc in allocations:
+        allocation_map[alloc.symbol] = PortfolioAllocation(**alloc.model_dump())
+
+    for holding in latest_holdings:
+        if holding.symbol == cash_label or holding.weight <= 0:
+            continue
+        raw_sym = pretty_to_raw.get(holding.symbol)
+        target_weight = final_weights.get(raw_sym, holding.weight)
+        if holding.weight > 0 and target_weight < 0:
+            target_weight = holding.weight
+        existing = allocation_map.get(holding.symbol)
+        if existing:
+            existing.realized_weight = holding.weight
+            existing.value = holding.value
+            if existing.target_weight <= 0:
+                existing.target_weight = target_weight
+        else:
+            allocation_map[holding.symbol] = PortfolioAllocation(
+                symbol=holding.symbol,
+                target_weight=target_weight,
+                realized_weight=holding.weight,
+                value=holding.value,
+            )
+
+    final_allocations = list(allocation_map.values())
+    final_holdings = [h for h in latest_holdings if h.symbol != cash_label and h.weight > 0]
+
     return PortfolioResp(
         equity=equity,
         stats=stats,
-        allocations=allocations or None,
+        allocations=final_allocations or None,
         rebalances=rebalances or None,
+        holdings=final_holdings or None,
+        holdings_timeline=holdings_timeline or None,
     )
 
 
@@ -7054,10 +7178,14 @@ def list_indices(
             " OR (index_name IS NOT NULL AND positionCaseInsensitive(index_name, %(q)s) > 0))"
         )
     query = f"""
-        SELECT index_code, anyLast(index_name) AS index_name
-        FROM {TABLE_INDEX_PORTFOLIOS}
+        WITH aggregated AS (
+            SELECT index_code, anyLast(index_name) AS index_name
+            FROM {TABLE_INDEX_PORTFOLIOS}
+            GROUP BY index_code
+        )
+        SELECT index_code, index_name
+        FROM aggregated
         {where_clause}
-        GROUP BY index_code
         ORDER BY index_code
         LIMIT %(limit)s
     """

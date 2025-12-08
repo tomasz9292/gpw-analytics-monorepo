@@ -120,7 +120,7 @@ def test_fetch_history_uses_alias_for_raw_symbols():
 
     rows = harvester.fetch_history("CDPROJEKT")
 
-    assert [row.symbol for row in rows] == ["CDPROJEKT", "CDPROJEKT"]
+    assert [row.symbol for row in rows] == ["CDR", "CDR"]
     assert session.calls[0].endswith("s=cdr&i=d")
 
 

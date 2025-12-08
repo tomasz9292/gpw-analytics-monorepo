@@ -13,7 +13,7 @@ services:
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse}
       CLICKHOUSE_DB: ${CLICKHOUSE_DATABASE:-gpw}
     volumes:
-      - ./.docker/clickhouse-data:/var/lib/clickhouse
+      - clickhouse_data:/var/lib/clickhouse
     healthcheck:
       test:
         [
@@ -63,3 +63,6 @@ services:
     ports:
       - "${FRONTEND_PORT:-3000}:3000"
     restart: unless-stopped
+
+volumes:
+  clickhouse_data:

@@ -273,7 +273,9 @@ def test_backtest_portfolio_auto_uses_dynamic_scores(monkeypatch):
 
     result = main.backtest_portfolio(request)
 
-    assert result.allocations is None
+    assert result.allocations is not None
+    assert any(alloc.symbol.startswith(("AAA", "BBB")) for alloc in result.allocations)
+    assert result.holdings is not None
     assert result.rebalances is not None
     dates = [event.date for event in result.rebalances]
     assert dates[:2] == ["2023-01-03", "2023-02-01"]
@@ -374,6 +376,7 @@ def test_backtest_portfolio_auto_partial_slots_use_cash(monkeypatch):
     result = main.backtest_portfolio(request)
 
     assert result.rebalances is not None
+    assert result.allocations is not None
     assert len(result.rebalances) >= 2
 
     first_event = result.rebalances[0]
@@ -411,7 +414,7 @@ def test_compute_backtest_rescales_negative_weights():
         # allocation for AAA rescaled to preserve the budget
         return {"AAA": 1.5, "BBB": -0.5}, 0.0, None
 
-    equity, stats, _ = main._compute_backtest(
+    equity, stats, _, holdings_timeline, final_weights = main._compute_backtest(
         closes_map,
         [0.0, 0.0],
         date(2023, 1, 2),
@@ -424,6 +427,8 @@ def test_compute_backtest_rescales_negative_weights():
     assert equity[0].value == pytest.approx(100.0)
     assert stats.final_value == pytest.approx(100.0)
     assert stats.initial_value == pytest.approx(100.0)
+    assert holdings_timeline
+    assert final_weights["AAA"] >= 0.0
 
 
 def test_portfolio_score_returns_top_n(monkeypatch):

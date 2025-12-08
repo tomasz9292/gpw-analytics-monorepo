@@ -17,6 +17,8 @@ from urllib.parse import urlencode, urlparse, parse_qs, urlsplit, urlunsplit
 from urllib.request import HTTPCookieProcessor, Request, build_opener
 from pydantic import BaseModel, Field
 
+from .symbols import normalize_ticker
+
 GPW_COMPANY_PROFILES_URL = "https://www.gpw.pl/ajaxindex.php"
 GPW_COMPANY_PROFILES_FALLBACK_URL = "https://www.gpw.pl/restapi/GPWCompanyProfiles"
 STOOQ_COMPANY_CATALOG_URL = "https://stooq.pl/t/?i=513"
@@ -317,19 +319,9 @@ def _extract_xml_error_detail(document: str) -> Optional[str]:
 
 
 def _normalize_gpw_symbol(value: str) -> str:
-    """Zwraca surowy symbol GPW z walidacją sufiksu."""
+    """Return the normalized GPW ticker used across the project."""
 
-    normalized = value.strip().upper()
-    if not normalized:
-        raise RuntimeError("Pusty symbol spółki")
-
-    if "." in normalized:
-        if normalized.endswith(".WA"):
-            normalized = normalized.rsplit(".", 1)[0]
-        else:
-            raise RuntimeError(f"Symbol spoza GPW: {normalized}")
-
-    return normalized
+    return normalize_ticker(value)
 
 
 def _clean_website(url: Optional[str]) -> Optional[str]:

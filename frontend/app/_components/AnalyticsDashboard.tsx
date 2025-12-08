@@ -1,42 +1,17 @@
 "use client";
 
 import React, { useMemo, useState, useEffect, useId, useCallback, useRef } from "react";
-import type { SVGAttributes } from "react";
 import { createPortal } from "react-dom";
 import Image from "next/image";
 import Link from "next/link";
 import Script from "next/script";
 import { useRouter } from "next/navigation";
+import ReactECharts from "echarts-for-react";
 import { useTheme, type ThemeMode } from "@/components/theme-provider";
 import { formatPct } from "@/lib/format";
 import { normalize } from "@/lib/normalize";
-import {
-    LineChart,
-    Line,
-    XAxis,
-    YAxis,
-    Tooltip,
-    ResponsiveContainer,
-    CartesianGrid,
-    Area,
-    AreaChart,
-    ReferenceLine,
-    ReferenceDot,
-    Brush,
-} from "recharts";
-import type { TooltipContentProps } from "recharts";
-import type { CategoricalChartFunc } from "recharts/types/chart/types";
-import type { MouseHandlerDataParam } from "recharts/types/synchronisation/types";
-import type { BrushStartEndIndex } from "recharts/types/context/brushUpdateContext";
-import type { Props as BrushProps } from "recharts/types/cartesian/Brush";
-
-type BrushTravellerProps = {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-    stroke?: SVGAttributes<SVGElement>["stroke"];
-};
+import { ChartControls, type ChartTypeValue } from "./ChartControls";
+import { MainChartECharts } from "./MainChartECharts";
 
 declare global {
     interface Window {
@@ -163,15 +138,6 @@ const parseOptionalNumber = (value: unknown): number | undefined => {
     return undefined;
 };
 
-const stringifyOptionalNumber = (
-    value: number | null | undefined
-): string | undefined => {
-    if (value === null || value === undefined) {
-        return undefined;
-    }
-    return Number.isFinite(value) ? `${value}` : undefined;
-};
-
 const findScoreMetric = (value: string): ScoreMetricOption | undefined =>
     SCORE_METRIC_OPTIONS.find((option) => option.value === value);
 
@@ -194,66 +160,6 @@ const PERCENT_BASED_SCORE_METRICS = new Set<ScoreComponentRequest["metric"]>([
     "distance_from_high",
     "distance_from_low",
 ]);
-
-const CHART_BRUSH_CLASS = "metric-chart-brush";
-const CHART_BRUSH_STROKE = "#4663F0";
-const CHART_BRUSH_BACKGROUND_FILL = "#E6EBFF";
-const CHART_BRUSH_TRAVELLER_WIDTH = 18;
-
-const ChartBrushTraveller: React.FC<BrushTravellerProps> = ({
-    x,
-    y,
-    width,
-    height,
-    stroke,
-}) => {
-    const handleStroke = stroke ?? CHART_BRUSH_STROKE;
-    const radius = 8;
-    const padding = Math.min(12, Math.max(4, height * 0.2));
-    const lineStart = padding;
-    const lineEnd = Math.max(lineStart + 6, height - padding);
-    const centerX = width / 2;
-
-    return (
-        <g className="metric-chart-brush__handle" transform={`translate(${x}, ${y})`}>
-            <rect
-                width={width}
-                height={height}
-                rx={radius}
-                ry={radius}
-                fill="#ffffff"
-                stroke={handleStroke}
-                strokeWidth={2}
-            />
-            <line
-                x1={centerX - 3}
-                y1={lineStart}
-                x2={centerX - 3}
-                y2={lineEnd}
-                stroke={handleStroke}
-                strokeWidth={1.5}
-                strokeLinecap="round"
-            />
-            <line
-                x1={centerX + 3}
-                y1={lineStart}
-                x2={centerX + 3}
-                y2={lineEnd}
-                stroke={handleStroke}
-                strokeWidth={1.5}
-                strokeLinecap="round"
-            />
-        </g>
-    );
-};
-
-const CHART_BRUSH_COMMON_PROPS = {
-    className: CHART_BRUSH_CLASS,
-    travellerWidth: CHART_BRUSH_TRAVELLER_WIDTH,
-    traveller: (props: BrushTravellerProps) => <ChartBrushTraveller {...props} />,
-    stroke: CHART_BRUSH_STROKE,
-    fill: CHART_BRUSH_BACKGROUND_FILL,
-} satisfies Partial<BrushProps>;
 
 type PortfolioSimulationStage = "preparing" | "ranking" | "building" | "finalizing";
 
@@ -1792,7 +1698,19 @@ type SavedPortfolio = {
     name: string;
     createdAt: string;
     draft: PortfolioDraftState;
+    simulation?: SavedPortfolioSimulation | null;
 };
+
+type SavedPortfolioSimulation = {
+    data: PortfolioResp;
+    savedAt: string;
+};
+
+type SavedPortfolioSimulationState =
+    | { status: "idle" }
+    | { status: "loading" }
+    | { status: "ready"; data: PortfolioResp }
+    | { status: "error"; error: string };
 
 type PublicUserProfile = {
     user: AuthUser;
@@ -1804,6 +1722,128 @@ type AdminEntry = {
     email: string;
     createdAt: string;
     addedBy: string | null;
+};
+
+const clonePortfolioResp = (resp: PortfolioResp): PortfolioResp => ({
+    ...resp,
+    stats: { ...resp.stats },
+    equity: resp.equity.map((point) => ({ date: point.date, value: Number(point.value) })),
+    allocations: resp.allocations?.map((item) => ({ ...item })),
+    rebalances: resp.rebalances?.map((entry) => ({
+        ...entry,
+        trades: entry.trades?.map((trade) => ({ ...trade })) ?? [],
+    })),
+    benchmark: resp.benchmark?.map((point) => ({ ...point })),
+    holdings: resp.holdings?.map((holding) => ({ ...holding })),
+    holdings_timeline: resp.holdings_timeline?.map((point) => ({
+        ...point,
+        positions: point.positions?.map((pos) => ({ ...pos })) ?? [],
+    })),
+});
+
+const sanitizePortfolioResp = (incoming: unknown): PortfolioResp | null => {
+    if (!incoming || typeof incoming !== "object") {
+        return null;
+    }
+    const raw = incoming as Partial<PortfolioResp> & Record<string, unknown>;
+    if (!Array.isArray(raw.equity) || !raw.equity.length) {
+        return null;
+    }
+    if (!raw.stats || typeof raw.stats !== "object") {
+        return null;
+    }
+    const equity = raw.equity
+        .map((point) => {
+            if (!point || typeof point !== "object") {
+                return null;
+            }
+            const date = (point as { date?: unknown }).date;
+            const valueRaw = (point as { value?: unknown }).value;
+            if (typeof date !== "string") {
+                return null;
+            }
+            const value =
+                typeof valueRaw === "number"
+                    ? valueRaw
+                    : typeof valueRaw === "string"
+                    ? Number(valueRaw)
+                    : null;
+            if (!Number.isFinite(value)) {
+                return null;
+            }
+            return { date, value: Number(value) };
+        })
+        .filter((point): point is PortfolioPoint => Boolean(point));
+    if (!equity.length) {
+        return null;
+    }
+
+    const normalizeArray = <T,>(value: unknown): T[] | undefined =>
+        Array.isArray(value)
+            ? (value as T[]).map((item) => ({ ...(item as Record<string, unknown>) } as T))
+            : undefined;
+
+    const allocations = normalizeArray<PortfolioAllocation>(raw.allocations);
+    const benchmark = normalizeArray<PortfolioPoint>(raw.benchmark);
+    const holdings = normalizeArray<PortfolioHolding>(raw.holdings);
+
+    const holdingsTimeline = Array.isArray(raw.holdings_timeline)
+        ? raw.holdings_timeline
+              .map((entry) => {
+                  if (!entry || typeof entry !== "object") {
+                      return null;
+                  }
+                  const positionsRaw = (entry as { positions?: unknown }).positions;
+                  const positions = Array.isArray(positionsRaw)
+                      ? positionsRaw
+                            .map((pos) => (pos && typeof pos === "object" ? ({ ...(pos as PortfolioHolding) } as PortfolioHolding) : null))
+                            .filter((pos): pos is PortfolioHolding => Boolean(pos))
+                      : [];
+                  return {
+                      ...(entry as PortfolioHoldingsPoint),
+                      positions,
+                  };
+              })
+              .filter((entry): entry is PortfolioHoldingsPoint => Boolean(entry))
+        : undefined;
+
+    const normalized: PortfolioResp = {
+        equity,
+        stats: { ...(raw.stats as PortfolioStats) },
+        ...(allocations ? { allocations } : {}),
+        ...(raw.rebalances && Array.isArray(raw.rebalances)
+            ? {
+                  rebalances: raw.rebalances.map((entry) => ({
+                      ...entry,
+                      trades: Array.isArray(entry.trades)
+                          ? entry.trades.map((trade) => ({ ...trade }))
+                          : entry.trades,
+                  })),
+              }
+            : {}),
+        ...(benchmark ? { benchmark } : {}),
+        ...(holdings ? { holdings } : {}),
+        ...(holdingsTimeline ? { holdings_timeline: holdingsTimeline } : {}),
+    };
+
+    return normalized;
+};
+
+const sanitizeSavedPortfolioSimulation = (incoming: unknown): SavedPortfolioSimulation | null => {
+    if (!incoming || typeof incoming !== "object") {
+        return null;
+    }
+    const raw = incoming as { data?: unknown; savedAt?: unknown };
+    const dataCandidate = "data" in raw ? raw.data : incoming;
+    const data = sanitizePortfolioResp(dataCandidate);
+    if (!data) {
+        return null;
+    }
+    const savedAt =
+        typeof raw.savedAt === "string" && raw.savedAt.trim().length
+            ? raw.savedAt
+            : new Date().toISOString();
+    return { data, savedAt };
 };
 
 const getDefaultScoreDraft = (): ScoreDraftState => ({
@@ -1889,19 +1929,9 @@ type Row = {
 type RowSMA = Row & { sma?: number | null };
 type RowRSI = Row & { rsi: number | null };
 type PriceChartPoint = RowSMA & { change: number; changePct: number };
-type ComparisonValueKey = `${string}__pct` | `${string}__close`;
-type PriceChartComparisonPoint =
-    PriceChartPoint & Partial<Record<ComparisonValueKey, number | null>>;
+type BrushStartEndIndex = { startIndex: number; endIndex: number };
 
 type ChartPeriod = 90 | 180 | 365 | 1825 | "max";
-
-const PERIOD_OPTIONS: { label: string; value: ChartPeriod }[] = [
-    { label: "3M", value: 90 },
-    { label: "6M", value: 180 },
-    { label: "1R", value: 365 },
-    { label: "5L", value: 1825 },
-    { label: "MAX", value: "max" },
-];
 
 type BenchmarkChangePeriod = "1D" | "5D" | "1M" | "6M" | "YTD" | "1R" | "5L";
 
@@ -1961,16 +1991,6 @@ const MAX_COMPARISONS = COMPARISON_COLORS.length;
 
 type Rebalance = "none" | "monthly" | "quarterly" | "yearly";
 
-type CompositionDataPoint = {
-    label: string;
-    values: Record<string, number>;
-};
-
-type CompositionSeries = {
-    data: CompositionDataPoint[];
-    keys: Array<{ key: string; name: string; color: string }>;
-};
-
 const REBALANCE_FREQUENCY_MONTHS: Record<Exclude<Rebalance, "none">, number> = {
     monthly: 1,
     quarterly: 3,
@@ -1984,33 +2004,12 @@ const REBALANCE_LABELS: Record<Rebalance, string> = {
     yearly: "Rocznie",
 };
 
-const COLOR_PALETTE = [
-    "#4663F0",
-    "#2D9CDB",
-    "#27AE60",
-    "#F2994A",
-    "#BB6BD9",
-    "#56CCF2",
-    "#9B51E0",
-    "#219653",
-];
-
 const parseDateString = (value: string | null | undefined): Date | null => {
     if (!value) {
         return null;
     }
     const parsed = new Date(value);
     return Number.isNaN(parsed.getTime()) ? null : parsed;
-};
-
-const addMonthsSafe = (date: Date, months: number): Date => {
-    const result = new Date(date.getTime());
-    const day = result.getDate();
-    result.setDate(1);
-    result.setMonth(result.getMonth() + months);
-    const maxDay = new Date(result.getFullYear(), result.getMonth() + 1, 0).getDate();
-    result.setDate(Math.min(day, maxDay));
-    return result;
 };
 
 const formatDateLabel = (date: Date): string =>
@@ -2020,35 +2019,14 @@ const formatDateLabel = (date: Date): string =>
         day: "numeric",
     });
 
-const computeRebalanceSchedule = (
-    frequency: Rebalance,
-    start: string,
-    end: string
-): Date[] => {
-    const startDate = parseDateString(start) ?? new Date();
-    const endDateCandidate = parseDateString(end);
-    const endDate =
-        endDateCandidate && endDateCandidate >= startDate ? endDateCandidate : new Date();
-
-    const schedule: Date[] = [startDate];
-    if (frequency === "none") {
-        if (endDate.getTime() !== startDate.getTime()) {
-            schedule.push(endDate);
-        }
-        return schedule;
-    }
-
-    const monthsStep = REBALANCE_FREQUENCY_MONTHS[frequency];
-    let current = addMonthsSafe(startDate, monthsStep);
-    let iterations = 0;
-    const MAX_ITERATIONS = 120;
-    while (current < endDate && iterations < MAX_ITERATIONS) {
-        schedule.push(current);
-        current = addMonthsSafe(current, monthsStep);
-        iterations += 1;
-    }
-    schedule.push(endDate);
-    return schedule;
+const addMonthsSafe = (date: Date, months: number): Date => {
+    const result = new Date(date.getTime());
+    const day = result.getDate();
+    result.setDate(1);
+    result.setMonth(result.getMonth() + months);
+    const maxDay = new Date(result.getFullYear(), result.getMonth() + 1, 0).getDate();
+    result.setDate(Math.min(day, maxDay));
+    return result;
 };
 
 const computeNextRebalanceDate = (
@@ -2072,135 +2050,6 @@ const computeNextRebalanceDate = (
         iterations += 1;
     }
     return iterations >= MAX_ITERATIONS ? null : current;
-};
-
-const normalizeWeights = (weights: Record<string, number>): Record<string, number> => {
-    const entries = Object.entries(weights);
-    const total = entries.reduce(
-        (acc, [, value]) => acc + (Number.isFinite(value) ? Number(value) : 0),
-        0
-    );
-    if (!Number.isFinite(total) || total <= 0) {
-        return entries.reduce<Record<string, number>>((acc, [key]) => {
-            acc[key] = 0;
-            return acc;
-        }, {});
-    }
-    const multiplier = 100 / total;
-    return entries.reduce<Record<string, number>>((acc, [key, value]) => {
-        const safeValue = Number.isFinite(value) ? Number(value) : 0;
-        acc[key] = Number((safeValue * multiplier).toFixed(2));
-        return acc;
-    }, {});
-};
-
-const buildCompositionSeries = (
-    positions: { symbol: string; weight: number }[],
-    options: { start: string; end: string; frequency: Rebalance; threshold: number }
-): CompositionSeries => {
-    if (!positions.length) {
-        return { data: [], keys: [] };
-    }
-
-    const totalWeight = positions.reduce(
-        (acc, item) => acc + (Number.isFinite(item.weight) ? Number(item.weight) : 0),
-        0
-    );
-    const normalizedPositions =
-        totalWeight > 0
-            ? positions.map((item) => ({
-                  symbol: item.symbol,
-                  weight: (Number(item.weight) / totalWeight) * 100,
-              }))
-            : positions.map((item) => ({ symbol: item.symbol, weight: Number(item.weight) }));
-
-    const TOP_COUNT = 5;
-    const topPositions = normalizedPositions.slice(0, TOP_COUNT);
-    const otherPositions = normalizedPositions.slice(TOP_COUNT);
-    const othersWeight = otherPositions.reduce((acc, item) => acc + item.weight, 0);
-
-    const keys: CompositionSeries["keys"] = topPositions.map((item, index) => ({
-        key: item.symbol,
-        name: item.symbol,
-        color: COLOR_PALETTE[index % COLOR_PALETTE.length],
-    }));
-    if (othersWeight > 0.01) {
-        keys.push({
-            key: "__others",
-            name: "Pozostałe",
-            color: COLOR_PALETTE[keys.length % COLOR_PALETTE.length],
-        });
-    }
-
-    const baseWeights = keys.reduce<Record<string, number>>((acc, keyInfo) => {
-        if (keyInfo.key === "__others") {
-            acc[keyInfo.key] = othersWeight;
-        } else {
-            const position = topPositions.find((item) => item.symbol === keyInfo.key);
-            acc[keyInfo.key] = position ? position.weight : 0;
-        }
-        return acc;
-    }, {});
-
-    const getTargetWeights = () => normalizeWeights({ ...baseWeights });
-
-    const driftAmplitudeBase = Math.max(
-        2,
-        Number.isFinite(options.threshold) && options.threshold > 0
-            ? Math.min(options.threshold, 10)
-            : 4
-    );
-
-    const getDriftWeights = (stepIndex: number) => {
-        const drifted: Record<string, number> = { ...baseWeights };
-        keys.forEach((keyInfo, index) => {
-            const base = baseWeights[keyInfo.key] ?? 0;
-            if (base <= 0) {
-                drifted[keyInfo.key] = 0;
-                return;
-            }
-            const direction = (stepIndex + index) % 2 === 0 ? 1 : -1;
-            const deltaMagnitude = Math.min(base * 0.3, driftAmplitudeBase);
-            drifted[keyInfo.key] = Math.max(0, base + direction * deltaMagnitude);
-        });
-        return normalizeWeights(drifted);
-    };
-
-    const schedule = computeRebalanceSchedule(
-        options.frequency,
-        options.start,
-        options.end
-    );
-    if (!schedule.length) {
-        return {
-            data: [
-                {
-                    label: formatDateLabel(new Date()),
-                    values: getTargetWeights(),
-                },
-            ],
-            keys,
-        };
-    }
-
-    const data: CompositionSeries["data"] = [];
-    schedule.forEach((date, index) => {
-        if (index === 0) {
-            data.push({ label: formatDateLabel(date), values: getTargetWeights() });
-            return;
-        }
-        const prevDate = schedule[index - 1];
-        const midpoint = new Date((prevDate.getTime() + date.getTime()) / 2);
-        data.push({ label: formatDateLabel(midpoint), values: getDriftWeights(index) });
-        data.push({ label: formatDateLabel(date), values: getTargetWeights() });
-    });
-
-    if (data.length === 1) {
-        const fallbackDate = addMonthsSafe(schedule[0], 1);
-        data.push({ label: formatDateLabel(fallbackDate), values: getTargetWeights() });
-    }
-
-    return { data, keys };
 };
 
 type BacktestOptions = {
@@ -2429,12 +2278,26 @@ type PortfolioRebalanceEvent = {
     trades?: PortfolioRebalanceTrade[];
 };
 
+type PortfolioHolding = {
+    symbol: string;
+    weight: number;
+    value?: number;
+};
+
+type PortfolioHoldingsPoint = {
+    date: string;
+    portfolio_value?: number;
+    positions: PortfolioHolding[];
+};
+
 type PortfolioResp = {
     equity: PortfolioPoint[];
     stats: PortfolioStats;
     allocations?: PortfolioAllocation[];
     rebalances?: PortfolioRebalanceEvent[];
     benchmark?: PortfolioPoint[];
+    holdings?: PortfolioHolding[];
+    holdings_timeline?: PortfolioHoldingsPoint[];
 };
 
 type CompanyFundamentalsResponse = Record<string, number | null>;
@@ -3552,6 +3415,68 @@ const normalizeEquity = (raw: unknown): PortfolioPoint[] => {
         .filter((item): item is PortfolioPoint => Boolean(item));
 };
 
+const normalizeHoldings = (raw: unknown): PortfolioHolding[] => {
+    if (!raw) return [];
+    if (Array.isArray(raw)) {
+        return raw.reduce<PortfolioHolding[]>((acc, entry) => {
+            if (!entry || typeof entry !== "object") return acc;
+            const record = entry as Record<string, unknown>;
+            const symbolCandidate =
+                record.symbol ?? record.ticker ?? record.asset ?? record.name ?? record.instrument;
+            if (!symbolCandidate) return acc;
+            const weight =
+                pickNumber([record], ["weight", "target_weight", "allocation", "share", "ratio"]) ?? 0;
+            const value = pickNumber([record], ["value", "position_value", "amount", "equity"]);
+            acc.push({
+                symbol: String(symbolCandidate),
+                weight,
+                ...(value !== undefined ? { value } : {}),
+            });
+            return acc;
+        }, []);
+    }
+    if (typeof raw === "object") {
+        return Object.entries(raw as Record<string, unknown>).reduce<PortfolioHolding[]>(
+            (acc, [symbol, value]) => {
+                const weight = parseNumber(value);
+                if (weight === undefined) {
+                    return acc;
+                }
+                acc.push({ symbol: String(symbol), weight });
+                return acc;
+            },
+            []
+        );
+    }
+    return [];
+};
+
+const normalizeHoldingsTimeline = (raw: unknown): PortfolioHoldingsPoint[] => {
+    if (!Array.isArray(raw)) return [];
+    return raw.reduce<PortfolioHoldingsPoint[]>((acc, entry) => {
+        if (!entry || typeof entry !== "object") return acc;
+        const record = entry as Record<string, unknown>;
+        const dateCandidate =
+            record.date ?? record.timestamp ?? record.time ?? record.period ?? record.label;
+        if (!dateCandidate) return acc;
+
+        const portfolioValue = pickNumber(
+            [record],
+            ["portfolio_value", "value", "equity", "balance", "total", "portfolio"]
+        );
+        const positionsSource =
+            getProp(record, "positions") ?? getProp(record, "holdings") ?? getProp(record, "items");
+        const positions = normalizeHoldings(positionsSource);
+
+        acc.push({
+            date: String(dateCandidate),
+            portfolio_value: portfolioValue,
+            positions,
+        });
+        return acc;
+    }, []);
+};
+
 function normalizePortfolioResponse(raw: unknown): PortfolioResp {
     const equitySource =
         getProp(raw, "equity") ??
@@ -3604,6 +3529,22 @@ function normalizePortfolioResponse(raw: unknown): PortfolioResp {
         getProp(raw, "benchmark_values");
 
     const benchmark = normalizeEquity(benchmarkSource);
+
+    const holdingsSource =
+        getProp(raw, "holdings") ??
+        getProp(raw, "positions") ??
+        getProp(raw, "final_weights") ??
+        getProp(raw, "latest_holdings");
+
+    const holdings = normalizeHoldings(holdingsSource);
+
+    const holdingsTimelineSource =
+        getProp(raw, "holdings_timeline") ??
+        getProp(raw, "holdingsTimeline") ??
+        getProp(raw, "positions_timeline") ??
+        getProp(raw, "allocation_timeline");
+
+    const holdingsTimeline = normalizeHoldingsTimeline(holdingsTimelineSource);
 
     const allocationSource =
         getProp(raw, "allocations") ??
@@ -3775,6 +3716,8 @@ function normalizePortfolioResponse(raw: unknown): PortfolioResp {
         allocations,
         rebalances,
         benchmark: benchmark.length ? benchmark : undefined,
+        holdings: holdings.length ? holdings : undefined,
+        holdings_timeline: holdingsTimeline.length ? holdingsTimeline : undefined,
     };
 }
 
@@ -9041,6 +8984,17 @@ const formatSignedNumber = (value: number, fractionDigits = 2) => {
     return `${sign}${formatNumber(Math.abs(value), fractionDigits)}`;
 };
 
+const isCashLikePosition = (symbol: string | null | undefined): boolean => {
+    if (!symbol) return false;
+    const lowered = symbol.toLowerCase();
+    const compact = lowered.replace(/\s+/g, "");
+    return (
+        compact.includes("wolnesrodki") ||
+        compact.includes("wolneśrodki") ||
+        lowered.includes("cash")
+    );
+};
+
 function PortfolioStatsGrid({ stats }: { stats: PortfolioStats }) {
     const config: { key: keyof PortfolioStats; label: string; format?: (value: number) => string }[] = [
         { key: "cagr", label: "CAGR" },
@@ -10368,53 +10322,6 @@ function TickerAutosuggest({
 /** =========================
  *  Wykresy
  *  ========================= */
-function ChartTooltipContent({
-    active,
-    payload,
-    label,
-    priceFormatter,
-    percentFormatter,
-    dateFormatter,
-    showSMA,
-}: TooltipContentProps<number, string> & {
-    priceFormatter: Intl.NumberFormat;
-    percentFormatter: Intl.NumberFormat;
-    dateFormatter: Intl.DateTimeFormat;
-    showSMA: boolean;
-}) {
-    const point = active && payload?.length ? (payload[0]?.payload as PriceChartPoint) : null;
-
-    if (!active || !point || !label) return null;
-
-    const formattedDate = dateFormatter.format(new Date(label));
-    const isZeroChange = Math.abs(point.change) < 1e-10;
-    const changeColor = isZeroChange
-        ? "text-subtle"
-        : point.change > 0
-            ? "text-accent"
-            : "text-negative";
-    const changeSign = point.change > 0 ? "+" : point.change < 0 ? "-" : "";
-    const changeAbs = priceFormatter.format(Math.abs(point.change));
-    const changePct = percentFormatter.format(Math.abs(point.changePct));
-    const changeText = isZeroChange ? priceFormatter.format(0) : `${changeSign}${changeAbs}`;
-    const changePctText = isZeroChange ? percentFormatter.format(0) : `${changeSign}${changePct}`;
-
-    return (
-        <div className="rounded-xl border border-soft bg-white/95 px-4 py-3 text-xs shadow-xl backdrop-blur">
-            <div className="font-medium uppercase tracking-wide text-subtle">{formattedDate}</div>
-            <div className="mt-2 text-lg font-semibold text-neutral">
-                {priceFormatter.format(point.close)}
-            </div>
-            <div className={`mt-1 font-semibold ${changeColor}`}>
-                {changeText} ({changePctText}%)
-            </div>
-            {showSMA && typeof point.sma === "number" && (
-                <div className="mt-2 text-[11px] text-muted">SMA 20: {priceFormatter.format(point.sma)}</div>
-            )}
-        </div>
-    );
-}
-
 type ComparisonSeries = {
     symbol: string;
     label?: string;
@@ -10424,24 +10331,26 @@ type ComparisonSeries = {
 
 function PriceChart({
     rows,
-    showArea,
+    chartType = "area",
     showSMA,
     brushDataRows,
     brushRange,
     onBrushChange,
     primarySymbol,
     comparisonSeries,
+    heightClassName = "h-80",
 }: {
     rows: RowSMA[];
-    showArea: boolean;
+    chartType?: ChartTypeValue;
     showSMA: boolean;
     brushDataRows?: RowSMA[];
     brushRange?: BrushStartEndIndex | null;
     onBrushChange?: (range: BrushStartEndIndex) => void;
     primarySymbol?: string | null;
     comparisonSeries?: ComparisonSeries[];
+    heightClassName?: string;
 }) {
-    const gradientId = useId();
+    const { theme } = useTheme();
     const priceFormatter = useMemo(
         () =>
             new Intl.NumberFormat("pl-PL", {
@@ -10455,23 +10364,6 @@ function PriceChart({
             new Intl.NumberFormat("pl-PL", {
                 minimumFractionDigits: 2,
                 maximumFractionDigits: 2,
-            }),
-        []
-    );
-    const axisDateFormatter = useMemo(
-        () =>
-            new Intl.DateTimeFormat("pl-PL", {
-                month: "short",
-                year: "numeric",
-            }),
-        []
-    );
-    const tooltipDateFormatter = useMemo(
-        () =>
-            new Intl.DateTimeFormat("pl-PL", {
-                day: "numeric",
-                month: "long",
-                year: "numeric",
             }),
         []
     );
@@ -10492,282 +10384,22 @@ function PriceChart({
         });
     }, [comparisonSeries]);
 
-    const chartData: PriceChartComparisonPoint[] = useMemo(() => {
-        if (!rows.length) return [];
-        const base = rows[0].close || 0;
-        return rows.map((row) => {
-            const change = row.close - base;
-            const changePct = base !== 0 ? (change / base) * 100 : 0;
-            const merged: PriceChartComparisonPoint = {
-                ...row,
-                change,
-                changePct,
-            };
-            for (const descriptor of comparisonDescriptors) {
-                const match = descriptor.map.get(row.date) ?? null;
-                const pctKey = `${descriptor.symbol}__pct` as ComparisonValueKey;
-                const closeKey = `${descriptor.symbol}__close` as ComparisonValueKey;
-                if (match) {
-                    const diff = match.close - (descriptor.start || 0);
-                    merged[pctKey] = descriptor.start !== 0 ? (diff / descriptor.start) * 100 : 0;
-                    merged[closeKey] = match.close;
-                } else {
-                    merged[pctKey] = null;
-                    merged[closeKey] = null;
-                }
-            }
-            return merged;
-        });
-    }, [comparisonDescriptors, rows]);
-
-    const brushChartData: PriceChartPoint[] | null = useMemo(() => {
-        if (!brushDataRows?.length) return null;
-        const base = brushDataRows[0].close || 0;
-        return brushDataRows.map((row) => {
-            const change = row.close - base;
-            const changePct = base !== 0 ? (change / base) * 100 : 0;
-            return { ...row, change, changePct };
-        });
-    }, [brushDataRows]);
-
     const hasComparisons = comparisonDescriptors.some((descriptor) => descriptor.hasData);
 
-    const showBrushControls = Boolean(brushChartData && brushChartData.length > 1 && onBrushChange);
-
-    const latestPoint = chartData.at(-1) ?? null;
-    const isGrowing =
-        (latestPoint?.close ?? 0) >= (chartData[0]?.close ?? latestPoint?.close ?? 0);
-    const primaryColor = isGrowing ? "#1DB954" : "#EA4335";
-    const strokeColor = isGrowing ? "#0B8F47" : "#C5221F";
-    const axisTickFormatter = useCallback(
-        (value: string | number) => {
-            if (typeof value !== "string" && typeof value !== "number") return String(value ?? "");
-            return axisDateFormatter.format(new Date(value));
-        },
-        [axisDateFormatter]
-    );
-
-    const brushDateFormatter = useMemo(
-        () =>
-            new Intl.DateTimeFormat("pl-PL", {
-                year: "numeric",
-            }),
-        []
-    );
-
-    const brushTickFormatter = useCallback(
-        (value: string | number) => {
-            if (typeof value !== "string" && typeof value !== "number") return "";
-            return brushDateFormatter.format(new Date(value));
-        },
-        [brushDateFormatter]
-    );
-
-    const yTickFormatter = useCallback(
-        (value: number) =>
-            hasComparisons ? `${percentFormatter.format(value)}%` : priceFormatter.format(value),
-        [hasComparisons, percentFormatter, priceFormatter]
-    );
-
-    const handleBrushUpdate = useCallback(
-        (range: BrushStartEndIndex) => {
-            onBrushChange?.(range);
-        },
-        [onBrushChange]
-    );
-
-    type ChartMouseState = MouseHandlerDataParam & {
-        activePayload?: Array<{ payload?: PriceChartPoint }>;
-        chartX?: number;
-        chartY?: number;
-    };
-
-    type SelectionPoint = {
-        point: PriceChartPoint;
-        x: number;
-    };
-
-    const [selection, setSelection] = useState<{
-        start: SelectionPoint;
-        end: SelectionPoint;
-    } | null>(null);
-    const [hoverPoint, setHoverPoint] = useState<SelectionPoint | null>(null);
-    const lastKnownPointRef = useRef<SelectionPoint | null>(null);
-    const [isSelecting, setIsSelecting] = useState(false);
-
-    const chartContainerRef = useRef<HTMLDivElement | null>(null);
-    const [containerWidth, setContainerWidth] = useState(0);
-
-    useEffect(() => {
-        const node = chartContainerRef.current;
-        if (!node) return;
-
-        const updateSize = () => {
-            const width = node.getBoundingClientRect().width;
-            if (Number.isFinite(width)) {
-                setContainerWidth(width);
-            }
-        };
-
-        updateSize();
-
-        if (typeof ResizeObserver === "undefined") {
-            window.addEventListener("resize", updateSize);
-            return () => {
-                window.removeEventListener("resize", updateSize);
-            };
-        }
-
-        const observer = new ResizeObserver(() => updateSize());
-        observer.observe(node);
-
-        return () => {
-            observer.disconnect();
-        };
-    }, []);
-
-    const getPointFromState = useCallback(
-        (state: MouseHandlerDataParam): SelectionPoint | null => {
-            const payload = (state as ChartMouseState)?.activePayload?.[0]?.payload;
-            const chartX = (state as ChartMouseState)?.chartX;
-
-            if (
-                payload &&
-                typeof payload === "object" &&
-                "close" in payload &&
-                typeof chartX === "number"
-            ) {
-                return { point: payload as PriceChartPoint, x: chartX };
-            }
-            return null;
-        },
-        []
-    );
-
-    const updateSelectionEnd = useCallback((nextPoint: SelectionPoint) => {
-        setSelection((current) => (current ? { start: current.start, end: nextPoint } : current));
-    }, []);
-
-    const handleChartMouseDown = useCallback<CategoricalChartFunc>(
-        (state) => {
-            if (!state) return;
-            const point =
-                getPointFromState(state as MouseHandlerDataParam) ??
-                lastKnownPointRef.current;
-            if (!point) return;
-            setSelection({ start: point, end: point });
-            setIsSelecting(true);
-            lastKnownPointRef.current = point;
-        },
-        [getPointFromState]
-    );
-
-    const handleChartMouseMove = useCallback<CategoricalChartFunc>(
-        (state) => {
-            if (!state) {
-                setHoverPoint(null);
-                return;
-            }
-            const point = getPointFromState(state as MouseHandlerDataParam);
-            if (!point) return;
-            setHoverPoint(point);
-            lastKnownPointRef.current = point;
-            if (isSelecting || selection) {
-                updateSelectionEnd(point);
-            }
-        },
-        [getPointFromState, isSelecting, selection, updateSelectionEnd]
-    );
-
-    const handleChartMouseUp = useCallback<CategoricalChartFunc>(
-        (state) => {
-            if (!isSelecting) return;
-            const point = state
-                ? getPointFromState(state as MouseHandlerDataParam)
-                : null;
-            const nextPoint = point ?? lastKnownPointRef.current;
-            if (nextPoint) {
-                updateSelectionEnd(nextPoint);
-                lastKnownPointRef.current = nextPoint;
-            }
-            setIsSelecting(false);
-        },
-        [getPointFromState, isSelecting, updateSelectionEnd]
-    );
-
-    const handleChartMouseLeave = useCallback(() => {
-        setIsSelecting(false);
-        setHoverPoint(null);
-    }, []);
-
-    useEffect(() => {
-        setSelection(null);
-        setHoverPoint(null);
-        setIsSelecting(false);
-        lastKnownPointRef.current = null;
-    }, [rows]);
-
-    const selectionStart = selection?.start ?? null;
-    const selectionEnd = selection?.end ?? null;
-    const selectionStartPoint = selectionStart?.point ?? null;
-    const selectionEndPoint = selectionEnd?.point ?? null;
-    const hoverSelectionPoint = hoverPoint?.point ?? null;
-    const explicitSelection = Boolean(selectionStart && selectionEnd);
-    const baseStartPoint = rows.length ? rows[0] : null;
-    const anchorPoint = selectionStartPoint ?? baseStartPoint;
-    const targetPoint = selectionEndPoint ?? hoverSelectionPoint;
-    const hasComparisonRange = Boolean(anchorPoint && targetPoint);
-    const selectionChange =
-        anchorPoint && targetPoint ? targetPoint.close - anchorPoint.close : 0;
-    const selectionBase = anchorPoint?.close ?? 0;
-    const selectionPct = selectionBase !== 0 ? (selectionChange / selectionBase) * 100 : 0;
-    const selectionIsZero = Math.abs(selectionChange) < 1e-10;
-    const selectionSign = selectionChange > 0 ? "+" : selectionChange < 0 ? "-" : "";
-    const selectionClass = selectionIsZero
-        ? "text-subtle"
-        : selectionChange > 0
-            ? "text-accent"
-            : "text-negative";
-    const selectionChangeText = selectionIsZero
-        ? priceFormatter.format(0)
-        : `${selectionSign}${priceFormatter.format(Math.abs(selectionChange))}`;
-    const selectionPctText = selectionIsZero
-        ? percentFormatter.format(0)
-        : `${selectionSign}${percentFormatter.format(Math.abs(selectionPct))}`;
-    const selectionStartLabel = anchorPoint
-        ? tooltipDateFormatter.format(new Date(anchorPoint.date))
-        : "";
-    const selectionEndLabel = targetPoint
-        ? tooltipDateFormatter.format(new Date(targetPoint.date))
-        : "";
-    const selectionStartPrice = anchorPoint ? priceFormatter.format(anchorPoint.close) : "";
-    const selectionEndPrice = targetPoint ? priceFormatter.format(targetPoint.close) : "";
-    const selectionColor = selectionIsZero
-        ? "#94A3B8"
-        : selectionChange > 0
-            ? "#1DB954"
-            : "#EA4335";
-    const tooltipLeft = selectionEnd?.x ?? hoverPoint?.x ?? null;
-    const tooltipLeftClamped =
-        tooltipLeft !== null && containerWidth > 0
-            ? Math.min(Math.max(tooltipLeft, 72), containerWidth - 72)
-            : tooltipLeft;
-
-    type SummaryItem = {
-        key: string;
-        symbol: string;
-        label: string;
-        price: number;
-        change: number;
-        changePct: number;
-        color: string;
-    };
-
-    const summaryItems: SummaryItem[] = useMemo(() => {
-        const items: SummaryItem[] = [];
+    const summaryItems = useMemo(() => {
+        const items: {
+            key: string;
+            symbol: string;
+            label: string;
+            price: number;
+            change: number;
+            changePct: number;
+            color: string;
+        }[] = [];
         if (primarySymbol && rows.length) {
             const first = rows[0].close;
             const last = rows[rows.length - 1].close;
+            const primaryColor = last >= first ? "#1DB954" : "#EA4335";
             items.push({
                 key: primarySymbol,
                 symbol: primarySymbol,
@@ -10775,7 +10407,7 @@ function PriceChart({
                 price: last,
                 change: last - first,
                 changePct: first !== 0 ? ((last - first) / first) * 100 : 0,
-                color: strokeColor,
+                color: primaryColor,
             });
         }
         for (const descriptor of comparisonDescriptors) {
@@ -10793,237 +10425,63 @@ function PriceChart({
             });
         }
         return items;
-    }, [comparisonDescriptors, primarySymbol, rows, strokeColor]);
+    }, [comparisonDescriptors, primarySymbol, rows]);
 
-    const baseDataKey = hasComparisons ? "changePct" : "close";
-    const effectiveShowArea = showArea && !hasComparisons;
-    const effectiveShowSma = showSMA && !hasComparisons;
-
-    const priceLine = (
-        <Line
-            type="monotone"
-            dataKey={baseDataKey}
-            stroke={strokeColor}
-            strokeWidth={2}
-            dot={false}
-            activeDot={{ r: 4, strokeWidth: 2, stroke: "#fff" }}
-            connectNulls
-            isAnimationActive={false}
-        />
+    const chartData = useMemo(
+        () =>
+            rows.map((row) => ({
+                date: row.date,
+                close: row.close,
+                open: row.open,
+                high: row.high,
+                low: row.low,
+                volume: row.volume,
+                sma: showSMA ? row.sma ?? null : null,
+            })),
+        [rows, showSMA]
     );
-    const smaLine =
-        effectiveShowSma && (
-            <Line
-                type="monotone"
-                dataKey="sma"
-                stroke="#0A2342"
-                strokeWidth={1.5}
-                dot={false}
-                strokeDasharray="4 4"
-                isAnimationActive={false}
-            />
-        );
-    const comparisonLines = hasComparisons
-        ? comparisonDescriptors
-              .filter((descriptor) => descriptor.hasData)
-              .map((descriptor) => (
-                <Line
-                    key={descriptor.symbol}
-                    type="monotone"
-                    dataKey={`${descriptor.symbol}__pct`}
-                    stroke={descriptor.color}
-                    strokeWidth={2}
-                    dot={false}
-                    connectNulls
-                    isAnimationActive={false}
-                />
-            ))
-        : null;
+
+    const comparisonData = useMemo(
+        () =>
+            (comparisonSeries ?? []).map((series) => ({
+                name: series.label ?? series.symbol,
+                color: series.color,
+                data: series.rows.map((row) => ({
+                    date: row.date,
+                    close: row.close,
+                    open: row.open,
+                    high: row.high,
+                    low: row.low,
+                    volume: row.volume,
+                    sma: null,
+                })),
+            })),
+        [comparisonSeries]
+    );
+
+    const brushData = useMemo(() => brushDataRows ?? rows, [brushDataRows, rows]);
 
     return (
         <div className="space-y-4">
-            <div ref={chartContainerRef} className="relative h-80">
-                {hasComparisonRange && tooltipLeftClamped !== null && (
-                    <div
-                        className="pointer-events-none absolute top-3 z-10 max-w-xs -translate-x-1/2 rounded-lg border border-soft bg-white/95 px-3 py-2 text-xs shadow backdrop-blur"
-                        style={{ left: tooltipLeftClamped }}
-                    >
-                        <div className={`font-semibold ${selectionClass}`}>
-                            {selectionChangeText} ({selectionPctText}%)
-                        </div>
-                        <div className="mt-1 space-y-1 text-[11px] text-muted">
-                            <div className="flex items-center justify-between gap-3">
-                                <span>Start</span>
-                                <span className="font-medium text-foreground">{selectionStartPrice}</span>
-                            </div>
-                            <div className="flex items-center justify-between gap-3">
-                                <span>Koniec</span>
-                                <span className="font-medium text-foreground">{selectionEndPrice}</span>
-                            </div>
-                            <div>
-                                {selectionStartLabel}
-                                {selectionStartLabel && selectionEndLabel ? " → " : ""}
-                                {selectionEndLabel}
-                            </div>
-                        </div>
-                    </div>
-                )}
-                <ResponsiveContainer width="100%" height="100%">
-                    {effectiveShowArea ? (
-                        <AreaChart
-                            data={chartData}
-                            margin={{ top: 10, right: 16, left: 0, bottom: 0 }}
-                            onMouseDown={handleChartMouseDown}
-                            onMouseMove={handleChartMouseMove}
-                            onMouseUp={handleChartMouseUp}
-                            onMouseLeave={handleChartMouseLeave}
-                        >
-                            <defs>
-                                <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-                                    <stop offset="0%" stopColor={primaryColor} stopOpacity={0.3} />
-                                    <stop offset="95%" stopColor={primaryColor} stopOpacity={0} />
-                                </linearGradient>
-                            </defs>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" vertical={false} />
-                            <XAxis
-                                dataKey="date"
-                                tick={{ fontSize: 11 }}
-                                tickMargin={10}
-                                axisLine={false}
-                                tickLine={false}
-                                minTickGap={24}
-                                tickFormatter={axisTickFormatter}
-                            />
-                            <YAxis
-                                width={70}
-                                tick={{ fontSize: 11 }}
-                                axisLine={false}
-                                tickLine={false}
-                                tickFormatter={yTickFormatter}
-                                domain={["auto", "auto"]}
-                            />
-                            <Tooltip<number, string>
-                                cursor={{ stroke: strokeColor, strokeOpacity: 0.2, strokeWidth: 1 }}
-                                content={(tooltipProps) => (
-                                    <ChartTooltipContent
-                                        {...tooltipProps}
-                                        priceFormatter={priceFormatter}
-                                        percentFormatter={percentFormatter}
-                                        dateFormatter={tooltipDateFormatter}
-                                        showSMA={Boolean(showSMA)}
-                                    />
-                                )}
-                                wrapperStyle={{ outline: "none" }}
-                                position={{ y: 24 }}
-                            />
-                            <Area
-                                type="monotone"
-                                dataKey="close"
-                                stroke={strokeColor}
-                                strokeWidth={2}
-                                fill={`url(#${gradientId})`}
-                                fillOpacity={1}
-                                isAnimationActive={false}
-                            />
-                            {explicitSelection && selectionStartPoint && selectionEndPoint && (
-                                <>
-                                    <ReferenceLine x={selectionStartPoint.date} stroke="#CBD5F0" strokeDasharray="4 4" />
-                                    <ReferenceLine x={selectionEndPoint.date} stroke="#CBD5F0" strokeDasharray="4 4" />
-                                    <ReferenceDot
-                                        x={selectionStartPoint.date}
-                                        y={selectionStartPoint.close}
-                                        r={4}
-                                        fill={selectionColor}
-                                        stroke="#ffffff"
-                                        strokeWidth={2}
-                                    />
-                                    <ReferenceDot
-                                        x={selectionEndPoint.date}
-                                        y={selectionEndPoint.close}
-                                        r={4}
-                                        fill={selectionColor}
-                                        stroke="#ffffff"
-                                        strokeWidth={2}
-                                    />
-                                </>
-                            )}
-                            {priceLine}
-                            {smaLine}
-                        </AreaChart>
-                    ) : (
-                        <LineChart
-                            data={chartData}
-                            margin={{ top: 10, right: 16, left: 0, bottom: 0 }}
-                            onMouseDown={handleChartMouseDown}
-                            onMouseMove={handleChartMouseMove}
-                            onMouseUp={handleChartMouseUp}
-                            onMouseLeave={handleChartMouseLeave}
-                        >
-                            <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" vertical={false} />
-                            <XAxis
-                                dataKey="date"
-                                tick={{ fontSize: 11 }}
-                                tickMargin={10}
-                                axisLine={false}
-                                tickLine={false}
-                                minTickGap={24}
-                                tickFormatter={axisTickFormatter}
-                            />
-                            <YAxis
-                                width={70}
-                                tick={{ fontSize: 11 }}
-                                axisLine={false}
-                                tickLine={false}
-                                tickFormatter={yTickFormatter}
-                                domain={["auto", "auto"]}
-                            />
-                            <Tooltip<number, string>
-                                cursor={{ stroke: strokeColor, strokeOpacity: 0.2, strokeWidth: 1 }}
-                                content={(tooltipProps) => (
-                                    <ChartTooltipContent
-                                        {...tooltipProps}
-                                        priceFormatter={priceFormatter}
-                                        percentFormatter={percentFormatter}
-                                        dateFormatter={tooltipDateFormatter}
-                                        showSMA={Boolean(showSMA)}
-                                    />
-                                )}
-                                wrapperStyle={{ outline: "none" }}
-                                position={{ y: 24 }}
-                            />
-                            {explicitSelection && selectionStartPoint && selectionEndPoint && (
-                                <>
-                                    <ReferenceLine x={selectionStartPoint.date} stroke="#CBD5F0" strokeDasharray="4 4" />
-                                    <ReferenceLine x={selectionEndPoint.date} stroke="#CBD5F0" strokeDasharray="4 4" />
-                                    <ReferenceDot
-                                        x={selectionStartPoint.date}
-                                        y={selectionStartPoint.close}
-                                        r={4}
-                                        fill={selectionColor}
-                                        stroke="#ffffff"
-                                        strokeWidth={2}
-                                    />
-                                    <ReferenceDot
-                                        x={selectionEndPoint.date}
-                                        y={selectionEndPoint.close}
-                                        r={4}
-                                        fill={selectionColor}
-                                        stroke="#ffffff"
-                                        strokeWidth={2}
-                                    />
-                                </>
-                            )}
-                            {priceLine}
-                            {comparisonLines}
-                            {smaLine}
-                        </LineChart>
-                    )}
-                </ResponsiveContainer>
+            <div className={`relative ${heightClassName}`}>
+                <MainChartECharts
+                    data={chartData}
+                    comparisonData={comparisonData}
+                    type={chartType}
+                    showSMA={showSMA && !hasComparisons}
+                    brushData={brushData}
+                    brushRange={brushRange ?? undefined}
+                    onBrushChange={onBrushChange}
+                    primaryLabel={primarySymbol ?? "Seria glowna"}
+                    theme={theme}
+                    height="100%"
+                    className="h-full"
+                />
             </div>
             {summaryItems.length > 0 && (
                 <div className="rounded-lg border border-soft bg-white/90 p-4 text-sm shadow-sm">
                     <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">
-                        Porównanie wyników
+                        Porownanie wynikow
                     </div>
                     <div className="space-y-2">
                         {summaryItems.map((item) => {
@@ -11043,7 +10501,7 @@ function PriceChart({
                             return (
                                 <div
                                     key={item.key}
-                                    className="flex flex-wrap items-center gap-x-6 gap-y-2"
+                                    className="flex items-center gap-3 rounded-lg border border-soft bg-white/60 px-3 py-2 text-sm shadow-sm"
                                 >
                                     <div className="flex min-w-[120px] items-center gap-2">
                                         <span
@@ -11052,74 +10510,70 @@ function PriceChart({
                                         />
                                         <span className="font-semibold text-neutral">{item.label}</span>
                                     </div>
-                                    <div className="text-muted">
-                                        {priceFormatter.format(item.price)}
-                                    </div>
-                                    <div className={`font-medium ${changeColor}`}>
-                                        {changeValue}
-                                    </div>
-                                    <div className={`font-medium ${changeColor}`}>
-                                        {changePctValue}%
-                                    </div>
+                                    <div className="text-muted">{priceFormatter.format(item.price)}</div>
+                                    <div className={`font-medium ${changeColor}`}>{changeValue}</div>
+                                    <div className={`font-medium ${changeColor}`}>{changePctValue}%</div>
                                 </div>
                             );
                         })}
                     </div>
                 </div>
             )}
-            {showBrushControls && brushChartData && (
-                <div className="h-24 rounded-lg border border-soft bg-surface px-2 py-2">
-                    <ResponsiveContainer width="100%" height="100%">
-                        <AreaChart data={brushChartData} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
-                            <XAxis
-                                dataKey="date"
-                                tickFormatter={brushTickFormatter}
-                                tick={{ fontSize: 10, fill: "#64748B" }}
-                                axisLine={false}
-                                tickLine={false}
-                                minTickGap={32}
-                            />
-                            <YAxis hide domain={["auto", "auto"]} />
-                            <Area
-                                type="monotone"
-                                dataKey="close"
-                                stroke={strokeColor}
-                                fill={primaryColor}
-                                fillOpacity={0.15}
-                                isAnimationActive={false}
-                                dot={false}
-                            />
-                            <Brush
-                                {...CHART_BRUSH_COMMON_PROPS}
-                                dataKey="date"
-                                height={30}
-                                startIndex={brushRange?.startIndex}
-                                endIndex={brushRange?.endIndex}
-                                onChange={handleBrushUpdate}
-                                onDragEnd={handleBrushUpdate}
-                            />
-                        </AreaChart>
-                    </ResponsiveContainer>
-                </div>
-            )}
         </div>
     );
 }
-
 function RsiChart({ rows }: { rows: RowRSI[] }) {
-    return (
-        <div className="h-40">
-            <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={rows}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#BDC3C7" />
-                    <XAxis dataKey="date" tick={{ fontSize: 12 }} tickMargin={8} />
-                    <YAxis domain={[0, 100]} tick={{ fontSize: 12 }} width={40} />
-                    <Tooltip />
-                    <Line type="monotone" dataKey="rsi" stroke="#0A2342" dot={false} />
-                </LineChart>
-            </ResponsiveContainer>
-        </div>
-    );
+    const { theme } = useTheme();
+    const isDark = theme === "dark";
+
+    const option = useMemo(() => {
+        const dates = rows.map((row) => row.date);
+        const values = rows.map((row) => (typeof row.rsi === "number" ? row.rsi : null));
+        const gridColor = isDark ? "rgba(255,255,255,0.08)" : "#E2E8F0";
+        const labelColor = isDark ? "#CBD5E1" : "#475569";
+
+        return {
+            animation: false,
+            grid: { left: 44, right: 16, top: 12, bottom: 24 },
+            xAxis: {
+                type: "category",
+                data: dates,
+                boundaryGap: false,
+                axisLine: { lineStyle: { color: gridColor } },
+                axisTick: { show: false },
+                axisLabel: { color: labelColor, hideOverlap: true },
+            },
+            yAxis: {
+                type: "value",
+                min: 0,
+                max: 100,
+                axisLine: { show: false },
+                axisTick: { show: false },
+                splitLine: { lineStyle: { color: gridColor } },
+                axisLabel: { color: labelColor },
+            },
+            tooltip: {
+                trigger: "axis",
+                backgroundColor: isDark ? "rgba(17,24,39,0.92)" : "rgba(255,255,255,0.95)",
+                borderColor: isDark ? "#1E293B" : "#E2E8F0",
+                textStyle: { color: isDark ? "#E2E8F0" : "#0F172A" },
+                valueFormatter: (value: unknown) =>
+                    typeof value === "number" ? value.toFixed(2) : value ?? "-",
+            },
+            series: [
+                {
+                    type: "line",
+                    data: values,
+                    smooth: true,
+                    showSymbol: false,
+                    lineStyle: { color: "#2563EB", width: 2 },
+                    areaStyle: { color: isDark ? "rgba(37,99,235,0.14)" : "rgba(37,99,235,0.1)" },
+                },
+            ],
+        };
+    }, [isDark, rows]);
+
+    return <ReactECharts option={option} style={{ width: "100%", height: 160 }} notMerge lazyUpdate />;
 }
 
 type MetricRulePreviewProps = {
@@ -11253,7 +10707,6 @@ function MetricRulePreview({
     asOf,
     onLookbackChange,
 }: MetricRulePreviewProps) {
-    const chartGradientId = useId();
     const [selectedSymbol, setSelectedSymbol] = useState<string>(() => DEFAULT_METRIC_PREVIEW_SYMBOL);
     const [selectedSymbolMeta, setSelectedSymbolMeta] = useState<SymbolRow | null>(null);
     const [loading, setLoading] = useState(false);
@@ -11272,6 +10725,7 @@ function MetricRulePreview({
     const [manualWindowRange, setManualWindowRange] = useState<ChartWindowRange | null>(null);
     const chartRowsRef = useRef<Row[]>([]);
     const lastFetchParamsRef = useRef<{ symbol: string; startISO: string } | null>(null);
+    const { theme } = useTheme();
 
     const sanitizedRule = useMemo(() => {
         const weightNumeric = Number(rule.weight);
@@ -11615,62 +11069,6 @@ function MetricRulePreview({
         []
     );
 
-    const axisDateFormatter = useMemo(
-        () =>
-            new Intl.DateTimeFormat("pl-PL", {
-                month: "short",
-                year: "numeric",
-            }),
-        []
-    );
-
-    const tooltipDateFormatter = useMemo(
-        () =>
-            new Intl.DateTimeFormat("pl-PL", {
-                day: "numeric",
-                month: "long",
-                year: "numeric",
-            }),
-        []
-    );
-
-    const brushDateFormatter = useMemo(
-        () =>
-            new Intl.DateTimeFormat("pl-PL", {
-                year: "numeric",
-                month: "short",
-            }),
-        []
-    );
-
-    const axisTickFormatter = useCallback(
-        (value: string | number) => {
-            if (typeof value !== "string" && typeof value !== "number") {
-                return "";
-            }
-            const date = new Date(value);
-            if (Number.isNaN(date.getTime())) {
-                return "";
-            }
-            return axisDateFormatter.format(date);
-        },
-        [axisDateFormatter]
-    );
-
-    const brushTickFormatter = useCallback(
-        (value: string | number) => {
-            if (typeof value !== "string" && typeof value !== "number") {
-                return "";
-            }
-            const date = new Date(value);
-            if (Number.isNaN(date.getTime())) {
-                return "";
-            }
-            return brushDateFormatter.format(date);
-        },
-        [brushDateFormatter]
-    );
-
     const windowRows = useMemo(() => {
         if (!windowRange) return [];
         const total = chartRows.length;
@@ -11751,9 +11149,6 @@ function MetricRulePreview({
         if (!last) return "—";
         return priceFormatter.format(last.close);
     }, [chartData, priceFormatter]);
-
-    const chartPrimaryColor = chartStats && chartStats.change < 0 ? "#EA4335" : "#1DB954";
-    const chartStrokeColor = chartStats && chartStats.change < 0 ? "#C5221F" : "#0B8F47";
 
     const metricRange = useMemo(() => {
         if (!component) return null;
@@ -12040,60 +11435,18 @@ function MetricRulePreview({
                             <div className="space-y-6">
                                 <div className="relative h-64">
                                     {chartData.length ? (
-                                        <ResponsiveContainer width="100%" height="100%">
-                                            <AreaChart
-                                                data={chartData}
-                                                margin={{ top: 10, right: 16, left: 0, bottom: 0 }}
-                                            >
-                                                <defs>
-                                                    <linearGradient id={chartGradientId} x1="0" y1="0" x2="0" y2="1">
-                                                        <stop offset="0%" stopColor={chartPrimaryColor} stopOpacity={0.35} />
-                                                        <stop offset="95%" stopColor={chartPrimaryColor} stopOpacity={0} />
-                                                    </linearGradient>
-                                                </defs>
-                                                <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" vertical={false} />
-                                                <XAxis
-                                                    dataKey="date"
-                                                    tick={{ fontSize: 11 }}
-                                                    tickMargin={10}
-                                                    axisLine={false}
-                                                    tickLine={false}
-                                                    minTickGap={24}
-                                                    tickFormatter={axisTickFormatter}
-                                                />
-                                                <YAxis
-                                                    width={70}
-                                                    tick={{ fontSize: 11 }}
-                                                    axisLine={false}
-                                                    tickLine={false}
-                                                    tickFormatter={(value) => priceFormatter.format(value)}
-                                                    domain={["auto", "auto"]}
-                                                />
-                                                <Tooltip<number, string>
-                                                    cursor={{ stroke: chartStrokeColor, strokeOpacity: 0.2, strokeWidth: 1 }}
-                                                    content={(tooltipProps) => (
-                                                        <ChartTooltipContent
-                                                            {...tooltipProps}
-                                                            priceFormatter={priceFormatter}
-                                                            percentFormatter={percentFormatter}
-                                                            dateFormatter={tooltipDateFormatter}
-                                                            showSMA={false}
-                                                        />
-                                                    )}
-                                                    wrapperStyle={{ outline: "none" }}
-                                                    position={{ y: 24 }}
-                                                />
-                                                <Area
-                                                    type="monotone"
-                                                    dataKey="close"
-                                                    stroke={chartStrokeColor}
-                                                    strokeWidth={2}
-                                                    fill={`url(#${chartGradientId})`}
-                                                    fillOpacity={1}
-                                                    isAnimationActive={false}
-                                                />
-                                            </AreaChart>
-                                        </ResponsiveContainer>
+                                        <MainChartECharts
+                                            data={chartData}
+                                            brushData={brushData}
+                                            brushRange={windowRange ?? undefined}
+                                            onBrushChange={handleBrushSelectionChange}
+                                            type="area"
+                                            showSMA={false}
+                                            showLegend={false}
+                                            theme={theme}
+                                            height="100%"
+                                            className="h-full"
+                                        />
                                     ) : !chartLoading ? (
                                         <div className="flex h-full items-center justify-center text-xs text-subtle">
                                             Brak danych cenowych dla wybranego zakresu.
@@ -12101,72 +11454,22 @@ function MetricRulePreview({
                                     ) : null}
                                     {chartLoading ? (
                                         <div className="pointer-events-none absolute right-3 top-3 z-10 text-[11px] text-muted">
-                                            Ładowanie wykresu…
+                                            Ladowanie wykresu...
                                         </div>
                                     ) : null}
                                 </div>
-                                <div className="space-y-2">
-                                    <div className="relative h-32 rounded-2xl border border-soft bg-surface px-3 py-4">
-                                        {sliderAvailable ? (
-                                            <ResponsiveContainer width="100%" height="100%">
-                                                <AreaChart
-                                                    data={brushData}
-                                                    margin={{ top: 8, right: 16, left: 0, bottom: 16 }}
-                                                >
-                                                    <XAxis
-                                                        dataKey="date"
-                                                        tickFormatter={brushTickFormatter}
-                                                        tick={{ fontSize: 10, fill: "#64748B" }}
-                                                        tickMargin={12}
-                                                        axisLine={false}
-                                                        tickLine={false}
-                                                        minTickGap={32}
-                                                    />
-                                                    <YAxis hide domain={["auto", "auto"]} />
-                                                    <Area
-                                                        type="monotone"
-                                                        dataKey="close"
-                                                        stroke={chartStrokeColor}
-                                                        fill={chartPrimaryColor}
-                                                        fillOpacity={0.15}
-                                                        isAnimationActive={false}
-                                                        dot={false}
-                                                    />
-                                                    <Brush
-                                                        {...CHART_BRUSH_COMMON_PROPS}
-                                                        dataKey="date"
-                                                        height={48}
-                                                        startIndex={windowRange?.startIndex}
-                                                        endIndex={windowRange?.endIndex}
-                                                        onChange={handleBrushSelectionChange}
-                                                        onDragEnd={handleBrushSelectionChange}
-                                                    />
-                                                </AreaChart>
-                                            </ResponsiveContainer>
-                                        ) : !chartLoading ? (
-                                            <div className="flex h-full items-center justify-center text-xs text-subtle">
-                                                Brak danych historycznych.
-                                            </div>
-                                        ) : null}
-                                        {chartLoading ? (
-                                            <div className="pointer-events-none absolute bottom-3 right-3 z-10 text-[11px] text-muted">
-                                                Ładowanie wykresu…
-                                            </div>
-                                        ) : null}
+                                {sliderAvailable ? (
+                                    <div className="flex justify-between text-xs text-muted">
+                                        <span>{windowStartDate ?? "-"}</span>
+                                        <span>{windowEndDate ?? "-"}</span>
                                     </div>
-                                    {sliderAvailable ? (
-                                        <div className="flex justify-between text-xs text-muted">
-                                            <span>{windowStartDate ?? "—"}</span>
-                                            <span>{windowEndDate ?? "—"}</span>
-                                        </div>
-                                    ) : null}
-                                </div>
+                                ) : null}
+                                {chartError ? (
+                                    <div className="rounded-xl border border-negative bg-negative/5 px-3 py-2 text-xs text-negative">
+                                        {chartError}
+                                    </div>
+                                ) : null}
                             </div>
-                            {chartError ? (
-                                <div className="rounded-xl border border-negative bg-negative/5 px-3 py-2 text-xs text-negative">
-                                    {chartError}
-                                </div>
-                            ) : null}
                         </div>
                         {!preview && !loading && !error ? (
                             <div className="rounded-2xl border border-dashed border-soft p-4 text-xs text-subtle">
@@ -12441,7 +11744,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
     const [symbol, setSymbolState] = useState<string | null>(DEFAULT_WATCHLIST[0] ?? null);
     const activeSymbolLabel = symbol ? symbolDisplayNames[symbol] ?? symbol : null;
     const [period, setPeriod] = useState<ChartPeriod>(365);
-    const [area, setArea] = useState(true);
+    const [chartType, setChartType] = useState<ChartTypeValue>("area");
     const [smaOn, setSmaOn] = useState(true);
     const [watchSnapshots, setWatchSnapshots] = useState<Record<string, WatchSnapshot>>({});
     const watchMetaRef = useRef<Record<string, SymbolKind>>({});
@@ -12809,6 +12112,16 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
         }
     });
     const [savedPortfolios, setSavedPortfolios] = useState<SavedPortfolio[]>([]);
+    const [savedPortfolioSimulations, setSavedPortfolioSimulations] = useState<
+        Record<string, SavedPortfolioSimulationState>
+    >({});
+    const [savedPortfolioBrushRanges, setSavedPortfolioBrushRanges] = useState<
+        Record<string, BrushStartEndIndex | null>
+    >({});
+    const [savedPortfolioComparisonIds, setSavedPortfolioComparisonIds] = useState<string[]>(
+        []
+    );
+    const [expandedPortfolioChartId, setExpandedPortfolioChartId] = useState<string | null>(null);
     const [portfolioValues, setPortfolioValues] = useState<Record<string, number>>({});
     const savedPortfoliosHydratedRef = useRef(false);
 
@@ -12852,7 +12165,15 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                         : new Date().toISOString();
                 const draftRaw = (item as { draft?: unknown }).draft;
                 const draft = sanitizePortfolioDraft(draftRaw);
-                normalized.push({ id, name, createdAt, draft });
+                const simulationRaw = (item as { simulation?: unknown }).simulation;
+                const simulation = sanitizeSavedPortfolioSimulation(simulationRaw);
+                normalized.push({
+                    id,
+                    name,
+                    createdAt,
+                    draft,
+                    ...(simulation ? { simulation } : {}),
+                });
             });
             if (normalized.length) {
                 setSavedPortfolios(normalized);
@@ -12863,6 +12184,26 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
             savedPortfoliosHydratedRef.current = true;
         }
     }, [sanitizePortfolioDraft]);
+
+    useEffect(() => {
+        if (!savedPortfolios.length) {
+            setSavedPortfolioComparisonIds([]);
+            return;
+        }
+        setSavedPortfolioComparisonIds((prev) => {
+            const allowed = new Set(savedPortfolios.map((portfolio) => portfolio.id));
+            const filtered = prev.filter((id) => allowed.has(id));
+            if (filtered.length === 0) {
+                return savedPortfolios
+                    .slice(0, Math.min(2, savedPortfolios.length))
+                    .map((portfolio) => portfolio.id);
+            }
+            if (filtered.length !== prev.length) {
+                return filtered;
+            }
+            return prev;
+        });
+    }, [savedPortfolios]);
 
     useEffect(() => {
         if (!savedPortfoliosHydratedRef.current) {
@@ -12883,6 +12224,12 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                             score: { ...portfolio.draft.score },
                             comparisons: [...portfolio.draft.comparisons],
                         },
+                        simulation: portfolio.simulation
+                            ? {
+                                  savedAt: portfolio.simulation.savedAt,
+                                  data: clonePortfolioResp(portfolio.simulation.data),
+                              }
+                            : undefined,
                     }))
                 )
             );
@@ -14329,8 +13676,11 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                 ? crypto.randomUUID()
                 : `portfolio-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         const createdAt = new Date().toISOString();
+        const simulationCache = pfRes
+            ? { data: clonePortfolioResp(pfRes), savedAt: createdAt }
+            : undefined;
         setSavedPortfolios((prev) => [
-            { id, name: trimmedName, createdAt, draft: normalized },
+            { id, name: trimmedName, createdAt, draft: normalized, simulation: simulationCache },
             ...prev.filter((portfolio) => portfolio.name.toLowerCase() !== trimmedName.toLowerCase()),
         ]);
         setPfSaveName("");
@@ -14378,6 +13728,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
     const handleDeleteSavedPortfolio = useCallback(
         (id: string) => {
             setSavedPortfolios((prev) => prev.filter((portfolio) => portfolio.id !== id));
+            setSavedPortfolioComparisonIds((prev) => prev.filter((portfolioId) => portfolioId !== id));
         },
         [setSavedPortfolios]
     );
@@ -14395,6 +13746,31 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
         },
         [router]
     );
+
+    const toggleSavedPortfolioComparison = useCallback((id: string) => {
+        setSavedPortfolioComparisonIds((prev) => {
+            if (prev.includes(id)) {
+                return prev.filter((item) => item !== id);
+            }
+            if (prev.length >= MAX_COMPARISONS) {
+                return prev;
+            }
+            return [...prev, id];
+        });
+    }, []);
+
+    const makeSavedPortfolioComparisonPrimary = useCallback((id: string) => {
+        setSavedPortfolioComparisonIds((prev) => {
+            if (!prev.includes(id)) {
+                return [id, ...prev];
+            }
+            if (prev[0] === id) {
+                return prev;
+            }
+            const filtered = prev.filter((item) => item !== id);
+            return [id, ...filtered];
+        });
+    }, []);
 
     const benchmarkUniverseOptions = useMemo<BenchmarkUniverseOption[]>(() => {
         const options: BenchmarkUniverseOption[] = [];
@@ -15157,16 +14533,26 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
             setComparisonErrors(nextErrors);
             if (Object.keys(nextMeta).length) {
                 setComparisonMeta((prev) => {
+                    let changed = false;
                     const merged = { ...prev };
                     for (const [sym, meta] of Object.entries(nextMeta)) {
                         const existing = merged[sym];
-                        merged[sym] = {
-                            ...(existing ?? meta),
+                        const nextValue: ComparisonMeta = {
+                            ...(existing ?? {}),
+                            ...meta,
                             kind: meta.kind,
-                            name: existing?.name ?? meta.name ?? existing?.name ?? null,
+                            name: existing?.name ?? meta.name ?? null,
                         };
+                        if (
+                            !existing ||
+                            existing.kind !== nextValue.kind ||
+                            existing.name !== nextValue.name
+                        ) {
+                            changed = true;
+                        }
+                        merged[sym] = nextValue;
                     }
-                    return merged;
+                    return changed ? merged : prev;
                 });
             }
         })();
@@ -15471,16 +14857,26 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
             setPfComparisonErrors(nextErrors);
             if (Object.keys(nextMeta).length) {
                 setPfComparisonMeta((prev) => {
+                    let changed = false;
                     const merged = { ...prev };
                     for (const [sym, meta] of Object.entries(nextMeta)) {
                         const existing = merged[sym];
-                        merged[sym] = {
-                            ...(existing ?? meta),
+                        const nextValue: ComparisonMeta = {
+                            ...(existing ?? {}),
+                            ...meta,
                             kind: meta.kind,
-                            name: existing?.name ?? meta.name ?? existing?.name ?? null,
+                            name: existing?.name ?? meta.name ?? null,
                         };
+                        if (
+                            !existing ||
+                            existing.kind !== nextValue.kind ||
+                            existing.name !== nextValue.name
+                        ) {
+                            changed = true;
+                        }
+                        merged[sym] = nextValue;
                     }
-                    return merged;
+                    return changed ? merged : prev;
                 });
             }
         })();
@@ -15540,7 +14936,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
         [pfComparisonErrors]
     );
 
-    const parseUniverseValue = (value: string): string | string[] | null => {
+    const parseUniverseValue = useCallback((value: string): string | string[] | null => {
         const trimmed = value.trim();
         if (!trimmed) return null;
         const tokens = trimmed
@@ -15549,7 +14945,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
             .filter(Boolean);
         if (!tokens.length) return null;
         return tokens.length === 1 ? tokens[0] : tokens;
-    };
+    }, []);
 
     const expandUniverseValueWithCustomIndices = useCallback(
         (value: string | string[] | null | undefined): string | string[] | null | undefined => {
@@ -15658,6 +15054,228 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
         },
         [benchmarkUniverseOptionMap, customIndexMap, scoreUniverseFallback]
     );
+
+    useEffect(() => {
+        setSavedPortfolioSimulations((prev) => {
+            const next: Record<string, SavedPortfolioSimulationState> = {};
+            let changed = savedPortfolios.length !== Object.keys(prev).length;
+            savedPortfolios.forEach((portfolio) => {
+                const existing = prev[portfolio.id];
+                const cached = portfolio.simulation?.data;
+                const shouldResetAuto =
+                    existing?.status === "ready" &&
+                    portfolio.draft.mode === "score" &&
+                    !cached;
+                const nextState: SavedPortfolioSimulationState = shouldResetAuto
+                    ? { status: "idle" }
+                    : existing?.status === "ready"
+                    ? existing
+                    : cached
+                    ? { status: "ready", data: cached }
+                    : existing ?? { status: "idle" };
+                next[portfolio.id] = nextState;
+                if (
+                    !existing ||
+                    existing.status !== nextState.status ||
+                    (existing.status === "ready" &&
+                        nextState.status === "ready" &&
+                        existing.data !== nextState.data)
+                ) {
+                    changed = true;
+                }
+            });
+            return changed ? next : prev;
+        });
+    }, [customIndexMap, savedPortfolios, scoreComponents]);
+
+    const loadSavedPortfolioSimulation = useCallback(
+        async (portfolio: SavedPortfolio, force = false) => {
+            const key = portfolio.id;
+            setSavedPortfolioSimulations((prev) => {
+                const current = prev[key];
+                if (!force && current && (current.status === "loading" || current.status === "ready")) {
+                    return prev;
+                }
+                return { ...prev, [key]: { status: "loading" } };
+            });
+
+            try {
+                let res: PortfolioResp;
+                if (portfolio.draft.mode === "manual") {
+                    const prepared = portfolio.draft.rows.filter(
+                        (row) => row.symbol && Number(row.weight) > 0
+                    );
+                    const symbols = prepared.map((row) => row.symbol);
+                    const weights = prepared.map((row) => Number(row.weight) || 0);
+                    res = await backtestPortfolio(symbols, weights, {
+                        start: portfolio.draft.start,
+                        end: portfolio.draft.end,
+                        rebalance: portfolio.draft.frequency,
+                        initialCapital: portfolio.draft.initial,
+                        feePct: portfolio.draft.fee,
+                        thresholdPct: portfolio.draft.threshold,
+                        benchmark: portfolio.draft.benchmark,
+                    });
+                } else {
+                    const parseOptionalNumberFromString = (value: string | null | undefined) => {
+                        if (!value) return null;
+                        const trimmed = value.trim();
+                        if (!trimmed.length) return null;
+                        const numeric = Number(trimmed);
+                        return Number.isFinite(numeric) ? numeric : null;
+                    };
+
+                    const universeValue = parseUniverseValue(portfolio.draft.score.universe ?? "");
+                    const expandedUniverse = expandUniverseValueWithCustomIndices(universeValue);
+                    const fallback = computeUniverseFallback(expandedUniverse);
+
+                    const componentsForScore = scoreComponents;
+                    if (!componentsForScore.length) {
+                        throw new Error("Skonfiguruj ranking score, aby pobrać symulację portfela.");
+                    }
+
+                    res = await backtestPortfolioByScore(
+                        {
+                            score: portfolio.draft.score.name.trim(),
+                            limit:
+                                typeof portfolio.draft.score.limit === "number" &&
+                                portfolio.draft.score.limit > 0
+                                    ? Math.floor(portfolio.draft.score.limit)
+                                    : undefined,
+                            weighting: portfolio.draft.score.weighting,
+                            direction: portfolio.draft.score.direction,
+                            universe: expandedUniverse ?? undefined,
+                            minScore: parseOptionalNumberFromString(portfolio.draft.score.min),
+                            maxScore: parseOptionalNumberFromString(portfolio.draft.score.max),
+                            start: portfolio.draft.start,
+                            end: portfolio.draft.end,
+                            rebalance: portfolio.draft.frequency,
+                            initialCapital: portfolio.draft.initial,
+                            feePct: portfolio.draft.fee,
+                            thresholdPct: portfolio.draft.threshold,
+                            benchmark: portfolio.draft.benchmark,
+                        },
+                        componentsForScore,
+                        fallback,
+                        customIndexMap
+                    );
+                }
+
+                const cloned = clonePortfolioResp(res);
+                const savedAt = new Date().toISOString();
+                setSavedPortfolioSimulations((prev) => ({
+                    ...prev,
+                    [key]: { status: "ready", data: cloned },
+                }));
+                setSavedPortfolios((prev) =>
+                    prev.map((item) =>
+                        item.id === key
+                            ? { ...item, simulation: { data: clonePortfolioResp(cloned), savedAt } }
+                            : item
+                    )
+                );
+            } catch (error) {
+                const message = resolveErrorMessage(
+                    error,
+                    "Nie udało się pobrać historii symulacji."
+                );
+                setSavedPortfolioSimulations((prev) => ({
+                    ...prev,
+                    [key]: { status: "error", error: message },
+                }));
+            }
+        },
+        [
+            computeUniverseFallback,
+            customIndexMap,
+            expandUniverseValueWithCustomIndices,
+            parseUniverseValue,
+            scoreComponents,
+        ]
+    );
+
+    useEffect(() => {
+        if (view !== "wallet") {
+            return;
+        }
+        savedPortfolios.forEach((portfolio) => {
+            const state = savedPortfolioSimulations[portfolio.id];
+            if (!state || state.status === "idle") {
+                void loadSavedPortfolioSimulation(portfolio);
+            }
+        });
+    }, [loadSavedPortfolioSimulation, savedPortfolioSimulations, savedPortfolios, view]);
+
+    const savedPortfolioComparisonLoading = useMemo(
+        () =>
+            savedPortfolioComparisonIds.some((id) => {
+                const state = savedPortfolioSimulations[id];
+                return !state || state.status === "loading" || state.status === "idle";
+            }),
+        [savedPortfolioComparisonIds, savedPortfolioSimulations]
+    );
+
+    const savedPortfolioComparisonData = useMemo(() => {
+        const available: { id: string; label: string; rows: Row[]; color: string }[] = [];
+        const missingLabels: string[] = [];
+
+        if (!savedPortfolioComparisonIds.length) {
+            return {
+                primaryLabel: null as string | null,
+                primaryRows: [] as RowSMA[],
+                comparisonSeries: [] as ComparisonSeries[],
+                missingLabels,
+            };
+        }
+
+        let colorIndex = 0;
+        savedPortfolioComparisonIds.forEach((id) => {
+            const portfolio = savedPortfolios.find((item) => item.id === id);
+            if (!portfolio) {
+                return;
+            }
+            const state = savedPortfolioSimulations[id];
+            const simulation =
+                state?.status === "ready"
+                    ? state.data
+                    : portfolio.simulation?.data ?? null;
+            const equityRows = simulation?.equity ?? [];
+            if (!equityRows.length) {
+                missingLabels.push(portfolio.name || id);
+                return;
+            }
+            const rows = portfolioPointsToRows(equityRows);
+            if (!rows.length) {
+                missingLabels.push(portfolio.name || id);
+                return;
+            }
+            const color = COMPARISON_COLORS[colorIndex % COMPARISON_COLORS.length];
+            colorIndex += 1;
+            available.push({
+                id,
+                label: portfolio.name || "Portfel",
+                rows,
+                color,
+            });
+        });
+
+        const primary = available[0];
+        const comparisonSeries = primary
+            ? available.slice(1).map((entry) => ({
+                  symbol: entry.id,
+                  label: entry.label,
+                  color: entry.color,
+                  rows: entry.rows,
+              }))
+            : [];
+
+        return {
+            primaryLabel: primary?.label ?? null,
+            primaryRows: primary ? primary.rows.map((row) => ({ ...row, sma: null })) : [],
+            comparisonSeries,
+            missingLabels,
+        };
+    }, [savedPortfolioComparisonIds, savedPortfolioSimulations, savedPortfolios]);
 
     const addScoreRule = () => {
         const defaultOption = SCORE_METRIC_OPTIONS[0];
@@ -16888,23 +16506,16 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                     <Card
                                         title={symbol ? `${activeSymbolLabel ?? symbol} – wykres cenowy` : "Wykres cenowy"}
                                         right={
-                                            <>
-                                                {PERIOD_OPTIONS.map(({ label, value }) => (
-                                                    <Chip
-                                                        key={value}
-                                                        active={period === value}
-                                                        onClick={() => setPeriod(value)}
-                                                    >
-                                                        {label}
-                                                    </Chip>
-                                                ))}
-                                                <Chip active={area} onClick={() => setArea(!area)}>
-                                                    Area
-                                                </Chip>
+                                            <ChartControls
+                                                interval={period}
+                                                onIntervalChange={setPeriod}
+                                                type={chartType}
+                                                onTypeChange={setChartType}
+                                            >
                                                 <Chip active={smaOn} onClick={() => setSmaOn(!smaOn)}>
                                                     SMA 20
                                                 </Chip>
-                                            </>
+                                            </ChartControls>
                                         }
                                     >
                                         {!symbol ? (
@@ -16994,7 +16605,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                 )}
                                                 <PriceChart
                                                     rows={withSma}
-                                                    showArea={area}
+                                                    chartType={chartType}
                                                     showSMA={smaOn}
                                                     brushDataRows={period === "max" ? brushRows : undefined}
                                                     brushRange={period === "max" ? brushRange : null}
@@ -18970,21 +18581,18 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                         )}
                                         {pfPortfolioVisibleRows.length > 0 && (
                                             <div className="mt-6 space-y-4">
-                                                <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                                                    <div className="flex-1">
-                                                        <Stats data={pfPortfolioVisibleRows} />
-                                                    </div>
-                                                    <div className="flex flex-wrap items-center gap-2 md:justify-end">
-                                                        {PERIOD_OPTIONS.map(({ label, value }) => (
-                                                            <Chip
-                                                                key={`pf-${value}`}
-                                                                active={pfPeriod === value}
-                                                                onClick={() => setPfPeriod(value)}
-                                                            >
-                                                                {label}
-                                                            </Chip>
-                                                        ))}
-                                                    </div>
+                                                    <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                                                        <div className="flex-1">
+                                                            <Stats data={pfPortfolioVisibleRows} />
+                                                        </div>
+                                                    <ChartControls
+                                                        interval={pfPeriod}
+                                                        onIntervalChange={setPfPeriod}
+                                                        type={chartType}
+                                                        onTypeChange={setChartType}
+                                                        className="md:justify-end"
+                                                        showTypeSwitcher={false}
+                                                    />
                                                 </div>
                                                 <div className="rounded-lg border border-dashed border-soft/70 bg-white/60 p-3">
                                                     <div className="flex flex-wrap items-center gap-3">
@@ -19065,7 +18673,7 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                 </div>
                                                 <PriceChart
                                                     rows={pfPortfolioRowsWithSma}
-                                                    showArea
+                                                    chartType="area"
                                                     showSMA={false}
                                                     brushDataRows={
                                                         pfPeriod === "max" ? pfBrushRows : undefined
@@ -19144,6 +18752,106 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                             <Card>
                                 {savedPortfolios.length ? (
                                     <div className="space-y-6">
+                                        {savedPortfolios.length > 1 && (
+                                            <div className="rounded-3xl border border-soft bg-white/80 p-4 shadow-sm">
+                                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                                    <div className="space-y-1">
+                                                        <h4 className="text-sm font-semibold text-neutral">
+                                                            Porownaj zapisane portfele
+                                                        </h4>
+                                                        <p className="text-xs text-subtle">
+                                                            Zaznacz portfele, aby wyswietlic je na wspolnym wykresie. Podwojne klikniecie ustawia glowna serie.
+                                                        </p>
+                                                    </div>
+                                                    <div className="flex flex-wrap gap-2">
+                                                        {savedPortfolios.map((portfolio) => {
+                                                            const active = savedPortfolioComparisonIds.includes(portfolio.id);
+                                                            const disableNew =
+                                                                !active &&
+                                                                savedPortfolioComparisonIds.length >= MAX_COMPARISONS;
+                                                            const baseClasses =
+                                                                "rounded-full border px-3 py-1.5 text-xs font-semibold transition";
+                                                            const activeClasses =
+                                                                "border-[var(--color-primary)] bg-primary/10 text-primary";
+                                                            const inactiveClasses =
+                                                                "border-soft text-muted hover:border-[var(--color-primary)] hover:text-primary";
+                                                            return (
+                                                                <button
+                                                                    key={`portfolio-compare-${portfolio.id}`}
+                                                                    type="button"
+                                                                    onClick={() =>
+                                                                        toggleSavedPortfolioComparison(portfolio.id)
+                                                                    }
+                                                                    onDoubleClick={() =>
+                                                                        makeSavedPortfolioComparisonPrimary(portfolio.id)
+                                                                    }
+                                                                    disabled={disableNew}
+                                                                    className={`${baseClasses} ${
+                                                                        active ? activeClasses : inactiveClasses
+                                                                    } ${disableNew ? "opacity-60" : ""}`}
+                                                                    title={
+                                                                        active
+                                                                            ? "Usun z porownania"
+                                                                            : disableNew
+                                                                            ? "Osiagnieto limit serii porownawczych"
+                                                                            : "Dodaj do porownania"
+                                                                    }
+                                                                >
+                                                                    {portfolio.name}
+                                                                    {active &&
+                                                                    savedPortfolioComparisonIds[0] === portfolio.id ? (
+                                                                        <span className="ml-2 rounded-full bg-primary/20 px-2 py-[1px] text-[10px] uppercase tracking-wide text-primary">
+                                                                            Glowna
+                                                                        </span>
+                                                                    ) : null}
+                                                                </button>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                </div>
+                                                {savedPortfolioComparisonIds.length === 0 ? (
+                                                    <p className="mt-3 text-xs text-subtle">
+                                                        Dodaj co najmniej jeden portfel, aby wyswietlic wykres porownawczy.
+                                                    </p>
+                                                ) : savedPortfolioComparisonData.primaryRows.length ? (
+                                                    <div className="mt-4 space-y-2">
+                                                        <PriceChart
+                                                            rows={savedPortfolioComparisonData.primaryRows}
+                                                            chartType="area"
+                                                            showSMA={false}
+                                                            primarySymbol={
+                                                                savedPortfolioComparisonData.primaryLabel ?? "Portfel"
+                                                            }
+                                                            comparisonSeries={
+                                                                savedPortfolioComparisonData.comparisonSeries
+                                                            }
+                                                            heightClassName="h-96"
+                                                        />
+                                                        {savedPortfolioComparisonLoading ? (
+                                                            <div className="text-[11px] text-subtle">
+                                                                Laduje dane wybranych portfeli...
+                                                            </div>
+                                                        ) : null}
+                                                        {savedPortfolioComparisonData.missingLabels.length ? (
+                                                            <div className="text-[11px] text-subtle">
+                                                                Brak danych dla:{" "}
+                                                                {savedPortfolioComparisonData.missingLabels.join(", ")}.
+                                                                Uruchom symulacje, aby dodac je do wykresu.
+                                                            </div>
+                                                        ) : null}
+                                                    </div>
+                                                ) : (
+                                                    <p className="mt-3 text-xs text-subtle">
+                                                        Uruchom symulacje wybranych portfeli, aby zobaczyc ich przebieg.
+                                                        {savedPortfolioComparisonData.missingLabels.length
+                                                            ? ` Brak danych dla: ${savedPortfolioComparisonData.missingLabels.join(
+                                                                  ", "
+                                                              )}.`
+                                                            : ""}
+                                                    </p>
+                                                )}
+                                            </div>
+                                        )}
                                         {savedPortfolios.map((portfolio) => {
                                             const positions = portfolio.draft.rows
                                                 .filter((row) => row.symbol && Number(row.weight) > 0)
@@ -19198,22 +18906,108 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                       dateStyle: "medium",
                                                   })
                                                 : "Brak rebalansingu";
-                                            const compositionSeries = buildCompositionSeries(sortedPositions, {
-                                                start: portfolio.draft.start,
-                                                end: portfolio.draft.end,
-                                                frequency,
-                                                threshold: portfolio.draft.threshold ?? 0,
-                                            });
-                                            const hasChartData =
-                                                compositionSeries.data.length > 0 &&
-                                                compositionSeries.keys.length > 0;
-                                            const chartData = compositionSeries.data.map(
-                                                ({ label, values }) => ({
-                                                    label,
-                                                    ...values,
-                                                })
+                                            const simulationState = savedPortfolioSimulations[portfolio.id];
+                                            const simulationStatus = simulationState?.status ?? "idle";
+                                            const simulationLoading = simulationStatus === "loading";
+                                            const simulationError =
+                                                simulationStatus === "error" && simulationState?.status === "error"
+                                                    ? simulationState.error
+                                                    : null;
+                                                const simulation =
+                                                    simulationStatus === "ready" && simulationState?.status === "ready"
+                                                        ? simulationState.data
+                                                        : null;
+
+                                            type HistoryPoint = {
+                                                date: string;
+                                                label: string;
+                                                value: number;
+                                                positions: { symbol: string; weight: number; value?: number }[];
+                                            };
+
+                                            const holdingsTimeline = simulation?.holdings_timeline ?? [];
+                                            const equitySeries = simulation?.equity ?? [];
+                                            const equityMap = new Map(
+                                                equitySeries.map((point) => [point.date, point.value])
                                             );
-                                            let createdAtLabel = portfolio.createdAt;
+                                            const historySeries =
+                                                holdingsTimeline.length > 0
+                                                    ? holdingsTimeline
+                                                    : equitySeries.map((point) => ({
+                                                          date: point.date,
+                                                          portfolio_value: point.value,
+                                                          positions: simulation?.holdings ?? [],
+                                                      }));
+                                            const historyChartData: HistoryPoint[] = historySeries.reduce<
+                                                HistoryPoint[]
+                                            >((acc, point) => {
+                                                const portfolioValue =
+                                                    typeof (point as PortfolioHoldingsPoint).portfolio_value === "number"
+                                                        ? (point as PortfolioHoldingsPoint).portfolio_value
+                                                        : equityMap.get(point.date);
+                                                if (portfolioValue === undefined) {
+                                                    return acc;
+                                                }
+                                                const parsedDate = parseDateString(point.date);
+                                                const label = parsedDate ? formatDateLabel(parsedDate) : String(point.date);
+                                                const positionsSourceRaw =
+                                                    (point as PortfolioHoldingsPoint).positions ??
+                                                    simulation?.holdings ??
+                                                    [];
+                                                const positionsSource = Array.isArray(positionsSourceRaw)
+                                                    ? positionsSourceRaw
+                                                    : [];
+                                                const positions = positionsSource
+                                                    .filter((pos) => pos && !isCashLikePosition(pos.symbol))
+                                                    .map((pos) => ({
+                                                        symbol: pos.symbol,
+                                                        weight: pos.weight ?? 0,
+                                                        value:
+                                                            pos.value ??
+                                                            (Number.isFinite(pos.weight)
+                                                                ? portfolioValue * (pos.weight as number)
+                                                                : undefined),
+                                                    }))
+                                                    .sort((a, b) => (b.weight ?? 0) - (a.weight ?? 0));
+                                                acc.push({
+                                                    date: point.date,
+                                                    label,
+                                                    value: portfolioValue,
+                                                    positions,
+                                                });
+                                                return acc;
+                                            }, []);
+                                            historyChartData.sort((a, b) => {
+                                                const da = parseDateString(a.date);
+                                                const db = parseDateString(b.date);
+                                                if (da && db) {
+                                                    return da.getTime() - db.getTime();
+                                                }
+                                                return a.date.localeCompare(b.date);
+                                            });
+                                            
+                                            const historyRows: RowSMA[] = historyChartData.map((point) => ({
+                                                date: point.date,
+                                                open: point.value,
+                                                high: point.value,
+                                                low: point.value,
+                                                close: point.value,
+                                                volume: 0,
+                                                sma: null,
+                                            }));
+                                            const savedBrushRange =
+                                                savedPortfolioBrushRanges[portfolio.id] ?? null;
+                                            const handleSavedBrushChange = (range: BrushStartEndIndex) => {
+                                                if (!range) return;
+                                                setSavedPortfolioBrushRanges((prev) => ({
+                                                    ...prev,
+                                                    [portfolio.id]: range,
+                                                }));
+                                            };
+                                            const openExpandedChart = () => setExpandedPortfolioChartId(portfolio.id);
+                                            const closeExpandedChart = () => setExpandedPortfolioChartId(null);
+                                            const isExpanded = expandedPortfolioChartId === portfolio.id;
+let createdAtLabel = portfolio.createdAt;
                                             const createdAtDate = new Date(portfolio.createdAt);
                                             if (!Number.isNaN(createdAtDate.getTime())) {
                                                 createdAtLabel = createdAtDate.toLocaleString("pl-PL", {
@@ -19305,41 +19099,90 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                     </div>
                                                     <div className="grid gap-6 md:grid-cols-2">
                                                         <div className="space-y-3">
-                                                            <h4 className="text-sm font-semibold text-neutral">
-                                                                Skład portfela
-                                                            </h4>
-                                                            {positionsWithAmounts.length ? (
-                                                                <div className="overflow-x-auto">
-                                                                    <table className="min-w-full divide-y divide-soft text-sm">
-                                                                        <thead className="bg-soft-surface text-xs uppercase tracking-wide text-muted">
-                                                                            <tr>
-                                                                                <th className="px-3 py-2 text-left">Symbol</th>
-                                                                                <th className="px-3 py-2 text-right">Waga</th>
-                                                                                <th className="px-3 py-2 text-right">Kwota</th>
-                                                                            </tr>
-                                                                        </thead>
-                                                                        <tbody className="divide-y divide-soft">
-                                                                            {positionsWithAmounts.map((row) => (
-                                                                                <tr key={`${portfolio.id}-${row.symbol}`}>
-                                                                                    <td className="px-3 py-2 font-medium text-primary">
-                                                                                        {row.symbol}
-                                                                                    </td>
-                                                                                    <td className="px-3 py-2 text-right text-subtle">
-                                                                                        {row.weight.toFixed(1)}%
-                                                                                    </td>
-                                                                                    <td className="px-3 py-2 text-right text-subtle">
-                                                                                        {hasPortfolioValue
-                                                                                            ? currencyFormatter.format(row.amount)
-                                                                                            : "—"}
-                                                                                    </td>
-                                                                                </tr>
-                                                                            ))}
-                                                                        </tbody>
-                                                                    </table>
+                                                            <div className="flex items-center justify-between gap-2">
+                                                                <h4 className="text-sm font-semibold text-neutral">
+                                                                    Historia symulacji portfela
+                                                                </h4>
+                                                                <div className="flex items-center gap-2">
+                                                                    {simulationLoading ? (
+                                                                        <span className="text-[11px] uppercase tracking-wide text-muted">
+                                                                            Ladowanie...
+                                                                        </span>
+                                                                    ) : null}
+                                                                    {historyRows.length ? (
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={openExpandedChart}
+                                                                            className="inline-flex items-center gap-2 rounded-lg border border-soft bg-white/80 px-3 py-1.5 text-xs font-semibold text-primary transition hover:border-[var(--color-primary)] hover:text-primary"
+                                                                        >
+                                                                            Powieksz wykres
+                                                                        </button>
+                                                                    ) : null}
                                                                 </div>
+                                                            </div>
+                                                            {simulationError ? (
+                                                                <div className="space-y-2 rounded-2xl border border-dashed border-negative/40 bg-negative/5 p-3 text-xs text-negative">
+                                                                    <p>{simulationError}</p>
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => loadSavedPortfolioSimulation(portfolio, true)}
+                                                                        className="inline-flex items-center gap-2 rounded-lg border border-negative/50 px-3 py-1.5 text-[11px] font-semibold text-negative transition hover:bg-negative/10"
+                                                                    >
+                                                                        Sprobuj ponownie
+                                                                    </button>
+                                                                </div>
+                                                            ) : historyRows.length ? (
+                                                                <>
+                                                                    <div className="rounded-2xl border border-soft bg-soft-surface/60 p-3">
+                                                                        <PriceChart
+                                                                            rows={historyRows}
+                                                                            chartType="area"
+                                                                            showSMA={false}
+                                                                            brushDataRows={historyRows}
+                                                                            brushRange={savedBrushRange}
+                                                                            onBrushChange={handleSavedBrushChange}
+                                                                            primarySymbol={portfolio.name || "Portfel"}
+                                                                            heightClassName="h-96"
+                                                                        />
+                                                                    </div>
+                                                                    {isExpanded && typeof document !== "undefined"
+                                                                        ? createPortal(
+                                                                              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+                                                                                  <div className="w-full max-w-6xl rounded-3xl border border-soft bg-surface p-4 shadow-2xl">
+                                                                                      <div className="mb-4 flex items-center justify-between gap-3">
+                                                                                          <div>
+                                                                                              <div className="text-sm font-semibold text-neutral">{portfolio.name}</div>
+                                                                                              <div className="text-xs text-subtle">Rozszerzony widok historii portfela</div>
+                                                                                          </div>
+                                                                                          <button
+                                                                                              type="button"
+                                                                                              onClick={closeExpandedChart}
+                                                                                              className="inline-flex items-center gap-2 rounded-lg border border-soft bg-white/80 px-3 py-1.5 text-xs font-semibold text-primary transition hover:border-[var(--color-primary)] hover:text-primary"
+                                                                                          >
+                                                                                              Zamknij
+                                                                                          </button>
+                                                                                      </div>
+                                                                                      <PriceChart
+                                                                                          rows={historyRows}
+                                                                                          chartType="area"
+                                                                                          showSMA={false}
+                                                                                          brushDataRows={historyRows}
+                                                                                          brushRange={savedBrushRange}
+                                                                                          onBrushChange={handleSavedBrushChange}
+                                                                                          primarySymbol={portfolio.name || "Portfel"}
+                                                                                          heightClassName="h-[70vh]"
+                                                                                      />
+                                                                                  </div>
+                                                                              </div>,
+                                                                              document.body
+                                                                          )
+                                                                        : null}
+                                                                </>
+                                                            ) : simulationLoading ? (
+                                                                <p className="text-xs text-subtle">Laduje historie symulacji dla tego portfela...</p>
                                                             ) : (
                                                                 <p className="text-xs text-subtle">
-                                                                    Brak zapisanych pozycji w tym portfelu.
+                                                                    Uruchom lub ponownie wczytaj symulacje, aby zobaczyc historie wartosci i skladu.
                                                                 </p>
                                                             )}
                                                         </div>
@@ -19378,77 +19221,6 @@ export function AnalyticsDashboard({ view }: AnalyticsDashboardProps) {
                                                                 </p>
                                                             )}
                                                         </div>
-                                                    </div>
-                                                    <div className="space-y-3">
-                                                        <h4 className="text-sm font-semibold text-neutral">
-                                                            Zmiana składu w czasie
-                                                        </h4>
-                                                        {hasChartData ? (
-                                                            <div className="h-64 w-full">
-                                                                <ResponsiveContainer>
-                                                                    <AreaChart data={chartData}>
-                                                                        <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
-                                                                        <XAxis
-                                                                            dataKey="label"
-                                                                            tick={{ fontSize: 12 }}
-                                                                            interval="preserveStartEnd"
-                                                                        />
-                                                                        <YAxis
-                                                                            domain={[0, 100]}
-                                                                            tickFormatter={(value) => `${value}%`}
-                                                                            tick={{ fontSize: 12 }}
-                                                                        />
-                                                                        <Tooltip
-                                                                            content={({ active, payload, label }) => {
-                                                                                if (!active || !payload || !payload.length) {
-                                                                                    return null;
-                                                                                }
-                                                                                return (
-                                                                                    <div className="rounded-xl border border-soft bg-white/90 p-3 text-xs shadow">
-                                                                                        <div className="font-semibold text-primary">
-                                                                                            {label}
-                                                                                        </div>
-                                                                                        <ul className="mt-2 space-y-1">
-                                                                                            {payload.map((entry) => (
-                                                                                                <li
-                                                                                                    key={entry.dataKey}
-                                                                                                    className="flex items-center justify-between gap-4"
-                                                                                                >
-                                                                                                    <span className="text-subtle">
-                                                                                                        {entry.name}
-                                                                                                    </span>
-                                                                                                    <span className="font-semibold text-neutral">
-                                                                                                        {typeof entry.value === "number"
-                                                                                                            ? `${entry.value.toFixed(1)}%`
-                                                                                                            : "—"}
-                                                                                                    </span>
-                                                                                                </li>
-                                                                                            ))}
-                                                                                        </ul>
-                                                                                    </div>
-                                                                                );
-                                                                            }}
-                                                                        />
-                                                                        {compositionSeries.keys.map(({ key, name, color }) => (
-                                                                            <Area
-                                                                                key={key}
-                                                                                type="monotone"
-                                                                                dataKey={key}
-                                                                                name={name}
-                                                                                stackId="portfolio-composition"
-                                                                                stroke={color}
-                                                                                fill={color}
-                                                                                fillOpacity={0.2}
-                                                                            />
-                                                                        ))}
-                                                                    </AreaChart>
-                                                                </ResponsiveContainer>
-                                                            </div>
-                                                        ) : (
-                                                            <p className="text-xs text-subtle">
-                                                                Dodaj pozycje i zapisz portfel, aby zobaczyć wizualizację udziałów.
-                                                            </p>
-                                                        )}
                                                     </div>
                                                     {portfolio.draft.comparisons.length ? (
                                                         <div className="text-xs text-subtle">

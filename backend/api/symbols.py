@@ -1,11 +1,10 @@
 """Helpers for working with GPW symbol aliases used across the project."""
 from __future__ import annotations
+
+import re
 from typing import Dict
 
-from .company_ingestion import _normalize_gpw_symbol
-
-
-# Dodawaj wg potrzeb.
+# Add aliases as needed.
 ALIASES_RAW_TO_WA: Dict[str, str] = {
     "ALIOR": "ALR.WA",
     "ALLEGRO": "ALE.WA",
@@ -31,6 +30,9 @@ ALIASES_RAW_TO_WA: Dict[str, str] = {
     # ...
 }
 
+# Generic ticker pattern used by API/ClickHouse code to guard against malformed inputs.
+TICKER_LIKE_PATTERN = re.compile(r"^[0-9A-Z]{1,8}(?:[._-][0-9A-Z]{1,8})?$")
+
 
 def _build_canonical_lookup() -> Dict[str, str]:
     """Build mapping used to resolve various aliases to canonical raw symbol."""
@@ -53,6 +55,52 @@ def _build_canonical_lookup() -> Dict[str, str]:
 
 
 _ALIASES_CANONICAL_LOOKUP = _build_canonical_lookup()
+
+
+def to_base_symbol(raw: str) -> str:
+    """Return the traded base ticker for a canonical symbol or alias."""
+
+    cleaned = raw.strip().upper()
+    alias = ALIASES_RAW_TO_WA.get(cleaned)
+    if alias:
+        base = alias.split(".", 1)[0].strip()
+        if base:
+            return base.upper()
+    if "." in cleaned:
+        base = cleaned.split(".", 1)[0].strip()
+        if base:
+            return base.upper()
+    return cleaned
+
+
+def normalize_ticker(value: str) -> str:
+    """
+    Normalize any GPW-like ticker to the base form used across the project.
+
+    Rules:
+    - trim whitespace and collapse separators,
+    - drop common suffixes like .WA / .PL,
+    - map long aliases (e.g. PKNORLEN, DINOPL) to their traded base (PKN, DNP),
+    - enforce upper-case alphanumeric ticker.
+    """
+
+    cleaned = value.strip().upper()
+    if not cleaned:
+        raise RuntimeError("Empty ticker")
+
+    cleaned = re.sub(r"[\s_\-]+", "", cleaned)
+    for suffix in (".WA", ".PL"):
+        if cleaned.endswith(suffix):
+            cleaned = cleaned[: -len(suffix)]
+            break
+
+    base = to_base_symbol(cleaned)
+
+    if not base or not TICKER_LIKE_PATTERN.fullmatch(base):
+        raise RuntimeError(f"Invalid ticker: {value}")
+
+    return base
+
 
 DEFAULT_OHLC_SYNC_SYMBOLS = (
     "ALR",
@@ -78,40 +126,19 @@ DEFAULT_OHLC_SYNC_SYMBOLS = (
     "TPE",
 )
 
+
 def pretty_symbol(raw: str) -> str:
-    """Zwraca 'ładny' ticker z sufiksem .WA jeśli znamy alias; w p.p. zwraca raw."""
+    """Return a display-friendly ticker with the .WA suffix when available."""
 
     return ALIASES_RAW_TO_WA.get(raw, raw)
 
 
-def to_base_symbol(raw: str) -> str:
-    """Zwraca podstawowy ticker GPW dla kanonicznego symbolu."""
-
-    cleaned = raw.strip().upper()
-    alias = ALIASES_RAW_TO_WA.get(cleaned)
-    if alias:
-        base = alias.split(".", 1)[0].strip()
-        if base:
-            return base.upper()
-    if "." in cleaned:
-        base = cleaned.split(".", 1)[0].strip()
-        if base:
-            return base.upper()
-    return cleaned
-
-
 def normalize_input_symbol(s: str) -> str:
     """
-    Dla wejścia użytkownika zwraca bazowy ticker używany przy pobieraniu
-    notowań (np. ``CDR`` zamiast ``CDPROJEKT``).
+    Normalize user input to the base ticker used for OHLC imports/queries.
 
-    W praktyce użytkownicy często wpisują tickery małymi literami, z
-    sufiksem ``.WA`` albo korzystają z historycznych oznaczeń z GPW.
-    Funkcja stara się więc:
-    - zamienić znane aliasy na odpowiadający im ticker GPW,
-    - w przypadku wejścia zakończonego ``.WA`` zwrócić fragment przed
-      sufiksem,
-    - w ostateczności zwrócić wejście w postaci UPPERCASE.
+    Users may type lower-case symbols, add suffixes (.WA/.PL) or use legacy
+    aliases from GPW. The function converts them to the traded base symbol.
     """
 
     cleaned = s.strip()
@@ -125,22 +152,25 @@ def normalize_input_symbol(s: str) -> str:
         candidate = canonical
 
     try:
-        return _normalize_gpw_symbol(candidate)
+        return normalize_ticker(candidate)
     except RuntimeError:
         pass
 
     if "." in candidate:
         base = candidate.split(".", 1)[0].strip()
         if base:
-            return base
+            try:
+                return normalize_ticker(base)
+            except RuntimeError:
+                return base
 
     return candidate
 
 
 def to_stooq_symbol(value: str) -> str:
-    """Zwraca ticker używany w zapytaniach do Stooq dla danego symbolu GPW."""
+    """Return the ticker understood by Stooq for a given GPW symbol."""
 
-    normalized = _normalize_gpw_symbol(value)
+    normalized = normalize_ticker(value)
     alias = ALIASES_RAW_TO_WA.get(normalized)
     if alias:
         base = alias.split(".", 1)[0].strip()
@@ -153,6 +183,7 @@ __all__ = [
     "ALIASES_RAW_TO_WA",
     "DEFAULT_OHLC_SYNC_SYMBOLS",
     "normalize_input_symbol",
+    "normalize_ticker",
     "pretty_symbol",
     "to_base_symbol",
     "to_stooq_symbol",

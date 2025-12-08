@@ -13,16 +13,20 @@ from api.symbols import normalize_input_symbol
 
 
 def test_normalize_keeps_known_raw_symbol():
-    assert normalize_input_symbol("KGHM") == "KGHM"
+    assert normalize_input_symbol("KGHM") == "KGH"
 
 
 def test_normalize_maps_short_symbol_to_canonical():
-    assert normalize_input_symbol("CDR") == "CDPROJEKT"
+    assert normalize_input_symbol("CDR") == "CDR"
 
 
 def test_normalize_maps_wa_alias_to_canonical():
-    assert normalize_input_symbol("KGH.WA") == "KGHM"
+    assert normalize_input_symbol("KGH.WA") == "KGH"
 
 
 def test_normalize_handles_canonical_with_suffix():
-    assert normalize_input_symbol("CDPROJEKT.WA") == "CDPROJEKT"
+    assert normalize_input_symbol("CDPROJEKT.WA") == "CDR"
+
+
+def test_normalize_maps_long_alias_to_base():
+    assert normalize_input_symbol("DINOPL") == "DNP"
